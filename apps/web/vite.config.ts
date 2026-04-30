@@ -62,7 +62,8 @@ export default defineConfig((): UserConfig => {
       // Emit sourcemaps so Sentry stack traces remain interpretable.
       sourcemap: true,
       rollupOptions: {
-        output: {
+        /* 
+          output: {
           manualChunks: (id) => {
             if (!id.includes('node_modules')) return undefined;
             if (id.match(/\breact(-dom|-router.*|-i18next)?\b/) || id.includes('@tanstack')) {
@@ -78,7 +79,8 @@ export default defineConfig((): UserConfig => {
             if (id.includes('zod') || id.includes('react-hook-form')) return 'form-vendor';
             return 'vendor';
           },
-        },
+        }, 
+        */
       },
     },
   };
