@@ -39,7 +39,7 @@ const STATUS_VARIANT: Record<
 
 const schema = z.object({
   category: z.string().min(1, 'Select a category'),
-  amount: z.coerce.number().min(0.01, 'Amount required'),
+  amount: z.coerce.number().min(0, 'Amount must be 0 or more'),
   currency: z.string().default('INR'),
   date: z.string().min(1),
   description: z.string().optional(),
@@ -183,7 +183,7 @@ export default function MyExpensesPage(): ReactElement {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="ec-amt">Amount *</Label>
+                <Label htmlFor="ec-amt">Amount</Label>
                 <Input id="ec-amt" type="number" step="0.01" {...register('amount')} />
                 {errors.amount && (
                   <p className="mt-1 text-xs text-destructive">{errors.amount.message}</p>

@@ -422,7 +422,7 @@ export default function EmployeeDashboardPage(): ReactElement {
             </Select>
           </div>
           <div>
-            <Label htmlFor="exp-amount">Amount (₹) *</Label>
+            <Label htmlFor="exp-amount">Amount (₹)</Label>
             <Input
               id="exp-amount"
               type="number"
@@ -457,8 +457,6 @@ export default function EmployeeDashboardPage(): ReactElement {
             onClick={() => submitExpenseAndCheckOut.mutate()}
             loading={submitExpenseAndCheckOut.isPending}
             disabled={
-              !expAmount ||
-              Number(expAmount) <= 0 ||
               (!expCategory && !defaultCategoryId)
             }
           >
