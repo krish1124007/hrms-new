@@ -28,6 +28,7 @@ function buildLimiter(opts: RateLimitOptions) {
       res.setHeader('X-RateLimit-Limit', String(opts.max));
       res.setHeader('X-RateLimit-Remaining', String(Math.max(0, opts.max - count)));
 
+      /* 
       if (count > opts.max) {
         const retryAfter = await redis.ttl(key);
         res.setHeader('Retry-After', String(retryAfter > 0 ? retryAfter : ttlSeconds));
@@ -40,6 +41,7 @@ function buildLimiter(opts: RateLimitOptions) {
         });
         return;
       }
+      */
 
       next();
     } catch (err) {
