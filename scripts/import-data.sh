@@ -52,17 +52,16 @@ read -r -p "⚠️   This will OVERWRITE database '${DB_NAME}'. Type YES to cont
 
 # --- 1. Restore MongoDB ----------------------------------------------------
 echo ""
-echo "🔄  Restoring Mongo dump → ${DB_NAME}…"
-docker compose -f docker/docker-compose.yml --env-file .env exec -T mongodb \
+echo "🔄  Restoring Mongo dump (all databases)…"
+
+# We use docker exec with environment variables inside the container to avoid shell escaping issues
+docker compose -f docker/docker-compose.yml --env-file .env exec -T mongodb sh -c '
   mongorestore \
-    --username "$MONGO_ROOT_USERNAME" \
-    --password "$MONGO_ROOT_PASSWORD" \
+    --username "$MONGO_INITDB_ROOT_USERNAME" \
+    --password "$MONGO_INITDB_ROOT_PASSWORD" \
     --authenticationDatabase admin \
-    --nsFrom "${SOURCE_DB}.*" \
-    --nsTo "${DB_NAME}.*" \
     --drop \
-    --archive --gzip \
-  < data-export/mongo.archive.gz
+    --archive --gzip' < data-export/mongo.archive.gz
 
 echo "✅  Mongo restore complete."
 
