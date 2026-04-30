@@ -1,43 +1,34 @@
 import { type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Globe } from 'lucide-react';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 import { SUPPORTED_LANGUAGES, LANGUAGE_LABELS } from '@/i18n';
 
 /**
  * Drop-in language picker. Persists to localStorage via i18next-browser-
- * languagedetector so the choice survives reloads. The `useDirection`
- * hook at the layout level picks up the new language and flips `<html dir>`
- * automatically — no extra plumbing here.
+ * languagedetector so the choice survives reloads.
  */
 export function LanguageSwitcher({ compact = false }: { compact?: boolean }): ReactElement {
   const { i18n } = useTranslation();
   const current = (i18n.resolvedLanguage ?? i18n.language ?? 'en') as (typeof SUPPORTED_LANGUAGES)[number];
 
   return (
-    <Select
-      value={current}
-      onValueChange={(v) => {
-        void i18n.changeLanguage(v);
-      }}
-    >
-      <SelectTrigger className={compact ? 'h-8 w-28' : 'w-40'} aria-label="Language">
-        <Globe className="me-2 size-4 opacity-70" />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
+    <div className="relative flex items-center">
+      <Globe className="absolute left-3 size-4 opacity-70 pointer-events-none" />
+      <Select
+        value={current}
+        onChange={(e) => {
+          void i18n.changeLanguage(e.target.value);
+        }}
+        className={compact ? 'h-8 w-28 pl-9' : 'w-40 pl-9'}
+        aria-label="Language"
+      >
         {SUPPORTED_LANGUAGES.map((lang) => (
-          <SelectItem key={lang} value={lang}>
+          <option key={lang} value={lang}>
             {LANGUAGE_LABELS[lang]}
-          </SelectItem>
+          </option>
         ))}
-      </SelectContent>
-    </Select>
+      </Select>
+    </div>
   );
 }
