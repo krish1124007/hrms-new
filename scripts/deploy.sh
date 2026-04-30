@@ -41,7 +41,7 @@ case "$cmd" in
     echo "🚀  Starting stack…"
     docker compose -f docker/docker-compose.yml --env-file .env up -d
     echo "✅  Stack is up. Tail logs with:  ./scripts/deploy.sh logs"
-    docker compose -f docker/docker-compose.yml ps
+    docker compose -f docker/docker-compose.yml --env-file .env ps
     ;;
   logs)
     docker compose -f docker/docker-compose.yml --env-file .env logs -f --tail=200
