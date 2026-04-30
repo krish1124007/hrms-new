@@ -37,8 +37,8 @@ export async function connectDatabase(): Promise<typeof mongoose> {
         retryWrites: true,
         retryReads: true,
 
-        // Compression saves bandwidth on Atlas/prod
-        ...(env.NODE_ENV === 'production' ? { compressors: ['zstd', 'zlib'] as ('none' | 'snappy' | 'zlib' | 'zstd')[] } : {}),
+        // Compression disabled to avoid missing dependency issues on VPS
+        compressors: ['none'] as ('none' | 'snappy' | 'zlib' | 'zstd')[],
       });
       logger.info({ host: conn.connection.host }, '✅ MongoDB connected');
       return conn;
