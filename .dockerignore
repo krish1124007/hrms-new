@@ -65,8 +65,8 @@ uploads
 # Data export (restored at deploy-time, not baked into images)
 data-export
 
-# Backups
-backups
+# Root backups directory (produced at runtime)
+/backups
 
 # Stale lockfile (regenerated)
 package-lock.json
