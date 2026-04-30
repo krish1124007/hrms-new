@@ -1,0 +1,72 @@
+# Build context exclusions — keep the docker build context tight.
+# Anything listed here will NOT be sent to the Docker daemon.
+
+# Dependencies — installed inside the image
+node_modules
+*/node_modules
+**/node_modules
+
+# Build outputs — regenerated inside the image
+dist
+*/dist
+**/dist
+build
+*/build
+**/build
+.next
+out
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Turbo cache
+.turbo
+*/.turbo
+**/.turbo
+
+# Test + coverage artifacts
+coverage
+*/coverage
+**/coverage
+.nyc_output
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Git / VCS
+.git
+.gitignore
+.gitattributes
+
+# Environment files (secrets) — never bake these into images
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Docs (not needed at runtime)
+docs
+
+# Local upload directory
+uploads
+*/uploads
+**/uploads
+
+# Data export (restored at deploy-time, not baked into images)
+data-export
+
+# Backups
+backups
+
+# Stale lockfile (regenerated)
+package-lock.json

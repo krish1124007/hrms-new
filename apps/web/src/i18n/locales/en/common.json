@@ -1,0 +1,51 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "confirm": "Confirm",
+    "retry": "Try again",
+    "search": "Search",
+    "filter": "Filter",
+    "export": "Export",
+    "import": "Import"
+  },
+  "status": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "error": "Something went wrong",
+    "offline": "You're offline — changes will sync when you reconnect",
+    "online": "Back online"
+  },
+  "empty": {
+    "noResults": "No results",
+    "noResultsDescription": "Try adjusting your filters or search."
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "signUp": "Create workspace",
+    "email": "Email",
+    "password": "Password",
+    "forgotPassword": "Forgot password?",
+    "rememberMe": "Remember me",
+    "twoFactorCode": "Authentication code"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "employees": "Employees",
+    "attendance": "Attendance",
+    "leaves": "Leaves",
+    "payroll": "Payroll",
+    "crm": "CRM",
+    "billing": "Billing",
+    "settings": "Settings",
+    "support": "Support"
+  }
+}

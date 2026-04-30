@@ -1,0 +1,58 @@
+import { Router } from 'express';
+import * as ctrl from '../controllers/employees.controller.js';
+import { authMiddleware } from '../middleware/auth.middleware.js';
+import { requirePermission } from '../middleware/permission.middleware.js';
+import { validate } from '../middleware/validate.middleware.js';
+import { asyncHandler } from '../lib/async-handler.js';
+
+const router = Router();
+router.use(authMiddleware);
+
+router.get(
+  '/',
+  requirePermission('employees.view'),
+  validate(ctrl.listQuerySchema, 'query'),
+  asyncHandler(ctrl.listEmployees),
+);
+router.get('/stats', requirePermission('employees.view'), asyncHandler(ctrl.employeeStats));
+router.get('/birthdays', requirePermission('employees.view'), asyncHandler(ctrl.upcomingBirthdays));
+router.get('/export', requirePermission('employees.view'), asyncHandler(ctrl.exportEmployees));
+router.post(
+  '/import',
+  requirePermission('employees.create'),
+  validate(ctrl.importEmployeesSchema),
+  asyncHandler(ctrl.importEmployees),
+);
+router.post(
+  '/',
+  requirePermission('employees.create'),
+  validate(ctrl.createEmployeeSchema),
+  asyncHandler(ctrl.createEmployee),
+);
+router.get('/:id', requirePermission('employees.view'), asyncHandler(ctrl.getEmployee));
+router.patch(
+  '/:id',
+  requirePermission('employees.update'),
+  validate(ctrl.updateEmployeeSchema),
+  asyncHandler(ctrl.updateEmployee),
+);
+router.delete('/:id', requirePermission('employees.delete'), asyncHandler(ctrl.deleteEmployee));
+router.patch(
+  '/:id/status',
+  requirePermission('employees.update'),
+  validate(ctrl.updateStatusSchema),
+  asyncHandler(ctrl.updateEmployeeStatus),
+);
+router.post(
+  '/:id/documents',
+  requirePermission('employees.update'),
+  validate(ctrl.addDocumentSchema),
+  asyncHandler(ctrl.addEmployeeDocument),
+);
+router.delete(
+  '/:id/documents/:docId',
+  requirePermission('employees.update'),
+  asyncHandler(ctrl.deleteEmployeeDocument),
+);
+
+export default router;

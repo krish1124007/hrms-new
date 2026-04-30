@@ -1,0 +1,181 @@
+# =============================================================================
+# HRMS — Docker Compose (Production)
+#
+# Brings up the full stack on a single VPS:
+#   - web         → Nginx serving the React bundle, proxies /api → api
+#   - api         → Express.js + Socket.io (also runs the BullMQ worker in-process)
+#   - mongodb     → MongoDB 8 (with auth enabled)
+#   - redis       → Redis 7 (password-protected)
+#   - meilisearch → full-text search engine
+#
+# Environment values come from ../.env  (copy from ../.env.production and edit).
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Web Dashboard — React + Vite static bundle served by Nginx
+  # Public entrypoint: ports 80 (HTTP) and 443 (HTTPS, with SSL cert mount)
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+        VITE_SOCKET_URL: ${VITE_SOCKET_URL:-/}
+    image: hrms-web:latest
+    container_name: hrms-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      # Optional: mount Let's Encrypt certs if you terminate TLS in this nginx
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - hrms-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # API Server — Express.js + Socket.io. Includes the BullMQ backup worker.
+  # Internal only — Nginx (web) proxies traffic into it on port 4000.
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    image: hrms-api:latest
+    container_name: hrms-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_DB_NAME:-hrms}?authSource=admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_API_KEY: ${MEILI_MASTER_KEY}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - hrms_uploads:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - hrms-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # MongoDB 8 — Internal only, authentication enabled.
+  # Bind your own backup script to /backups for persistence.
+  # ---------------------------------------------------------------------------
+  mongodb:
+    image: mongo:8
+    container_name: hrms-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME:-hrms}
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "-u", "${MONGO_ROOT_USERNAME}", "-p", "${MONGO_ROOT_PASSWORD}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - hrms-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — Internal only, password-protected, AOF persistence.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: hrms-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hrms-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Meilisearch — Internal only, full-text search engine.
+  # ---------------------------------------------------------------------------
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: hrms-meili
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - hrms-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ---------------------------------------------------------------------------
+networks:
+  hrms-network:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+volumes:
+  mongo_data:
+  mongo_config:
+  redis_data:
+  meili_data:
+  hrms_uploads:
