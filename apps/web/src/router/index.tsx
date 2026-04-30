@@ -67,7 +67,7 @@ const LiveTrackingPage = lazy(() => import('@/pages/field/LiveTrackingPage'));
 // Tools
 const DocumentsPage = lazy(() => import('@/pages/documents/DocumentsPage'));
 const IDCardPage = lazy(() => import('@/pages/id-cards/IDCardPage'));
-const BackupsPage = lazy(() => import('@/pages/backups/BackupsPage'));
+const BackupsPage = lazy(() => import('@/pages/backups/BackupsPage.tsx'));
 const CalendarPage = lazy(() => import('@/pages/calendar/CalendarPage'));
 const NoticeBoardPage = lazy(() => import('@/pages/notices/NoticeBoardPage'));
 const LocationsPage = lazy(() => import('@/pages/locations/LocationsPage'));
