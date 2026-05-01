@@ -1,31 +1,20 @@
 # Dependencies
 node_modules/
-.pnp/
-.pnp.js
 
 # Build outputs
 dist/
 build/
-.next/
-out/
 *.tsbuildinfo
-
-# Turbo
-.turbo/
 
 # Logs
 logs/
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
 # Environment / secrets — NEVER commit
 .env
 .env.local
 .env.*.local
-!.env.production
 !.env.example
 
 # IDE / OS
@@ -43,21 +32,10 @@ coverage/
 # Cache
 .cache/
 .eslintcache
-.parcel-cache/
 
-# Misc
-*.pem
-.vercel
-
-# Local file uploads (payslips, attachments, backups)
+# Local file uploads (payslips, attachments)
 uploads/
-apps/api/uploads/
+backend/uploads/
 
-# Backups (DB dumps live here — don't commit)
+# Backups
 backups/
-
-# Data export (created locally, shipped via zip — don't commit)
-data-export/
-
-# SSL certs (mounted at runtime)
-docker/ssl/

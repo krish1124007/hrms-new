@@ -1,5 +1,5 @@
 {
-  "name": "@opencore/web",
+  "name": "hrms-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,9 +16,12 @@
     "build:analyze": "ANALYZE=1 tsc -b && ANALYZE=1 vite build",
     "clean": "rm -rf dist"
   },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
-    "@opencore/shared": "*",
     "@sentry/react": "^10.49.0",
     "@tanstack/react-query": "^5.62.7",
     "@tanstack/react-table": "^8.20.6",
@@ -47,7 +50,6 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
-    "@opencore/config": "*",
     "@tailwindcss/vite": "^4.0.0-beta.7",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -55,13 +57,20 @@
     "@types/node": "^22.10.1",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^2.1.9",
     "autoprefixer": "^10.4.20",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
     "jsdom": "^29.0.2",
     "postcss": "^8.4.49",
+    "prettier": "^3.3.3",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.0.0-beta.7",
+    "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vite": "^6.0.5",
     "vitest": "^2.1.8"

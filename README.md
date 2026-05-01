@@ -1,129 +1,80 @@
-# HRMS — Business Management Platform
+# HRMS
 
-A self-hosted, single-company HRMS / Business Management Platform covering HR,
-attendance, payroll, CRM, projects, inventory, and field-sales modules.
-
-> 🚀 **Deploying to a Hostinger VPS?** Read **[DEPLOY.md](./DEPLOY.md)** —
-> step-by-step guide that takes you from a fresh VPS to a live app in ~20 min.
-
----
-
-## What's in this package
-
-This is the **deployment build** of HRMS. The mobile app, e2e tests, and load
-tests have been removed — only the **web dashboard** and **API** are deployed.
+Two independent projects: a Node/Express **backend** and a React/Vite **frontend**.
+Each can be installed, run, and deployed on its own.
 
 ```
-.
-├── DEPLOY.md            ← Hostinger VPS deployment guide (start here)
-├── .env.production      ← Environment template — copy to .env and fill in
-├── apps/
-│   ├── api/             ← Express.js + Socket.io backend
-│   └── web/             ← React 19 + Vite 6 dashboard
-├── packages/
-│   ├── shared/          ← shared types, validators, constants
-│   └── config/          ← shared TS configs
-├── docker/
-│   ├── docker-compose.yml   ← 5-service stack (web, api, mongo, redis, meili)
-│   ├── Dockerfile.api
-│   ├── Dockerfile.web
-│   └── nginx.conf       ← Nginx proxy + SPA fallback
-└── scripts/
-    ├── deploy.sh        ← one-shot deploy / logs / stop / nuke
-    ├── backup.sh        ← MongoDB backup (cron-friendly)
-    └── restore.sh       ← MongoDB restore
+hrms-new/
+├── backend/    Express + MongoDB API
+└── frontend/   React + Vite dashboard
 ```
 
 ---
 
-## Tech Stack
+## Run locally
 
-| Layer            | Technology                                                          |
-| ---------------- | ------------------------------------------------------------------- |
-| **Frontend**     | React 19, Vite 6, TypeScript, Tailwind CSS 4, shadcn/ui             |
-| **State / Data** | Zustand, TanStack React Query, React Hook Form, Zod                 |
-| **Backend**      | Node.js 22 LTS, Express.js 5, TypeScript                            |
-| **Database**     | MongoDB 8 (Mongoose 8)                                              |
-| **Cache / Queue**| Redis 7 (ioredis), BullMQ                                           |
-| **Search**       | Meilisearch                                                         |
-| **Auth**         | Passport.js, JWT (access + refresh)                                 |
-| **Real-time**    | Socket.io                                                           |
-| **i18n**         | react-i18next (18 languages, RTL support)                           |
-| **DevOps**       | Docker, Docker Compose, Nginx                                       |
+You need **Node.js 22+**, **MongoDB**, and (optionally) **Redis** running.
+Install Mongo + Redis any way you like — Homebrew, MongoDB Atlas free tier, etc.
 
----
-
-## Quick start — TL;DR
-
-On the VPS:
+### 1. Backend
 
 ```bash
-# 1. Install Docker (one-liner)
-curl -fsSL https://get.docker.com | sudo sh
-
-# 2. Upload + extract this package to /opt/hrms
-
-# 3. Configure env
-cd /opt/hrms
-cp .env.production .env
-nano .env       # paste secrets generated with: openssl rand -hex 64
-
-# 4. Build + start the stack
-chmod +x scripts/*.sh
-./scripts/deploy.sh up
-
-# 5. Load data — pick ONE
-./scripts/import-data.sh        # restore your existing local DB + uploads
-# OR
-./scripts/deploy.sh seed        # start fresh with admin@example.com / Admin@123
-```
-
-Open `http://YOUR_VPS_IP` and log in. **Change the default password
-immediately.** For HTTPS + domain setup see [DEPLOY.md](./DEPLOY.md) §7.
-
-> 📦  This zip already contains a snapshot of your local database in
-> `data-export/`. To refresh it before redeploying, run on your laptop:
-> `./scripts/export-local-data.sh`
-
----
-
-## Default Roles
-
-| Role            | Capabilities                                  |
-| --------------- | --------------------------------------------- |
-| `admin`         | Full access to all modules and settings       |
-| `hr_manager`    | HR operations including payroll               |
-| `hr_executive`  | HR operations excluding payroll               |
-| `manager`       | Team management, approvals                    |
-| `employee`      | Self-service only                             |
-
----
-
-## Architecture
-
-- **Single MongoDB database**, no tenant isolation, no SaaS billing
-- All users belong to one company
-- Auth via JWT bearer tokens
-- File storage on disk (Docker volume `hrms_uploads`)
-- WebSocket real-time updates via Socket.io
-- Background jobs via BullMQ (runs in-process inside the API container)
-
----
-
-## Local development (optional)
-
-If you want to run the app on your laptop without Docker:
-
-```bash
+cd backend
+cp .env.example .env       # edit MONGODB_URI, JWT_SECRET, etc.
 npm install
-cp .env.production .env       # then edit values for localhost
-npm run dev                   # starts API + web concurrently via Turbo
+npm run seed               # creates default roles + admin user
+npm run dev                # starts on http://localhost:4000
 ```
 
-API: `http://localhost:4000`  ·  Web: `http://localhost:5173`
+Default admin login: `admin@example.com` / `Admin@123` (change immediately).
+
+### 2. Frontend
+
+In a new terminal:
+
+```bash
+cd frontend
+cp .env.example .env       # VITE_API_URL points to the backend
+npm install
+npm run dev                # starts on http://localhost:5173
+```
+
+Open `http://localhost:5173` and log in.
 
 ---
 
-## License
+## Deploy
 
-Proprietary — © Your Company. All rights reserved.
+The two folders are independent — deploy each wherever you want.
+
+### Backend → any Node host
+
+Render, Railway, Fly.io, a VPS, etc. Build command + start command:
+
+```
+build:  npm install && npm run build
+start:  npm start
+```
+
+Environment variables: copy from `backend/.env.example` and fill in real values.
+Set `CORS_ORIGIN` to the public URL of your deployed frontend.
+
+You also need a managed MongoDB (e.g. MongoDB Atlas) and optionally a managed Redis.
+
+### Frontend → any static host
+
+Vercel, Netlify, Cloudflare Pages, S3 + CloudFront, etc.
+
+```
+build:        npm install && npm run build
+output dir:   dist
+```
+
+Environment variables: set `VITE_API_URL` to your deployed backend's `/api/v1`.
+
+---
+
+## Tech stack
+
+**Backend:** Node 22, Express 5, TypeScript, MongoDB (Mongoose), Redis, BullMQ, Socket.io, JWT auth.
+**Frontend:** React 19, Vite 6, TypeScript, Tailwind 4, TanStack Query, React Router 7, Zustand, i18next.

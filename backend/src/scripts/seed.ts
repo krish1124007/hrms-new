@@ -1,8 +1,7 @@
 /**
  * Seed script — creates the default roles for a fresh install.
  *
- * Run with:  npm --workspace=@opencore/api run seed
- *            (or)  npx tsx apps/api/src/scripts/seed.ts
+ * Run with:  npm run seed   (from the backend/ directory)
  */
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { logger } from '../config/logger.js';
