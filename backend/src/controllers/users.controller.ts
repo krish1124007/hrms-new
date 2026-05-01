@@ -27,6 +27,10 @@ export const updateStatusSchema = z.object({
   status: z.enum(['active', 'inactive']),
 });
 
+export const setPasswordSchema = z.object({
+  password: z.string().min(8).max(128),
+});
+
 export const listQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
@@ -124,6 +128,45 @@ export async function deleteUser(req: Request, res: Response): Promise<void> {
   await (user as any).softDelete();
   void audit({ action: 'delete', entity: 'User', entityId: String(user._id) });
   res.json({ success: true, message: 'User deleted' });
+}
+
+/**
+ * Admin-driven password reset. Sets `password` on the target user (the User
+ * model's pre-save hook hashes it), bumps `sessionVersion` and revokes any
+ * active sessions so the target is forced to log in again with the new one.
+ */
+export async function setUserPassword(req: Request, res: Response): Promise<void> {
+  const { password } = req.body as z.infer<typeof setPasswordSchema>;
+
+  const { validatePasswordStrength } = await import('../lib/password-security.js');
+  const strength = validatePasswordStrength(password);
+  if (!strength.ok) {
+    const { AppError } = await import('../lib/errors.js');
+    throw new AppError(strength.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
+  }
+
+  const user = await User.findById(String(req.params.id)).select('+password').exec();
+  if (!user) throw new NotFoundError('User not found');
+
+  user.password = password;
+  user.passwordChangedAt = new Date();
+  user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  await user.save();
+
+  const { Session } = await import('../models/session.model.js');
+  await Session.updateMany({ userId: user._id, isActive: true }, { isActive: false }).exec();
+
+  const { revokeAllUserTokens } = await import('../lib/token-blacklist.js');
+  await revokeAllUserTokens(String(user._id), user.sessionVersion);
+
+  void audit({
+    action: 'update',
+    entity: 'User',
+    entityId: String(user._id),
+    metadata: { event: 'password.admin-reset', sessionVersion: user.sessionVersion },
+  });
+
+  res.json({ success: true, message: 'Password updated. The user must sign in again.' });
 }
 
 export async function updateUserStatus(req: Request, res: Response): Promise<void> {

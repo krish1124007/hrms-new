@@ -401,3 +401,82 @@ export async function me(req: Request, res: Response): Promise<void> {
     data: { user: req.user },
   });
 }
+
+/**
+ * Update the currently logged-in user's own profile (name + avatar).
+ * Email and role are intentionally not editable here — those go through
+ * admin-only endpoints.
+ */
+export async function updateMyProfile(req: Request, res: Response): Promise<void> {
+  if (!req.user) throw new UnauthorizedError();
+
+  const body = req.body as { firstName?: string; lastName?: string; avatar?: string };
+  const update: Record<string, unknown> = {};
+  if (body.firstName !== undefined) update.firstName = body.firstName;
+  if (body.lastName !== undefined) update.lastName = body.lastName;
+  if (body.avatar !== undefined) update.avatar = body.avatar;
+
+  const user = await User.findByIdAndUpdate(req.user._id, update, { new: true })
+    .populate('role')
+    .exec();
+  if (!user) throw new NotFoundError('User not found');
+
+  void audit({ action: 'update', entity: 'User', entityId: String(user._id), after: update });
+  res.json({ success: true, data: { user } });
+}
+
+/**
+ * Self-service password change. Requires the current password as a sanity
+ * check before swapping in the new one — same pattern as `resetPassword` but
+ * without the email-token round-trip.
+ */
+export async function changeMyPassword(req: Request, res: Response): Promise<void> {
+  if (!req.user) throw new UnauthorizedError();
+
+  const { currentPassword, newPassword } = req.body as {
+    currentPassword: string;
+    newPassword: string;
+  };
+
+  const { validateNewPassword } = await import('../lib/password-security.js');
+  const pwCheck = await validateNewPassword(newPassword);
+  if (!pwCheck.ok) {
+    throw new AppError(pwCheck.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
+  }
+
+  const user = await User.findById(req.user._id)
+    .select('+password +passwordHistory')
+    .exec();
+  if (!user) throw new NotFoundError('User not found');
+
+  const valid = await user.comparePassword(currentPassword);
+  if (!valid) throw new UnauthorizedError('Current password is incorrect');
+
+  const { checkPasswordHistory } = await import('../lib/password-security.js');
+  const history = [...(user.passwordHistory ?? []), user.password].filter(Boolean);
+  const { reused, nextHistory } = await checkPasswordHistory(newPassword, history, 5);
+  if (reused) {
+    throw new AppError('You cannot reuse one of your last 5 passwords', 400, 'PASSWORD_REUSED');
+  }
+
+  user.passwordHistory = nextHistory;
+  user.password = newPassword;
+  user.passwordChangedAt = new Date();
+  user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  await user.save();
+
+  await revokeAllUserTokens(String(user._id), user.sessionVersion);
+  await Session.updateMany({ userId: user._id, isActive: true }, { isActive: false }).exec();
+
+  void audit({
+    action: 'update',
+    entity: 'User',
+    entityId: String(user._id),
+    metadata: { event: 'password.self-change', sessionVersion: user.sessionVersion },
+  });
+
+  res.json({
+    success: true,
+    message: 'Password changed. Please sign in again on this device.',
+  });
+}

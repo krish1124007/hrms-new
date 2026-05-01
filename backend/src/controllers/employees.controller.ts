@@ -81,6 +81,10 @@ export const createEmployeeSchema = z.object({
   noticePeriod: z.coerce.number().optional(),
   createUserAccount: z.boolean().default(true),
   roleId: z.string().optional(),
+  // Optional admin-set password. If provided (min 8 chars) the user can sign in
+  // with it immediately and we mark them active. If omitted, we fall back to
+  // the legacy invite flow (random temp password + email link).
+  password: z.string().min(8).max(128).optional(),
 });
 
 export const updateEmployeeSchema = createEmployeeSchema.partial().omit({
@@ -191,8 +195,9 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
     }
     if (!role) throw new ValidationAppError('No employee role found; specify roleId');
 
-    const tempPassword = randomBytes(16).toString('hex');
-    const verificationToken = randomBytes(32).toString('hex');
+    const adminSetPassword = body.password;
+    const password = adminSetPassword ?? randomBytes(16).toString('hex');
+    const verificationToken = adminSetPassword ? undefined : randomBytes(32).toString('hex');
     const existingUser = await User.findOne({ email: body.email.toLowerCase() }).exec();
     if (existingUser) throw new ConflictError('User with this email already exists');
 
@@ -201,21 +206,24 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
       firstName: body.firstName,
       lastName: body.lastName,
       role: role._id,
-      password: tempPassword,
-      status: 'invited',
-      emailVerificationToken: verificationToken,
+      password,
+      status: adminSetPassword ? 'active' : 'invited',
+      emailVerified: adminSetPassword ? true : false,
+      ...(verificationToken ? { emailVerificationToken: verificationToken } : {}),
     });
     userId = user._id;
 
-    void sendMail({
-      to: user.email,
-      subject: 'Welcome to DD HRMS',
-      html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Activate account</a></p>`,
-    });
+    if (verificationToken) {
+      void sendMail({
+        to: user.email,
+        subject: 'Welcome to DD HRMS',
+        html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Activate account</a></p>`,
+      });
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { createUserAccount, roleId, ...rest } = body;
+  const { createUserAccount, roleId, password: _pw, ...rest } = body;
   const employee = await Employee.create({ ...rest, userId });
 
   void audit({ action: 'create', entity: 'Employee', entityId: String(employee._id) });

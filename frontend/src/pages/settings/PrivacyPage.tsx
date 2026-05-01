@@ -54,24 +54,7 @@ export default function PrivacyPage(): ReactElement {
       ) : (
         <>
           {/* Marketing + analytics consent */}
-          <Card>
-            <CardContent className="p-6">
-              <h3 className="mb-4 text-base font-semibold">Marketing preferences</h3>
-              <ConsentToggle
-                label="Marketing emails"
-                description="Product announcements, new features, and occasional tips. Never more than 2/month."
-                checked={status?.consents?.marketing ?? false}
-                onChange={(v) =>
-                  consentMutation.mutate({
-                    termsOfService: true,
-                    privacyPolicy: true,
-                    marketing: v,
-                    analytics: status?.consents?.analytics ?? false,
-                  })
-                }
-              />
-            </CardContent>
-          </Card>
+    
 
           {/* Cookie preferences */}
           <Card>
@@ -117,16 +100,7 @@ export default function PrivacyPage(): ReactElement {
           )}
 
           {/* Danger zone */}
-          <Card className="border-destructive/30">
-            <CardContent className="space-y-6 p-6">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
-                <h3 className="text-base font-semibold text-destructive">Danger zone</h3>
-              </div>
-
-              <DeleteAccountForm />
-            </CardContent>
-          </Card>
+       
         </>
       )}
     </div>

@@ -52,6 +52,30 @@ export const authApi = {
     return data.data;
   },
 
+  updateMyProfile: async (input: {
+    firstName?: string;
+    lastName?: string;
+    avatar?: string;
+  }): Promise<{ user: AuthUser }> => {
+    const { data } = await api.patch<ApiOk<{ user: AuthUser }>>('/auth/me', input);
+    return data.data;
+  },
+
+  changeMyPassword: async (input: {
+    currentPassword: string;
+    newPassword: string;
+  }): Promise<void> => {
+    await api.post('/auth/change-password', input);
+  },
+
+  /**
+   * Admin-only — overwrite another user's password. Bumps their session
+   * version on the server so any active sessions are revoked.
+   */
+  adminSetUserPassword: async (userId: string, password: string): Promise<void> => {
+    await api.patch(`/users/${userId}/password`, { password });
+  },
+
   logout: async (): Promise<void> => {
     await api.post('/auth/logout').catch(() => undefined);
   },

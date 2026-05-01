@@ -5,7 +5,7 @@ import { authRateLimit } from '../middleware/rate-limit.middleware.js';
 import { TIGHT_JSON } from '../middleware/body-limit.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
-import { registerSchema, loginSchema, refreshTokenSchema, forgotPasswordSchema, resetPasswordSchema } from '../validators/auth.validators.js';
+import { registerSchema, loginSchema, refreshTokenSchema, forgotPasswordSchema, resetPasswordSchema, changeMyPasswordSchema, updateMyProfileSchema } from '../validators/auth.validators.js';
 
 const router = Router();
 
@@ -26,5 +26,17 @@ router.post(
 router.post('/reset-password', validate(resetPasswordSchema), asyncHandler(auth.resetPassword));
 router.get('/verify-email/:token', asyncHandler(auth.verifyEmail));
 router.get('/me', authMiddleware, asyncHandler(auth.me));
+router.patch(
+  '/me',
+  authMiddleware,
+  validate(updateMyProfileSchema),
+  asyncHandler(auth.updateMyProfile),
+);
+router.post(
+  '/change-password',
+  authMiddleware,
+  validate(changeMyPasswordSchema),
+  asyncHandler(auth.changeMyPassword),
+);
 
 export default router;

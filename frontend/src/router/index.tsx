@@ -72,6 +72,9 @@ const CalendarPage = lazy(() => import('@/pages/calendar/CalendarPage'));
 const NoticeBoardPage = lazy(() => import('@/pages/notices/NoticeBoardPage'));
 const LocationsPage = lazy(() => import('@/pages/locations/LocationsPage'));
 
+// Profile (self-service for any signed-in user)
+const ProfilePage = lazy(() => import('@/pages/profile/ProfilePage'));
+
 // Settings
 const SettingsHomePage = lazy(() => import('@/pages/settings/SettingsHomePage'));
 const RolesPage = lazy(() => import('@/pages/settings/RolesPage'));
@@ -157,6 +160,7 @@ export function AppRouter(): ReactElement {
           >
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
 
             {/* SystemCore */}
             <Route path="/employees" element={<EmployeeListPage />} />

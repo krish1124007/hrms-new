@@ -227,27 +227,37 @@ export function Sidebar({
         {/* User footer */}
         <div className="border-t border-border p-3">
           <div className="flex items-center gap-3 rounded-md px-2 py-2">
-            <Avatar name={user?.firstName ?? user?.email ?? 'User'} size="sm" online />
-            {!collapsed && (
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">
-                  {user?.firstName ?? user?.email ?? 'Guest'}
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      'inline-flex items-center rounded-full border px-1.5 py-0 text-[10px] font-medium',
-                      roleBadge.className,
-                    )}
-                  >
-                    {roleBadge.label}
-                  </span>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {user?.email ?? ''}
+            <button
+              type="button"
+              onClick={() => {
+                navigate('/profile');
+                onMobileClose?.();
+              }}
+              className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left hover:bg-accent"
+              title="View profile"
+            >
+              <Avatar name={user?.firstName ?? user?.email ?? 'User'} size="sm" online />
+              {!collapsed && (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {user?.firstName ?? user?.email ?? 'Guest'}
                   </p>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        'inline-flex items-center rounded-full border px-1.5 py-0 text-[10px] font-medium',
+                        roleBadge.className,
+                      )}
+                    >
+                      {roleBadge.label}
+                    </span>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {user?.email ?? ''}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </button>
             {!collapsed && (
               <button
                 onClick={() => logout()}

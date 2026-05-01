@@ -243,6 +243,8 @@ export interface Employee {
   exitReason?: string;
   probationEndDate?: string;
   noticePeriod?: number;
+  // Populated by the API (`getEmployee` does `.populate('userId', 'email status lastLogin')`).
+  userId?: { _id: string; email: string; status: string; lastLogin?: string } | string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -273,6 +275,9 @@ export interface EmployeeInput {
   noticePeriod?: number;
   createUserAccount?: boolean;
   roleId?: string;
+  /** Optional admin-set login password (≥8 chars). If omitted on create the
+   *  backend issues an invite link by email instead. */
+  password?: string;
 }
 
 export interface EmployeeStats {

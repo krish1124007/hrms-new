@@ -25,6 +25,12 @@ const schema = z.object({
   lastName: z.string().min(1, 'Required'),
   email: z.string().email(),
   phone: z.string().optional(),
+  // Optional on edit; on create, if filled it must be ≥8 chars. We can't
+  // express "required only on create" cleanly here — handled at submit time.
+  password: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.length >= 8, { message: 'Password must be at least 8 characters' }),
   dateOfBirth: z.string().optional(),
   gender: z.enum(['male', 'female', 'other']).optional(),
   maritalStatus: z.enum(['single', 'married', 'divorced', 'widowed']).optional(),
@@ -196,8 +202,9 @@ export default function EmployeeFormPage(): ReactElement {
         },
       );
     } else {
+      const password = values.password?.trim() || undefined;
       create.mutate(
-        { ...payload, createUserAccount: true },
+        { ...payload, createUserAccount: true, password },
         {
           onSuccess: () => {
             localStorage.removeItem(STORAGE_KEY);
@@ -320,6 +327,25 @@ export default function EmployeeFormPage(): ReactElement {
                   <Label htmlFor="phone">Phone</Label>
                   <Input id="phone" {...register('phone')} />
                 </div>
+                {!isEdit && (
+                  <div className="sm:col-span-2">
+                    <Label htmlFor="password">Login password</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      placeholder="At least 8 characters — leave blank to email an invite link instead"
+                      autoComplete="new-password"
+                      {...register('password')}
+                    />
+                    {errors.password && (
+                      <p className="mt-1 text-xs text-destructive">{errors.password.message}</p>
+                    )}
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Set a password if you want this employee to be able to sign in immediately.
+                      You can change it later from their profile.
+                    </p>
+                  </div>
+                )}
                 <div>
                   <Label htmlFor="dateOfBirth">Date of birth</Label>
                   <Input id="dateOfBirth" type="date" {...register('dateOfBirth')} />

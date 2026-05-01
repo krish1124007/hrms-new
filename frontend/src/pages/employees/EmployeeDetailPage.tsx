@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Edit, FileText, Mail, MapPin, Phone, Trash2, Upload, UserMinus } from 'lucide-react';
+import { useMutation } from '@tanstack/react-query';
+import { Edit, FileText, KeyRound, Mail, MapPin, Phone, Trash2, Upload, UserMinus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +26,8 @@ import {
   useRemoveEmployeeDocument,
 } from '@/hooks/use-systemcore';
 import { documentsApi } from '@/lib/documents.api';
+import { authApi } from '@/lib/auth.api';
+import { usePermissions } from '@/hooks/use-permissions';
 import { toast } from 'sonner';
 
 function Field({ label, value }: { label: string; value?: string | number | null }): ReactElement {
@@ -40,6 +43,8 @@ export default function EmployeeDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data, isLoading } = useEmployee(id);
+  const { has } = usePermissions();
+  const [resetOpen, setResetOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -69,12 +74,26 @@ export default function EmployeeDetailPage(): ReactElement {
             <Button variant="outline" size="sm" onClick={() => navigate(`/employees/${e._id}/edit`)}>
               <Edit className="size-4" /> Edit
             </Button>
+            {has('users.update') && e.userId && (
+              <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
+                <KeyRound className="size-4" /> Reset password
+              </Button>
+            )}
             <Button variant="destructive" size="sm">
               <UserMinus className="size-4" /> Deactivate
             </Button>
           </>
         }
       />
+
+      {has('users.update') && e.userId && (
+        <ResetPasswordDialog
+          open={resetOpen}
+          onClose={() => setResetOpen(false)}
+          userId={typeof e.userId === 'string' ? e.userId : e.userId._id}
+          employeeName={`${e.firstName} ${e.lastName}`}
+        />
+      )}
 
       {/* Profile header */}
       <Card>
@@ -462,5 +481,99 @@ function DocumentsTab({
         </DialogFooter>
       </Dialog>
     </Card>
+  );
+}
+
+interface ResetPasswordDialogProps {
+  open: boolean;
+  onClose: () => void;
+  userId: string;
+  employeeName: string;
+}
+
+function ResetPasswordDialog({
+  open,
+  onClose,
+  userId,
+  employeeName,
+}: ResetPasswordDialogProps): ReactElement {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [show, setShow] = useState(false);
+
+  const reset = useMutation({
+    mutationFn: () => authApi.adminSetUserPassword(userId, password),
+    onSuccess: () => {
+      toast.success(`Password for ${employeeName} updated. Their existing sessions are revoked.`);
+      setPassword('');
+      setConfirm('');
+      onClose();
+    },
+    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
+      toast.error(err.response?.data?.error?.message ?? 'Failed to reset password'),
+  });
+
+  const submit = (): void => {
+    if (password.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+    if (password !== confirm) {
+      toast.error("Passwords don't match");
+      return;
+    }
+    reset.mutate();
+  };
+
+  return (
+    <Dialog open={open} onClose={() => !reset.isPending && onClose()} size="sm">
+      <DialogHeader>
+        <DialogTitle>Reset password — {employeeName}</DialogTitle>
+      </DialogHeader>
+      <DialogBody className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Set a new password for this user. They'll be signed out everywhere and will need to
+          log in with the new password.
+        </p>
+        <div>
+          <Label htmlFor="reset-password">New password *</Label>
+          <div className="relative">
+            <Input
+              id="reset-password"
+              type={show ? 'text' : 'password'}
+              value={password}
+              onChange={(ev) => setPassword(ev.target.value)}
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+            />
+            <button
+              type="button"
+              onClick={() => setShow((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {show ? 'Hide' : 'Show'}
+            </button>
+          </div>
+        </div>
+        <div>
+          <Label htmlFor="reset-confirm">Confirm password *</Label>
+          <Input
+            id="reset-confirm"
+            type={show ? 'text' : 'password'}
+            value={confirm}
+            onChange={(ev) => setConfirm(ev.target.value)}
+            autoComplete="new-password"
+          />
+        </div>
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose} disabled={reset.isPending}>
+          Cancel
+        </Button>
+        <Button onClick={submit} loading={reset.isPending}>
+          <KeyRound className="size-4" /> Update password
+        </Button>
+      </DialogFooter>
+    </Dialog>
   );
 }

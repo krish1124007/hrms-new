@@ -34,5 +34,11 @@ router.patch(
   validate(ctrl.updateStatusSchema),
   asyncHandler(ctrl.updateUserStatus),
 );
+router.patch(
+  '/:id/password',
+  requirePermission('users.update'),
+  validate(ctrl.setPasswordSchema),
+  asyncHandler(ctrl.setUserPassword),
+);
 
 export default router;
