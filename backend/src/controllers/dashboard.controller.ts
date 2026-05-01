@@ -143,74 +143,96 @@ export async function attendanceTrend(_req: Request, res: Response): Promise<voi
   });
 }
 
-/* ─────────── Upcoming: birthdays + leaves next 7 days ─────────── */
+/* ─────────── Upcoming: birthdays + leaves ───────────
+ *
+ * Returns ALL active employees' birthdays sorted by the next-occurrence date
+ * starting today (so January birthdays appear after December when we're in
+ * November, etc.), and ALL approved leaves whose end date is today or later
+ * (currently-on-leave + upcoming, sorted by start date).
+ *
+ * Same payload for every role — both admin and employee dashboards consume it.
+ */
 
 export async function upcoming(_req: Request, res: Response): Promise<void> {
   const now = new Date();
-  const in7 = new Date(now);
-  in7.setDate(in7.getDate() + 7);
+  const todayMonth = now.getMonth() + 1;
+  const todayDay = now.getDate();
 
-  // Birthdays: match on month+day, irrespective of year
-  const month = now.getMonth() + 1;
-  const day = now.getDate();
-  const maxMonth = in7.getMonth() + 1;
-  const maxDay = in7.getDate();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const match: any = { status: 'active' };
-  // Simple case: window stays within the same month
-  if (month === maxMonth) {
-    match.$expr = {
-      $and: [
-        { $eq: [{ $month: '$dob' }, month] },
-        { $gte: [{ $dayOfMonth: '$dob' }, day] },
-        { $lte: [{ $dayOfMonth: '$dob' }, maxDay] },
-      ],
-    };
-  } else {
-    // Cross-month window: match either (current month + day ≥ today)
-    // or (next month + day ≤ maxDay)
-    match.$expr = {
-      $or: [
-        {
-          $and: [
-            { $eq: [{ $month: '$dob' }, month] },
-            { $gte: [{ $dayOfMonth: '$dob' }, day] },
-          ],
-        },
-        {
-          $and: [
-            { $eq: [{ $month: '$dob' }, maxMonth] },
-            { $lte: [{ $dayOfMonth: '$dob' }, maxDay] },
-          ],
-        },
-      ],
-    };
-  }
-
-  const birthdays = await Employee.find(match)
-    .select('firstName lastName dob avatar')
-    .limit(20)
-    .lean()
-    .exec();
-
-  const upcomingLeaves = await LeaveRequest.find({
-    status: 'approved',
-    startDate: { $gte: now, $lte: in7 },
+  const employees = await Employee.find({
+    status: 'active',
+    dateOfBirth: { $exists: true, $ne: null },
   })
-    .populate('employeeId', 'firstName lastName avatar')
-    .sort({ startDate: 1 })
-    .limit(20)
+    .select('firstName lastName dateOfBirth profileImage employeeId')
     .lean()
     .exec();
 
-  res.json({
-    success: true,
-    data: {
-      birthdays,
-      leaves: upcomingLeaves,
-    },
+  // Compute days-until-next-birthday on the server so the frontend doesn't
+  // have to. Cap the list at 100 — covers most company sizes; if a client
+  // hits the cap we'd want a paginated /employees/birthdays page anyway.
+  const birthdays = employees
+    .filter((e) => e.dateOfBirth)
+    .map((e) => {
+      const dob = new Date(e.dateOfBirth as Date);
+      const m = dob.getMonth() + 1;
+      const d = dob.getDate();
+      // Next-occurrence sort key: months*100 + day with a wrap-around offset
+      // so months that already passed this year sort AFTER the current month.
+      const passed = m < todayMonth || (m === todayMonth && d < todayDay);
+      const sortKey = (passed ? 1200 : 0) + m * 100 + d;
+      return {
+        _id: String(e._id),
+        firstName: e.firstName,
+        lastName: e.lastName,
+        employeeId: e.employeeId,
+        avatar: e.profileImage,
+        // Frontend expects `dob` for legacy reasons — alias here.
+        dob: e.dateOfBirth,
+        sortKey,
+      };
+    })
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .slice(0, 100)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    .map(({ sortKey: _s, ...rest }) => rest);
+
+  const todayStart = startOfDay(now);
+  const leavesRaw = await LeaveRequest.find({
+    status: 'approved',
+    endDate: { $gte: todayStart },
+  })
+    .populate('employeeId', 'firstName lastName profileImage employeeId')
+    .populate('leaveTypeId', 'name')
+    .sort({ startDate: 1 })
+    .limit(100)
+    .lean()
+    .exec();
+
+  // Reshape so the populated employee lives at `.employee` (frontend's key)
+  // rather than the raw mongoose-populated `.employeeId` field.
+  const leaves = leavesRaw.map((l) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const emp = l.employeeId as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lt = l.leaveTypeId as any;
+    return {
+      _id: String(l._id),
+      employee:
+        emp && typeof emp === 'object'
+          ? {
+              _id: String(emp._id),
+              firstName: emp.firstName,
+              lastName: emp.lastName,
+              employeeId: emp.employeeId,
+              avatar: emp.profileImage,
+            }
+          : undefined,
+      startDate: l.startDate,
+      endDate: l.endDate,
+      leaveType: lt && typeof lt === 'object' ? lt.name : undefined,
+    };
   });
+
+  res.json({ success: true, data: { birthdays, leaves } });
 }
 
 /* ─────────── Recent activity (from audit log) ─────────── */

@@ -166,17 +166,17 @@ export default function DashboardPage(): ReactElement {
           </CardContent>
         </Card>
 
-        {/* Upcoming: birthdays + leaves */}
+        {/* Birthdays + leaves — full company list, scrollable */}
         <Card>
           <CardHeader>
-            <CardTitle>This week</CardTitle>
+            <CardTitle>Birthdays & leaves</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <UpcomingSection
               title="Birthdays"
               icon={Cake}
               loading={upcoming.isLoading}
-              empty="No birthdays in the next 7 days"
+              empty="No employees with a date of birth on file"
               items={(upcoming.data?.birthdays ?? []).map((b) => ({
                 key: b._id,
                 label: `${b.firstName} ${b.lastName}`,
@@ -190,7 +190,7 @@ export default function DashboardPage(): ReactElement {
               title="On leave"
               icon={CalendarOff}
               loading={upcoming.isLoading}
-              empty="No leaves scheduled"
+              empty="No approved leaves right now or coming up"
               items={(upcoming.data?.leaves ?? []).map((l) => ({
                 key: l._id,
                 label: l.employee
@@ -264,11 +264,6 @@ export default function DashboardPage(): ReactElement {
                 <Receipt className="size-4" /> Process Payroll
               </Button>
             </Link>
-            <Link to="/crm">
-              <Button variant="outline" className="w-full justify-start">
-                <TrendingUp className="size-4" /> View CRM
-              </Button>
-            </Link>
           </CardContent>
         </Card>
       </div>
@@ -303,8 +298,10 @@ function UpcomingSection({
       ) : items.length === 0 ? (
         <p className="text-xs text-muted-foreground">{empty}</p>
       ) : (
-        <ul className="space-y-2">
-          {items.slice(0, 4).map((i) => (
+        // Cap height + scroll so a long company list doesn't push the rest
+        // of the dashboard off-screen, but everyone is reachable.
+        <ul className="max-h-56 space-y-2 overflow-y-auto pr-1">
+          {items.map((i) => (
             <li key={i.key} className="flex items-center justify-between gap-2 text-sm">
               <span className="truncate">{i.label}</span>
               <span className="shrink-0 text-xs text-muted-foreground">{i.detail}</span>

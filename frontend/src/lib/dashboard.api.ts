@@ -40,13 +40,20 @@ export interface BirthdayRow {
   _id: string;
   firstName: string;
   lastName: string;
+  employeeId?: string;
   avatar?: string;
   dob: string;
 }
 
 export interface UpcomingLeaveRow {
   _id: string;
-  employee?: { _id: string; firstName: string; lastName: string; avatar?: string };
+  employee?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    employeeId?: string;
+    avatar?: string;
+  };
   startDate: string;
   endDate: string;
   leaveType?: string;
