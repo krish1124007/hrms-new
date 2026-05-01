@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { toPng, toJpeg } from 'html-to-image';
+import { toast } from 'sonner';
 import {
   CreditCard,
   Download,
@@ -7,6 +9,8 @@ import {
   User,
   QrCode,
   Building2,
+  Printer,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -78,29 +82,119 @@ export default function IDCardPage(): ReactElement {
   );
 
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const [isExporting, setIsExporting] = useState<null | 'png' | 'jpg' | 'print'>(null);
 
-  const handlePrint = (): void => {
+  // Slugify employee name for the download filename so a card for "Ada Lovelace"
+  // saves as `id-card-ada-lovelace-EMP001.png` rather than something with spaces.
+  const filename = (ext: string): string => {
+    if (!employee) return `id-card.${ext}`;
+    const slug = `${employee.firstName}-${employee.lastName}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return `id-card-${slug}-${employee.employeeId}.${ext}`;
+  };
+
+  // Common options for html-to-image. `pixelRatio: 3` gives us a print-ready
+  // ~600 DPI capture for a credit-card-sized element — sharp on screen, fine
+  // when the user prints the file later.
+  const captureOptions = {
+    pixelRatio: 3,
+    cacheBust: true,
+    backgroundColor: undefined as string | undefined,
+  };
+
+  const handleDownloadPng = async (): Promise<void> => {
     if (!employee || !cardRef.current) return;
-    const html = cardRef.current.outerHTML;
-    const win = window.open('', '_blank', 'width=600,height=400');
-    if (!win) return;
-    win.document.write(`<!doctype html>
+    try {
+      setIsExporting('png');
+      const dataUrl = await toPng(cardRef.current, captureOptions);
+      triggerDownload(dataUrl, filename('png'));
+      toast.success('ID card downloaded');
+    } catch (err) {
+      toast.error('Failed to generate ID card image');
+      // eslint-disable-next-line no-console
+      console.error(err);
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const handleDownloadJpg = async (): Promise<void> => {
+    if (!employee || !cardRef.current) return;
+    try {
+      setIsExporting('jpg');
+      const dataUrl = await toJpeg(cardRef.current, {
+        ...captureOptions,
+        quality: 0.95,
+        backgroundColor: '#ffffff',
+      });
+      triggerDownload(dataUrl, filename('jpg'));
+      toast.success('ID card downloaded');
+    } catch (err) {
+      toast.error('Failed to generate ID card image');
+      // eslint-disable-next-line no-console
+      console.error(err);
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const handlePrint = async (): Promise<void> => {
+    // Earlier this just dumped the unstyled HTML into a popup — no Tailwind
+    // CSS in the popup meant the printed page looked blank. Snapshot the
+    // rendered card to a PNG and embed THAT in the popup; everything is
+    // pre-rendered and the print is pixel-perfect.
+    if (!employee || !cardRef.current) return;
+    try {
+      setIsExporting('print');
+      const dataUrl = await toPng(cardRef.current, captureOptions);
+      const win = window.open('', '_blank', 'width=600,height=400');
+      if (!win) {
+        toast.error('Pop-up blocked — allow pop-ups for this site');
+        return;
+      }
+      const sizeRule =
+        template.orientation === 'landscape' ? '85.6mm 53.98mm' : '53.98mm 85.6mm';
+      win.document.write(`<!doctype html>
 <html>
 <head>
   <title>ID Card — ${employee.firstName} ${employee.lastName}</title>
   <meta charset="utf-8" />
   <style>
-    @page { size: ${template.orientation === 'landscape' ? '85.6mm 53.98mm' : '53.98mm 85.6mm'}; margin: 0; }
-    html, body { margin: 0; padding: 0; }
-    body { display: flex; align-items: center; justify-content: center; padding: 16px; }
-    .id-card { box-shadow: none !important; }
+    @page { size: ${sizeRule}; margin: 0; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    img { width: ${template.orientation === 'landscape' ? '85.6mm' : '53.98mm'}; height: auto; display: block; }
+    @media print { body { padding: 0; } }
   </style>
 </head>
-<body>${html}
-<script>window.onload = () => { window.print(); window.close(); };</script>
+<body>
+  <img src="${dataUrl}" alt="ID Card" />
+  <script>
+    const img = document.querySelector('img');
+    img.addEventListener('load', () => { window.focus(); window.print(); });
+    window.addEventListener('afterprint', () => window.close());
+  </script>
 </body>
 </html>`);
-    win.document.close();
+      win.document.close();
+    } catch (err) {
+      toast.error('Failed to prepare ID card for printing');
+      // eslint-disable-next-line no-console
+      console.error(err);
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const triggerDownload = (dataUrl: string, name: string): void => {
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const isWhite = template._id === 'minimal-white';
@@ -201,12 +295,38 @@ export default function IDCardPage(): ReactElement {
 
         {/* Right: Card Preview */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Card preview</h2>
-            <Button className="gap-2" disabled={!employee} onClick={handlePrint}>
-              <Download className="size-4" />
-              Print / Save PDF
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Card preview
+            </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                disabled={!employee || isExporting !== null}
+                loading={isExporting === 'png'}
+                onClick={handleDownloadPng}
+              >
+                <Download className="size-4" /> PNG
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!employee || isExporting !== null}
+                loading={isExporting === 'jpg'}
+                onClick={handleDownloadJpg}
+              >
+                <ImageIcon className="size-4" /> JPG
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!employee || isExporting !== null}
+                loading={isExporting === 'print'}
+                onClick={handlePrint}
+              >
+                <Printer className="size-4" /> Print
+              </Button>
+            </div>
           </div>
 
           <div
@@ -266,7 +386,9 @@ export default function IDCardPage(): ReactElement {
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            {employee ? 'Click "Print / Save PDF" to print the card or save as PDF.' : 'Select an employee to populate the card.'}
+            {employee
+              ? 'Download the card as PNG / JPG, or use Print to send it directly to a printer.'
+              : 'Select an employee to populate the card.'}
           </p>
         </div>
       </div>
