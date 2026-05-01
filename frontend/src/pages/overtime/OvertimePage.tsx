@@ -84,11 +84,12 @@ export default function OvertimePage(): ReactElement {
         <TabsList>
           {!canApprove && <TabsTrigger value="mine">My Requests</TabsTrigger>}
           {canViewAll && <TabsTrigger value="all">All Requests</TabsTrigger>}
-          {canApprove && <TabsTrigger value="mine">My Requests</TabsTrigger>}
         </TabsList>
-        <TabsContent value="mine">
-          <MyRequestsTab />
-        </TabsContent>
+        {!canApprove && (
+          <TabsContent value="mine">
+            <MyRequestsTab />
+          </TabsContent>
+        )}
         {canViewAll && (
           <TabsContent value="all">
             <AllRequestsTab canApprove={canApprove} />
