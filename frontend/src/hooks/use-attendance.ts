@@ -42,13 +42,23 @@ export function useTodayAttendance() {
     refetchInterval: 60_000,
   });
 }
+// Invalidate every attendance view that could be affected by a check-in/out —
+// the user's own widget AND any admin window watching the live dashboard or
+// records list. Keeps multi-window/multi-tab views in sync.
+function invalidateAllAttendance(qc: ReturnType<typeof useQueryClient>): void {
+  qc.invalidateQueries({ queryKey: ['attendance-today'] });
+  qc.invalidateQueries({ queryKey: ['attendance-my'] });
+  qc.invalidateQueries({ queryKey: ['attendance-list'] });
+  qc.invalidateQueries({ queryKey: ['attendance-dashboard'] });
+  qc.invalidateQueries({ queryKey: ['attendance-monthly'] });
+}
+
 export function useCheckIn() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: CheckInPayload) => attendanceApi.checkIn(payload),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['attendance-today'] });
-      qc.invalidateQueries({ queryKey: ['attendance-my'] });
+      invalidateAllAttendance(qc);
       toast.success('Checked in successfully');
     },
     onError: (e) => toast.error(errMsg(e, 'Check-in failed')),
@@ -59,8 +69,7 @@ export function useCheckOut() {
   return useMutation({
     mutationFn: (payload: CheckInPayload) => attendanceApi.checkOut(payload),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['attendance-today'] });
-      qc.invalidateQueries({ queryKey: ['attendance-my'] });
+      invalidateAllAttendance(qc);
       toast.success('Checked out successfully');
     },
     onError: (e) => toast.error(errMsg(e, 'Check-out failed')),
@@ -84,10 +93,16 @@ export function useEndBreak() {
 }
 
 /* ── Records ── */
+// Auto-refresh interval for the live admin views. 30s is fast enough to feel
+// live during a 9am check-in spike, light enough to not hammer the API.
+const LIVE_REFETCH_MS = 30_000;
+
 export function useAttendanceList(params?: Record<string, unknown>) {
   return useQuery({
     queryKey: ['attendance-list', params],
     queryFn: () => attendanceApi.list(params),
+    refetchInterval: LIVE_REFETCH_MS,
+    refetchOnWindowFocus: true,
   });
 }
 export function useMyAttendance(params?: Record<string, unknown>) {
@@ -106,6 +121,8 @@ export function useAttendanceDashboard(departmentId?: string) {
   return useQuery({
     queryKey: ['attendance-dashboard', departmentId],
     queryFn: () => attendanceApi.dashboard(departmentId),
+    refetchInterval: LIVE_REFETCH_MS,
+    refetchOnWindowFocus: true,
   });
 }
 export function useRequestRegularization() {

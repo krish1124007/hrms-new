@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMonthlyAttendance } from '@/hooks/use-attendance';
 import type { AttendanceStatus } from '@/lib/attendance.api';
+import { CheckInWidget } from '@/components/attendance/CheckInWidget';
 import { cn } from '@/lib/utils';
 
 const STATUS_BG: Record<AttendanceStatus, string> = {
@@ -62,13 +63,15 @@ export default function EmployeeAttendancePage(): ReactElement {
     <div className="space-y-6">
       <PageHeader
         title="My Attendance"
-        description="Your monthly attendance calendar"
+        description="Check in and out, and review your monthly attendance"
         breadcrumbs={[
           { label: 'Home', to: '/dashboard' },
           { label: 'Attendance', to: '/attendance' },
           { label: 'My' },
         ]}
       />
+
+      <CheckInWidget />
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
