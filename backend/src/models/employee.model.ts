@@ -233,9 +233,8 @@ employeeSchema.set('toJSON', { virtuals: true });
 employeeSchema.set('toObject', { virtuals: true });
 
 // Auto-generate employeeId on first save
-employeeSchema.pre('save', async function (next) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const doc = this as any;
+employeeSchema.pre('save', async function (this: any, next: (err?: Error) => void) {
+  const doc = this;
   if (doc.employeeId) return next();
   try {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
@@ -249,9 +248,8 @@ employeeSchema.pre('save', async function (next) {
 });
 
 // Auto-compute grossSalary
-employeeSchema.pre('save', function (next) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const doc = this as any;
+employeeSchema.pre('save', function (this: any, next: () => void) {
+  const doc = this;
   if (doc.salary && doc.isModified('salary')) {
     const s = doc.salary;
     const others = s.otherAllowances
