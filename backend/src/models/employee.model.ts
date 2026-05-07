@@ -241,7 +241,7 @@ employeeSchema.pre('save', async function (next) {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
     const count = await Employee.countDocuments({});
     const seq = count + 1;
-    doc.employeeId = `EMP-${String(seq).padStart(4, '0')}`;
+    doc.employeeId = `EMP${String(seq).padStart(6, '0')}`;
     next();
   } catch (err) {
     next(err as Error);
