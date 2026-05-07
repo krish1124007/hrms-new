@@ -75,6 +75,7 @@ router.post(
 
 /* ── Self-service ── */
 router.get('/my-payslips', requirePermission('payroll.view'), asyncHandler(ctrl.myPayslips));
+router.get('/my-payslips/:id', requirePermission('payroll.view'), asyncHandler(ctrl.getRecord));
 
 /* ── Reports ── */
 router.get(

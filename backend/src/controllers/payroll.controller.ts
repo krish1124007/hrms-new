@@ -769,7 +769,20 @@ export async function getRecord(req: Request, res: Response): Promise<void> {
     .populate('employeeId', 'firstName lastName employeeId email')
     .populate('cycleId', 'month year status')
     .exec();
+
   if (!record) throw new NotFoundError('Record not found');
+
+  // Ownership guard — non-privileged users may only view their own record.
+  if (req.user && !isPayrollPrivileged(req.user)) {
+    const employee = await Employee.findOne({ userId: req.user._id })
+      .select('_id')
+      .lean()
+      .exec();
+    if (!employee || String(record.employeeId) !== String(employee._id)) {
+      throw new ForbiddenError('You can only view your own payroll record');
+    }
+  }
+
   res.json({ success: true, data: record });
 }
 
