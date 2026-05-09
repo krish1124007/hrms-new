@@ -172,10 +172,41 @@ export async function myLeaveBalances(req: Request, res: Response): Promise<void
   const employee = await getCurrentEmployee();
   if (!employee) throw new NotFoundError('Employee profile not found');
   const year = Number(req.query.year ?? new Date().getFullYear());
-  const list = await LeaveBalance.find({ employeeId: employee._id, year })
+
+  // Get all active leave types
+  const types = await LeaveType.find({ isActive: true }).lean().exec();
+
+  // Get existing balances for this employee and year
+  const existingBalances = await LeaveBalance.find({ employeeId: employee._id, year })
     .populate('leaveTypeId', 'name code color')
     .lean()
     .exec();
+
+  // Merge: for each type, if no balance exists, create a virtual 0 balance
+  const list = types.map((t) => {
+    const existing = existingBalances.find(
+      (b) => String(typeof b.leaveTypeId === 'object' ? b.leaveTypeId._id : b.leaveTypeId) === String(t._id)
+    );
+    if (existing) return existing;
+
+    return {
+      _id: `virtual_${t._id}`,
+      employeeId: employee._id,
+      leaveTypeId: {
+        _id: t._id,
+        name: t.name,
+        code: t.code,
+        color: t.color,
+      },
+      year,
+      allocated: 0,
+      used: 0,
+      carried: 0,
+      adjusted: 0,
+      balance: 0,
+    };
+  });
+
   res.json({ success: true, data: list });
 }
 

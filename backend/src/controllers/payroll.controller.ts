@@ -449,7 +449,7 @@ async function computeForEmployee(
 
   const deductions: IPayrollLine[] = [];
   if (pt > 0) deductions.push({ name: 'P.Tax', amount: pt });
-  if (pfEmp > 0) deductions.push({ name: 'PF Employee', amount: pfEmp });
+  deductions.push({ name: 'PF Employee', amount: pfEmp });
   deductions.push({ name: 'ESI Employee', amount: esicEmp });
 
   // Manual deductions — defaulted to 0; HR can edit on the record.
@@ -470,7 +470,7 @@ async function computeForEmployee(
   const pfErp = pfEmployer(basic);
   const esicErp = esicEmployer(grossEarnings);
   const employerContributions: IPayrollLine[] = [];
-  if (pfErp > 0) employerContributions.push({ name: 'PF Employer', amount: pfErp });
+  employerContributions.push({ name: 'PF Employer', amount: pfErp });
   employerContributions.push({ name: 'ESI Employer', amount: esicErp });
 
   const totalDeductions = round2(deductions.reduce((s, l) => s + l.amount, 0));

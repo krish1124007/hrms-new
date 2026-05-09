@@ -56,6 +56,9 @@ import { dashboardApi } from '@/lib/dashboard.api';
 import { type Attendance } from '@/lib/attendance.api';
 import { payrollApi } from '@/lib/payroll.api';
 import { expenseCategoriesApi, expenseClaimsApi } from '@/lib/expense-claims.api';
+import { noticesApi, type Notice } from '@/lib/notices.api';
+import { useEffect } from 'react';
+import { Megaphone } from 'lucide-react';
 import { toast } from 'sonner';
 
 function fmtTime(iso?: string): string {
@@ -89,6 +92,31 @@ export default function EmployeeDashboardPage(): ReactElement {
   const [expCategory, setExpCategory] = useState<string>('');
   const [expAmount, setExpAmount] = useState<string>('');
   const [expDescription, setExpDescription] = useState<string>('');
+  const [activeNotice, setActiveNotice] = useState<Notice | null>(null);
+
+  const noticesQ = useQuery({
+    queryKey: ['notices', 'latest'],
+    queryFn: () => noticesApi.list({ limit: 1 }),
+  });
+
+  useEffect(() => {
+    const latest = noticesQ.data?.data?.[0];
+    if (latest) {
+      const isAcknowledged = latest.acknowledgements?.some((a) => a.userId === user?._id);
+      if (!isAcknowledged) {
+        setActiveNotice(latest);
+      }
+    }
+  }, [noticesQ.data, user?._id]);
+
+  const acknowledgeNotice = useMutation({
+    mutationFn: (id: string) => noticesApi.acknowledge(id),
+    onSuccess: () => {
+      setActiveNotice(null);
+      qc.invalidateQueries({ queryKey: ['notices'] });
+      toast.success('Notice acknowledged');
+    },
+  });
 
   const categoriesQ = useQuery({
     queryKey: ['expense-categories'],
@@ -508,6 +536,64 @@ export default function EmployeeDashboardPage(): ReactElement {
             }
           >
             <LogOut className="size-4" /> Submit & Check out
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <Dialog
+        open={!!activeNotice}
+        onClose={() => setActiveNotice(null)}
+        size="md"
+      >
+        <DialogHeader>
+          <div className="flex items-center gap-2">
+            <div className="rounded-full bg-primary/10 p-2 text-primary">
+              <Megaphone className="size-5" />
+            </div>
+            <DialogTitle>{activeNotice?.title}</DialogTitle>
+          </div>
+        </DialogHeader>
+        <DialogBody>
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+              {activeNotice?.content}
+            </p>
+          </div>
+          {activeNotice?.attachments?.length ? (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Attachments
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {activeNotice.attachments.map((file, idx) => (
+                  <a
+                    key={idx}
+                    href={file.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 rounded-md border border-border p-2 text-xs hover:bg-accent"
+                  >
+                    <FileText className="size-3.5 text-primary" />
+                    <span className="truncate font-medium">{file.name}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setActiveNotice(null)}
+            disabled={acknowledgeNotice.isPending}
+          >
+            Read later
+          </Button>
+          <Button
+            onClick={() => activeNotice && acknowledgeNotice.mutate(activeNotice._id)}
+            loading={acknowledgeNotice.isPending}
+          >
+            Acknowledge
           </Button>
         </DialogFooter>
       </Dialog>
