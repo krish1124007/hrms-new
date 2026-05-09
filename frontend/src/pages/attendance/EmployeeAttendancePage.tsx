@@ -10,8 +10,8 @@ import { cn } from '@/lib/utils';
 
 const STATUS_BG: Record<AttendanceStatus, string> = {
   present: 'bg-success/20 border-success/40 text-success',
-  late: 'bg-warning/20 border-warning/40 text-warning',
-  half_day: 'bg-warning/20 border-warning/40 text-warning',
+  late: 'bg-orange-500/20 border-orange-500/40 text-orange-600',
+  half_day: 'bg-amber-500/20 border-amber-500/40 text-amber-600',
   absent: 'bg-destructive/20 border-destructive/40 text-destructive',
   on_leave: 'bg-blue-500/20 border-blue-500/40 text-blue-600',
   holiday: 'bg-purple-500/20 border-purple-500/40 text-purple-600',

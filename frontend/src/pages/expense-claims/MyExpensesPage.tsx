@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Upload, FileText, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -24,6 +25,7 @@ import {
   useDeleteExpenseClaim,
   useExpenseCategories,
 } from '@/hooks/use-expense-claims';
+import { documentsApi } from '@/lib/documents.api';
 import type { ExpenseClaim, ExpenseClaimStatus } from '@/lib/expense-claims.api';
 
 const STATUS_VARIANT: Record<
@@ -74,9 +76,24 @@ export default function MyExpensesPage(): ReactElement {
     handleSubmit,
     reset,
     control,
+    watch,
     formState: { errors },
   } = form;
   const { fields, append, remove: removeReceipt } = useFieldArray({ control, name: 'receiptUrls' });
+  const [uploading, setUploading] = useState<number | null>(null);
+
+  const handleUpload = async (idx: number, file: File): Promise<void> => {
+    try {
+      setUploading(idx);
+      const res = await documentsApi.upload(file, { folder: 'expenses', category: 'Receipt' });
+      form.setValue(`receiptUrls.${idx}.fileUrl`, res.data.file.url);
+      form.setValue(`receiptUrls.${idx}.name`, file.name);
+    } catch (err) {
+      toast.error('Upload failed');
+    } finally {
+      setUploading(null);
+    }
+  };
 
   const openDialog = (): void => {
     reset({
@@ -229,19 +246,49 @@ export default function MyExpensesPage(): ReactElement {
                 </Button>
               </div>
               {fields.map((f, idx) => (
-                <div key={f.id} className="mb-2 grid grid-cols-[1fr_2fr_auto] gap-2">
-                  <Input placeholder="Name" {...register(`receiptUrls.${idx}.name` as const)} />
-                  <Input
-                    placeholder="https://…"
-                    {...register(`receiptUrls.${idx}.fileUrl` as const)}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeReceipt(idx)}
-                    className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
+                <div key={f.id} className="mb-2 space-y-2 rounded-md border border-border p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Input
+                      placeholder="Receipt Name"
+                      {...register(`receiptUrls.${idx}.name` as const)}
+                      className="h-8"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeReceipt(idx)}
+                      className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {watch(`receiptUrls.${idx}.fileUrl`) ? (
+                      <div className="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
+                        <FileText className="size-4 text-primary" />
+                        <span className="truncate">{watch(`receiptUrls.${idx}.fileUrl`)}</span>
+                      </div>
+                    ) : (
+                      <div className="relative flex-1">
+                        <Input
+                          type="file"
+                          accept="image/*,application/pdf"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleUpload(idx, file);
+                          }}
+                          className="h-9 cursor-pointer pr-10 text-xs"
+                          disabled={uploading === idx}
+                        />
+                        <div className="absolute right-3 top-2.5">
+                          {uploading === idx ? (
+                            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                          ) : (
+                            <Upload className="size-4 text-muted-foreground" />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

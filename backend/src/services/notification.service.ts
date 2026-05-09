@@ -175,3 +175,20 @@ export async function notifyApprovalRequest(
     metadata: { entityType, requestedBy },
   });
 }
+export async function notifyNoticePublished(
+  userIds: string[],
+  noticeTitle: string,
+  noticeId: string,
+): Promise<void> {
+  const promises = userIds.map((userId) =>
+    createNotification({
+      userId,
+      type: 'system_alert', // Using system_alert type for notice board pop-ups
+      title: 'New Notice Published',
+      message: noticeTitle,
+      link: `/notices/${noticeId}`,
+      metadata: { noticeId, noticeTitle },
+    }),
+  );
+  await Promise.allSettled(promises);
+}

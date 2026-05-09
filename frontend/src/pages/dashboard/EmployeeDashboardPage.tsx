@@ -50,6 +50,7 @@ import {
   useCheckOut,
   useMyAttendance,
 } from '@/hooks/use-attendance';
+import { useMyLeaveBalances } from '@/hooks/use-leaves';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '@/lib/dashboard.api';
 import { type Attendance } from '@/lib/attendance.api';
@@ -158,6 +159,10 @@ export default function EmployeeDashboardPage(): ReactElement {
     queryKey: ['payroll', 'my-payslips'],
     queryFn: () => payrollApi.myPayslips(),
   });
+
+  // Leave balances
+  const { data: balancesData, isLoading: loadingBalances } = useMyLeaveBalances(month.getFullYear());
+  const balances = balancesData?.data ?? [];
 
   const tdRec = todayQ.data?.data ?? null;
   const checkedIn = !!tdRec?.checkIn?.time && !tdRec?.checkOut?.time;
@@ -351,6 +356,48 @@ export default function EmployeeDashboardPage(): ReactElement {
                 })}`,
               }))}
             />
+          </CardContent>
+        </Card>
+
+        {/* Leave Balances */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Leave balances</CardTitle>
+            <Link to="/leaves" className="text-xs font-medium text-primary hover:underline">
+              Apply
+            </Link>
+          </CardHeader>
+          <CardContent>
+            {loadingBalances ? (
+              <Skeleton className="h-24 w-full" />
+            ) : balances.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No leave balances allocated yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {balances.slice(0, 3).map((b) => {
+                  const lt = typeof b.leaveTypeId === 'object' ? b.leaveTypeId : null;
+                  const total = (b.allocated ?? 0) + (b.carried ?? 0) + (b.adjusted ?? 0);
+                  const remaining = total - (b.used ?? 0);
+                  return (
+                    <div key={b._id} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: lt?.color ?? '#3b82f6' }}
+                        />
+                        <span className="text-sm font-medium">{lt?.name ?? 'Leave'}</span>
+                      </div>
+                      <span className="text-sm font-bold">{remaining} days</span>
+                    </div>
+                  );
+                })}
+                {balances.length > 3 && (
+                  <p className="text-center text-[10px] text-muted-foreground italic">
+                    + {balances.length - 3} more types
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

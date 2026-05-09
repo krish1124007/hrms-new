@@ -5,6 +5,8 @@ import { Notice } from '../models/notice.model.js';
 import { NotFoundError, UnauthorizedError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { sanitizeStrict, sanitizeRich } from '../lib/sanitize.js';
+import { notifyNoticePublished } from '../services/notification.service.js';
+import { Employee } from '../models/employee.model.js';
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
@@ -102,6 +104,19 @@ export async function createNotice(req: Request, res: Response): Promise<void> {
   });
 
   await notice.populate('postedBy', 'firstName lastName email');
+  
+  // Trigger real-time notifications for all targeted employees
+  const targetFilter: any = { status: 'active' };
+  if (body.departments && body.departments.length > 0) {
+    targetFilter.department = { $in: body.departments.map(id => new Types.ObjectId(id)) };
+  }
+  const employees = await Employee.find(targetFilter).select('userId').lean().exec();
+  const userIds = employees.map(e => String(e.userId)).filter(Boolean);
+  
+  if (userIds.length > 0) {
+    void notifyNoticePublished(userIds, notice.title, String(notice._id));
+  }
+
   void audit({ action: 'create', entity: 'Notice', entityId: String(notice._id) });
   res.status(201).json({ success: true, data: notice });
 }
