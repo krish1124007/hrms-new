@@ -198,10 +198,10 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 
   {
-    title: 'Field Force',
+    title: 'Sales',
     items: [
       {
-        label: 'Field Force',
+        label: 'Sales',
         icon: MapPin,
         module: 'field-sales',
         permissions: P.field,
