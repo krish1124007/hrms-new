@@ -1,0 +1,1 @@
+{"version":3,"file":"n-plus-one-detector.d.ts","sourceRoot":"","sources":["../../src/lib/n-plus-one-detector.ts"],"names":[],"mappings":"AAyBA;;;GAGG;AACH,wBAAgB,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,IAAI,CAuBpD;AAED;;;;GAIG;AACH,wBAAgB,YAAY,CAAC,SAAS,EAAE,MAAM,GAAG,IAAI,CAEpD;AAED,4DAA4D;AAC5D,wBAAgB,OAAO,CAAC,SAAS,EAAE,MAAM,GAAG,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,GAAG,IAAI,CAGxE"}

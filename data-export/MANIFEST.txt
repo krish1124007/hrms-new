@@ -1,0 +1,7 @@
+HRMS data export
+================
+Created : 2026-04-30T07:27:59Z
+DB name : hrms
+Source  : mongodb://localhost:27017/hrms
+Dump    : mongo.archive.gz (4.0K)
+Uploads : 2.5M

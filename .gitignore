@@ -1,15 +1,15 @@
 # Dependencies
 node_modules/
 
-# Build outputs
-dist/
-build/
+# Ignore Source Code & Configs (Local Only)
+**/src/
+**/*.ts
+**/*.tsx
+**/tsconfig*.json
+**/vite.config.ts
+**/.eslintrc*
+**/.prettier*
 *.tsbuildinfo
-
-# Logs
-logs/
-*.log
-npm-debug.log*
 
 # Environment / secrets — NEVER commit
 .env
@@ -17,25 +17,16 @@ npm-debug.log*
 .env.*.local
 !.env.example
 
-# IDE / OS
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-
-# Coverage
-coverage/
-*.lcov
-.nyc_output/
-
-# Cache
+# Logs & Cache
+*.log
 .cache/
 .eslintcache
 
-# Local file uploads (payslips, attachments)
+# Project Specific
 uploads/
-backend/uploads/
-
-# Backups
 backups/
+
+# ALLOW Production Build Files
+!**/dist/
+# Keep migrations as they are needed for DB updates
+!backend/migrations/

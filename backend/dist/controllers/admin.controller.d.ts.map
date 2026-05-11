@@ -1,0 +1,1 @@
+{"version":3,"file":"admin.controller.d.ts","sourceRoot":"","sources":["../../src/controllers/admin.controller.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AACjD,OAAO,EAAE,CAAC,EAAE,MAAM,KAAK,CAAC;AAIxB,eAAO,MAAM,eAAe;;;;;;EAE1B,CAAC;AAEH;;;GAGG;AACH,wBAAsB,SAAS,CAAC,GAAG,EAAE,OAAO,EAAE,GAAG,EAAE,QAAQ,GAAG,OAAO,CAAC,IAAI,CAAC,CAgE1E"}
