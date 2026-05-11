@@ -68,7 +68,7 @@ const readBySchema = new Schema<IMessageReadBy>(
 );
 
 const messageSchema = new Schema<IMessage>({
-  channelId: { type: Schema.Types.ObjectId, ref: 'Channel', required: true, index: true },
+  channelId: { type: Schema.Types.ObjectId, ref: 'Channel', required: true },
   senderId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   type: {
     type: String,
@@ -88,7 +88,6 @@ messageSchema.plugin(softDeletePlugin);
 messageSchema.plugin(paginatePlugin);
 
 messageSchema.index({ channelId: 1, createdAt: -1 });
-messageSchema.index({ channelId: 1 });
 
 export const Message = model<IMessage, PaginateModel<IMessage> & Model<IMessage>>(
   'Message',

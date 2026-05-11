@@ -62,7 +62,6 @@ const channelSchema = new Schema<IChannel>({
     type: String,
     enum: ['direct', 'group', 'department', 'project'],
     required: true,
-    index: true,
   },
   members: { type: [channelMemberSchema], default: [] },
   isPrivate: { type: Boolean, default: false },

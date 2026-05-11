@@ -18,7 +18,7 @@ export interface IQRCode extends Document {
 }
 
 const qrCodeSchema = new Schema<IQRCode>({
-  code: { type: String, required: true, index: true },
+  code: { type: String, required: true },
   type: { type: String, enum: ['static', 'dynamic'], default: 'static' },
   locationId: { type: Schema.Types.ObjectId, ref: 'AttendanceSite' },
   expiresAt: { type: Date },

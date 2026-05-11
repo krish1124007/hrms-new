@@ -202,36 +202,53 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
     }
     if (!role) throw new ValidationAppError('No employee role found; specify roleId');
 
-    const adminSetPassword = body.password;
-    const password = adminSetPassword ?? randomBytes(16).toString('hex');
-    const verificationToken = adminSetPassword ? undefined : randomBytes(32).toString('hex');
-
     const existingUser = await User.findOne({ email }).setOptions({ withDeleted: true }).exec();
     if (existingUser) {
       if (existingUser.isDeleted) {
         throw new ConflictError('A user with this email already exists in deleted records');
       }
-      throw new ConflictError('User with this email already exists');
-    }
 
-    const user = await User.create({
-      email: email, // use trimmed/lowercased version
-      firstName: body.firstName,
-      lastName: body.lastName,
-      role: role._id,
-      password,
-      status: adminSetPassword ? 'active' : 'invited',
-      emailVerified: adminSetPassword ? true : false,
-      ...(verificationToken ? { emailVerificationToken: verificationToken } : {}),
-    });
-    userId = user._id;
+      // Check if this user is already associated with an employee (active or deleted)
+      const linkedEmployee = await Employee.findOne({ userId: existingUser._id })
+        .setOptions({ withDeleted: true })
+        .exec();
 
-    if (verificationToken) {
-      void sendMail({
-        to: user.email,
-        subject: 'Welcome to DD HRMS',
-        html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Activate account</a></p>`,
+      if (linkedEmployee) {
+        if (linkedEmployee.isDeleted) {
+          throw new ConflictError(
+            'This email is linked to a deleted employee record. Please restore the employee instead of creating a new one.',
+          );
+        }
+        throw new ConflictError('An active employee is already using this user account/email');
+      }
+
+      // If the user exists but is NOT linked to any employee, we can use this user!
+      userId = existingUser._id;
+      // Optionally update user info if needed, but for now we just link it.
+    } else {
+      const adminSetPassword = body.password;
+      const password = adminSetPassword ?? randomBytes(16).toString('hex');
+      const verificationToken = adminSetPassword ? undefined : randomBytes(32).toString('hex');
+
+      const user = await User.create({
+        email: email,
+        firstName: body.firstName,
+        lastName: body.lastName,
+        role: role._id,
+        password,
+        status: adminSetPassword ? 'active' : 'invited',
+        emailVerified: adminSetPassword ? true : false,
+        ...(verificationToken ? { emailVerificationToken: verificationToken } : {}),
       });
+      userId = user._id;
+
+      if (verificationToken) {
+        void sendMail({
+          to: user.email,
+          subject: `Welcome to ${env.COMPANY_NAME}`,
+          html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Activate account</a></p>`,
+        });
+      }
     }
   }
 
