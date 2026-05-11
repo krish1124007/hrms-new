@@ -164,6 +164,14 @@ export default function EmployeeFormPage(): ReactElement {
   })();
 
   const onSubmit = (values: FormValues): void => {
+    // Safety check: ensure we only submit the form to the API if the user
+    // is actually on the final step. This prevents accidental submissions
+    // if the "Next" button transition is too fast or triggered by "Enter".
+    if (step < STEPS.length) {
+      void next();
+      return;
+    }
+
     const payload = {
       firstName: values.firstName,
       lastName: values.lastName,
@@ -509,11 +517,15 @@ export default function EmployeeFormPage(): ReactElement {
             <ArrowLeft className="size-4" /> Back
           </Button>
           {step < STEPS.length ? (
-            <Button type="button" onClick={next}>
+            <Button type="button" onClick={next} key="next-button">
               Next <ArrowRight className="size-4" />
             </Button>
           ) : (
-            <Button type="submit" loading={create.isPending || update.isPending}>
+            <Button
+              type="submit"
+              loading={create.isPending || update.isPending}
+              key="submit-button"
+            >
               <Save className="size-4" /> {isEdit ? 'Save changes' : 'Create employee'}
             </Button>
           )}
