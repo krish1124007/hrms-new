@@ -86,6 +86,8 @@ export interface IEmployee extends Document {
   probationEndDate?: Date;
   noticePeriod?: number;
   fullName: string;
+  isDeleted: boolean;
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -238,8 +240,19 @@ employeeSchema.pre('save', async function (this: any, next: (err?: Error) => voi
   if (doc.employeeId) return next();
   try {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    const count = await Employee.countDocuments({});
-    const seq = count + 1;
+    // Find the highest current employeeId (including soft-deleted ones)
+    const lastEmployee = await Employee.findOne({})
+      .sort({ employeeId: -1 })
+      .setOptions({ withDeleted: true })
+      .exec();
+
+    let seq = 1;
+    if (lastEmployee && lastEmployee.employeeId) {
+      const match = lastEmployee.employeeId.match(/\d+/);
+      if (match) {
+        seq = parseInt(match[0], 10) + 1;
+      }
+    }
     doc.employeeId = `EMP${String(seq).padStart(6, '0')}`;
     next();
   } catch (err) {

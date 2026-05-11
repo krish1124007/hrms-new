@@ -180,8 +180,15 @@ export async function employeeStats(_req: Request, res: Response): Promise<void>
 
 export async function createEmployee(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createEmployeeSchema>;
-  const dup = await Employee.findOne({ email: body.email.toLowerCase() }).exec();
-  if (dup) throw new ConflictError('Employee with this email already exists');
+  const email = body.email.trim().toLowerCase();
+
+  const dup = await Employee.findOne({ email }).setOptions({ withDeleted: true }).exec();
+  if (dup) {
+    if (dup.isDeleted) {
+      throw new ConflictError('An employee with this email already exists in deleted records');
+    }
+    throw new ConflictError('Employee with this email already exists');
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let userId: any;
@@ -198,11 +205,17 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
     const adminSetPassword = body.password;
     const password = adminSetPassword ?? randomBytes(16).toString('hex');
     const verificationToken = adminSetPassword ? undefined : randomBytes(32).toString('hex');
-    const existingUser = await User.findOne({ email: body.email.toLowerCase() }).exec();
-    if (existingUser) throw new ConflictError('User with this email already exists');
+
+    const existingUser = await User.findOne({ email }).setOptions({ withDeleted: true }).exec();
+    if (existingUser) {
+      if (existingUser.isDeleted) {
+        throw new ConflictError('A user with this email already exists in deleted records');
+      }
+      throw new ConflictError('User with this email already exists');
+    }
 
     const user = await User.create({
-      email: body.email,
+      email: email, // use trimmed/lowercased version
       firstName: body.firstName,
       lastName: body.lastName,
       role: role._id,
@@ -392,12 +405,13 @@ export async function importEmployees(req: Request, res: Response): Promise<void
   const failed: any[] = [];
   for (const data of employees) {
     try {
-      const dup = await Employee.findOne({ email: data.email.toLowerCase() }).exec();
+      const email = data.email.trim().toLowerCase();
+      const dup = await Employee.findOne({ email }).setOptions({ withDeleted: true }).exec();
       if (dup) {
-        failed.push({ email: data.email, reason: 'duplicate' });
+        failed.push({ email: data.email, reason: dup.isDeleted ? 'deleted_record_exists' : 'duplicate' });
         continue;
       }
-      const e = await Employee.create(data);
+      const e = await Employee.create({ ...data, email });
       created.push(e);
     } catch (err) {
       failed.push({ email: data.email, reason: (err as Error).message });
