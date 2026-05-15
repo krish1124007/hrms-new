@@ -485,6 +485,20 @@ export async function cancelLeaveRequest(req, res) {
     void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'cancelled' } });
     res.json({ success: true, data: doc });
 }
+export async function deleteLeaveRequest(req, res) {
+    const doc = await LeaveRequest.findById(String(req.params.id)).exec();
+    if (!doc)
+        throw new NotFoundError('Leave request not found');
+    // If approved, restore balance before deleting
+    if (doc.status === 'approved') {
+        const year = doc.startDate.getFullYear();
+        await LeaveBalance.findOneAndUpdate({ employeeId: doc.employeeId, leaveTypeId: doc.leaveTypeId, year }, { $inc: { used: -doc.days } }).exec();
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await doc.softDelete();
+    void audit({ action: 'delete', entity: 'LeaveRequest', entityId: String(doc._id) });
+    res.json({ success: true, message: 'Leave request deleted and balance restored' });
+}
 // ---------- Reports ----------
 export async function leaveReports(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -112,14 +112,11 @@ export async function listFolders(req, res) {
 export async function uploadDocument(req, res) {
     if (!req.user)
         throw new UnauthorizedError();
-    if (!isPrivileged(req.user)) {
-        throw new ForbiddenError('Only HR or admin users can upload documents');
-    }
+    const folder = normaliseFolder(req.body.folder);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const file = req.file;
     if (!file)
         throw new ValidationAppError('No file uploaded — send a multipart "file" field');
-    const folder = normaliseFolder(req.body.folder);
     const tags = typeof req.body.tags === 'string' ? req.body.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
     const category = req.body.category?.trim() || undefined;
     const accessLevel = req.body.accessLevel ?? 'private';

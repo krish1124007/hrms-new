@@ -29,5 +29,6 @@ router.get('/requests/:id', requirePermission('leaves.view'), asyncHandler(ctrl.
 router.patch('/requests/:id/approve', requirePermission('leaves.approve'), asyncHandler(ctrl.approveLeaveRequest));
 router.patch('/requests/:id/reject', requirePermission('leaves.approve'), validate(ctrl.rejectLeaveSchema), asyncHandler(ctrl.rejectLeaveRequest));
 router.patch('/requests/:id/cancel', requirePermission('leaves.update'), asyncHandler(ctrl.cancelLeaveRequest));
+router.delete('/requests/:id', requirePermission('leaves.delete'), asyncHandler(ctrl.deleteLeaveRequest));
 export default router;
 //# sourceMappingURL=leaves.routes.js.map
