@@ -15,7 +15,7 @@ const readBySchema = new Schema({
     readAt: { type: Date, default: Date.now },
 }, { _id: false });
 const messageSchema = new Schema({
-    channelId: { type: Schema.Types.ObjectId, ref: 'Channel', required: true, index: true },
+    channelId: { type: Schema.Types.ObjectId, ref: 'Channel', required: true },
     senderId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     type: {
         type: String,
@@ -34,6 +34,5 @@ messageSchema.plugin(timestampPlugin);
 messageSchema.plugin(softDeletePlugin);
 messageSchema.plugin(paginatePlugin);
 messageSchema.index({ channelId: 1, createdAt: -1 });
-messageSchema.index({ channelId: 1 });
 export const Message = model('Message', messageSchema);
 //# sourceMappingURL=message.model.js.map

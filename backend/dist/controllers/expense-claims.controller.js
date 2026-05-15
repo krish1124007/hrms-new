@@ -107,7 +107,7 @@ export async function listClaims(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = {};
+    const filter = { amount: { $gt: 0 } };
     if (q.status)
         filter.status = q.status;
     if (q.employeeId)
@@ -158,7 +158,7 @@ export async function teamClaims(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = { employeeId: { $in: teamIds } };
+    const filter = { employeeId: { $in: teamIds }, amount: { $gt: 0 } };
     if (q.status)
         filter.status = q.status;
     const result = await ExpenseClaim.paginate(filter, {
@@ -194,6 +194,7 @@ export async function createClaim(req, res) {
     if (cat.requiresReceipt && body.receiptUrls.length === 0) {
         throw new ValidationAppError('Receipt is required for this category');
     }
+    const status = body.amount === 0 ? 'approved' : body.status;
     const doc = await ExpenseClaim.create({
         employeeId,
         category: new Types.ObjectId(body.category),
@@ -203,7 +204,8 @@ export async function createClaim(req, res) {
         description: body.description,
         receiptUrls: body.receiptUrls.map((r) => ({ ...r, uploadedAt: new Date() })),
         paymentMethod: body.paymentMethod,
-        status: body.status,
+        status,
+        ...(body.amount === 0 ? { approvedAt: new Date() } : {}),
     });
     void audit({ action: 'create', entity: 'ExpenseClaim', entityId: String(doc._id) });
     res.status(201).json({ success: true, data: doc });

@@ -359,8 +359,7 @@ async function computeForEmployee(employee, cycle) {
     const deductions = [];
     if (pt > 0)
         deductions.push({ name: 'P.Tax', amount: pt });
-    if (pfEmp > 0)
-        deductions.push({ name: 'PF Employee', amount: pfEmp });
+    deductions.push({ name: 'PF Employee', amount: pfEmp });
     deductions.push({ name: 'ESI Employee', amount: esicEmp });
     // Manual deductions — defaulted to 0; HR can edit on the record.
     const advance = 0;
@@ -378,8 +377,7 @@ async function computeForEmployee(employee, cycle) {
     const pfErp = pfEmployer(basic);
     const esicErp = esicEmployer(grossEarnings);
     const employerContributions = [];
-    if (pfErp > 0)
-        employerContributions.push({ name: 'PF Employer', amount: pfErp });
+    employerContributions.push({ name: 'PF Employer', amount: pfErp });
     employerContributions.push({ name: 'ESI Employer', amount: esicErp });
     const totalDeductions = round2(deductions.reduce((s, l) => s + l.amount, 0));
     const netSalary = round2(grossEarnings - totalDeductions);

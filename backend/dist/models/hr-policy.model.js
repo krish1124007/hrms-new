@@ -2,7 +2,7 @@ import { Schema, model } from 'mongoose';
 import { timestampPlugin, softDeletePlugin, paginatePlugin, } from '../lib/mongoose-plugins.js';
 const versionSchema = new Schema({
     versionNumber: { type: Number, required: true },
-    content: { type: String, required: true },
+    content: { type: String },
     changeNotes: { type: String, trim: true },
     publishedAt: { type: Date, default: null },
     publishedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
@@ -54,7 +54,7 @@ const policySchema = new Schema({
         index: true,
     },
     summary: { type: String, trim: true },
-    content: { type: String, required: true, default: '' },
+    content: { type: String, default: '' },
     currentVersion: { type: Number, default: 1 },
     versions: { type: [versionSchema], default: [] },
     effectiveDate: { type: Date, default: null },

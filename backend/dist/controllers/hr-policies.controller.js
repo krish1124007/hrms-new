@@ -40,7 +40,7 @@ export const createSchema = z.object({
     title: z.string().min(1).max(200),
     category: z.enum(CATEGORIES).default('general'),
     summary: z.string().max(1000).optional(),
-    content: z.string().min(1).max(200000),
+    content: z.string().max(200000).optional(),
     effectiveDate: z.coerce.date().optional(),
     reviewDueDate: z.coerce.date().optional(),
     mandatory: z.boolean().default(false),
@@ -276,9 +276,7 @@ export async function publish(req, res) {
     if (policy.status === 'published') {
         throw new ValidationAppError('Policy is already published');
     }
-    if (!policy.content?.trim()) {
-        throw new ValidationAppError('Cannot publish a policy with empty content');
-    }
+    // Content is now optional (policies can be attachment-only)
     const v = policy.versions.find((x) => x.versionNumber === policy.currentVersion);
     if (v) {
         v.publishedAt = new Date();

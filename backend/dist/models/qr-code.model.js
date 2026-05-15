@@ -1,7 +1,7 @@
 import { Schema, model } from 'mongoose';
 import { timestampPlugin, paginatePlugin, } from '../lib/mongoose-plugins.js';
 const qrCodeSchema = new Schema({
-    code: { type: String, required: true, index: true },
+    code: { type: String, required: true },
     type: { type: String, enum: ['static', 'dynamic'], default: 'static' },
     locationId: { type: Schema.Types.ObjectId, ref: 'AttendanceSite' },
     expiresAt: { type: Date },
