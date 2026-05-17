@@ -9,6 +9,7 @@ const expenseClaimSchema = new Schema({
     employeeId: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
     category: { type: Schema.Types.ObjectId, ref: 'ExpenseCategory', required: true },
     amount: { type: Number, required: true, min: 0 },
+    acceptedAmount: { type: Number, min: 0 },
     currency: { type: String, default: 'INR' },
     date: { type: Date, required: true },
     description: { type: String },

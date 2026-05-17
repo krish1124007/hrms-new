@@ -241,7 +241,11 @@ export async function deleteClaim(req, res) {
     void audit({ action: 'delete', entity: 'ExpenseClaim', entityId: String(doc._id) });
     res.json({ success: true, message: 'Expense claim deleted' });
 }
+export const approveClaimSchema = z.object({
+    acceptedAmount: z.coerce.number().min(0).optional(),
+});
 export async function approveClaim(req, res) {
+    const body = req.body;
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
@@ -249,6 +253,9 @@ export async function approveClaim(req, res) {
         throw new ValidationAppError(`Cannot approve a ${doc.status} claim`);
     }
     doc.status = 'approved';
+    if (body.acceptedAmount !== undefined) {
+        doc.acceptedAmount = body.acceptedAmount;
+    }
     const userId = getUserId();
     if (userId)
         doc.approvedBy = new Types.ObjectId(userId);
