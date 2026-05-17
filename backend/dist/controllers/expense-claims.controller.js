@@ -80,7 +80,7 @@ export const createClaimSchema = z.object({
     receiptUrls: z
         .array(z.object({
         name: z.string(),
-        fileUrl: z.string().url(),
+        fileUrl: z.string(),
     }))
         .default([]),
     paymentMethod: z.enum(['cash', 'bank', 'card', 'upi', 'cheque', 'other']).optional(),
