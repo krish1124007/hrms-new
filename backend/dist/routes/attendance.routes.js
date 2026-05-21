@@ -18,6 +18,7 @@ router.post('/breaks/end', requirePermission('attendance.checkin'), asyncHandler
 // ---------- RECORDS ----------
 router.get('/records', requirePermission('attendance.view'), validate(ctrl.listRecordsSchema, 'query'), asyncHandler(ctrl.listRecords));
 router.get('/my', asyncHandler(ctrl.myAttendance));
+router.get('/my-shift', asyncHandler(ctrl.myShift));
 router.get('/today', asyncHandler(ctrl.todayAttendance));
 router.get('/monthly', validate(ctrl.monthlyQuerySchema, 'query'), asyncHandler(ctrl.monthlyAttendance));
 router.post('/regularize', validate(ctrl.regularizeSchema), asyncHandler(ctrl.requestRegularization));

@@ -459,6 +459,17 @@ export async function todayAttendance(_req, res) {
     const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
     res.json({ success: true, data: att });
 }
+export async function myShift(_req, res) {
+    const emp = await getCurrentEmployee();
+    if (!emp)
+        throw new ForbiddenError('No employee profile found for current user');
+    if (!emp.doc.shift) {
+        res.json({ success: true, data: null });
+        return;
+    }
+    const shift = await Shift.findById(emp.doc.shift).lean().exec();
+    res.json({ success: true, data: shift });
+}
 export const monthlyQuerySchema = z.object({
     year: z.coerce.number().int(),
     month: z.coerce.number().int().min(1).max(12),
