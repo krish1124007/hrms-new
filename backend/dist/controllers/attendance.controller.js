@@ -407,6 +407,7 @@ export const listRecordsSchema = z.object({
     limit: z.coerce.number().int().positive().max(200).default(50),
     employeeId: z.string().optional(),
     departmentId: z.string().optional(),
+    search: z.string().optional(),
     status: z
         .enum(['present', 'absent', 'half_day', 'late', 'on_leave', 'holiday', 'weekend'])
         .optional(),
@@ -428,9 +429,38 @@ export async function listRecords(req, res) {
             dateFilter.$lte = q.to;
         filter.date = dateFilter;
     }
+    let validEmpIds = null;
     if (q.departmentId) {
-        const empIds = await Employee.find({ department: q.departmentId }).distinct('_id');
-        filter.employeeId = { $in: empIds };
+        const deptEmps = await Employee.find({ department: q.departmentId }).distinct('_id');
+        validEmpIds = deptEmps.map(id => id.toString());
+    }
+    if (q.search) {
+        const searchRegex = new RegExp(q.search, 'i');
+        const matchedEmps = await Employee.find({
+            $or: [
+                { firstName: searchRegex },
+                { lastName: searchRegex },
+                { employeeId: searchRegex }
+            ]
+        }).distinct('_id');
+        const matchedStrs = matchedEmps.map(id => id.toString());
+        if (validEmpIds) {
+            validEmpIds = validEmpIds.filter(id => matchedStrs.includes(id));
+        }
+        else {
+            validEmpIds = matchedStrs;
+        }
+    }
+    if (validEmpIds !== null) {
+        if (filter.employeeId) {
+            const targetStr = filter.employeeId.toString();
+            if (!validEmpIds.includes(targetStr)) {
+                filter.employeeId = new Types.ObjectId('000000000000000000000000');
+            }
+        }
+        else {
+            filter.employeeId = { $in: validEmpIds.map(id => new Types.ObjectId(id)) };
+        }
     }
     const result = await Attendance.paginate(filter, {
         page: q.page,
