@@ -259,11 +259,21 @@ export async function checkIn(req, res) {
         const shift = await Shift.findById(emp.doc.shift).exec();
         if (shift?.startTime) {
             const [h, m] = String(shift.startTime).split(':').map(Number);
-            const shiftStart = new Date(today);
-            shiftStart.setHours(h || 0, m || 0, 0, 0);
-            const tolerance = (cfg?.settings.lateMarkAfterMinutes ?? 15) * 60_000;
-            if (now.getTime() > shiftStart.getTime() + tolerance) {
-                lateBy = Math.round((now.getTime() - shiftStart.getTime()) / 60_000);
+            const shiftMinutes = (h || 0) * 60 + (m || 0);
+            const tz = process.env.TIMEZONE || 'Asia/Kolkata';
+            const nowTimeStr = now.toLocaleTimeString('en-US', {
+                timeZone: tz,
+                hour12: false,
+                hour: 'numeric',
+                minute: 'numeric',
+            });
+            const [nowH, nowM] = nowTimeStr.split(':').map(Number);
+            // toLocaleTimeString can return 24 for midnight in some Node versions when hour12: false
+            const nowMinutes = (nowH === 24 ? 0 : nowH) * 60 + nowM;
+            const toleranceMinutes = cfg?.settings.lateMarkAfterMinutes ?? 15;
+            // If shift doesn't span midnight, simple check
+            if (nowMinutes > shiftMinutes + toleranceMinutes) {
+                lateBy = nowMinutes - shiftMinutes;
             }
         }
     }
