@@ -167,7 +167,7 @@ router.get('/privacy-policy', (_req, res) => {
   </p>
 
   <p>
-    Last Updated: August 2026
+    Last Updated: May 2026
   </p>
 
 </body>
