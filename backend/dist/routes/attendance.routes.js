@@ -8,7 +8,7 @@ import { asyncHandler } from '../lib/async-handler.js';
 const router = Router();
 router.use(authMiddleware);
 // ---------- CONFIG ----------
-router.get('/config', requirePermission('attendance.view'), asyncHandler(ctrl.getConfig));
+router.get('/config', asyncHandler(ctrl.getConfig));
 router.put('/config', requirePermission('attendance.config'), validate(ctrl.updateConfigSchema), asyncHandler(ctrl.updateConfig));
 // ---------- CHECK-IN / OUT / BREAKS ----------
 router.post('/check-in', requirePermission('attendance.checkin'), validate(ctrl.checkInSchema), asyncHandler(ctrl.checkIn));
