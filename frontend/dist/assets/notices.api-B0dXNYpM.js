@@ -1,0 +1,2 @@
+import{o as t}from"./index-MtgZHrpI.js";const o=[{value:"normal",label:"Normal"},{value:"important",label:"Important"},{value:"urgent",label:"Urgent"}],s={list:async a=>(await t.get("/notices",{params:a})).data,get:async a=>(await t.get(`/notices/${a}`)).data,create:async a=>(await t.post("/notices",a)).data,update:async(a,e)=>(await t.patch(`/notices/${a}`,e)).data,remove:async a=>(await t.delete(`/notices/${a}`)).data,acknowledge:async a=>(await t.post(`/notices/${a}/acknowledge`)).data};export{o as N,s as n};
+//# sourceMappingURL=notices.api-B0dXNYpM.js.map

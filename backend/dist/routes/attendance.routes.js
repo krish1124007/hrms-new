@@ -48,5 +48,8 @@ router.get('/allowed-ips', requirePermission('attendance.config'), validate(res.
 router.post('/allowed-ips', requirePermission('attendance.config'), validate(res.createAllowedIPSchema), asyncHandler(res.createAllowedIP));
 router.patch('/allowed-ips/:id', requirePermission('attendance.config'), validate(res.updateAllowedIPSchema), asyncHandler(res.updateAllowedIP));
 router.delete('/allowed-ips/:id', requirePermission('attendance.config'), asyncHandler(res.deleteAllowedIP));
+// ---------- LIVE TRACKING ----------
+router.post('/tracking/batch', validate(ctrl.trackingBatchSchema), asyncHandler(ctrl.ingestLocationBatch));
+router.get('/tracking/live', requirePermission('attendance.view'), asyncHandler(ctrl.getLiveTracking));
 export default router;
 //# sourceMappingURL=attendance.routes.js.map
