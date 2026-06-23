@@ -235,9 +235,12 @@ async function validateMethod(method, body, req) {
         case 'manual': {
             // Manual check-in still records where the employee clocked in from so
             // we always know the start point of the day. Location is mandatory.
+            // TEMPORARILY DISABLED: Location is not required for manual check-in
+            /*
             if (typeof body.location?.lat !== 'number' || typeof body.location?.lng !== 'number') {
-                throw new ValidationAppError('Location is required for manual check-in');
+              throw new ValidationAppError('Location is required for manual check-in');
             }
+            */
             break;
         }
     }
