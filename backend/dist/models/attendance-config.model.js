@@ -15,6 +15,10 @@ const attendanceConfigSchema = new Schema({
         requireNoteOnLateCheckIn: { type: Boolean, default: false },
         freeLateDaysPerMonth: { type: Number, default: 3, min: 0 },
     },
+    liveTracking: {
+        enabled: { type: Boolean, default: false },
+        intervalSeconds: { type: Number, default: 120, min: 30 },
+    },
 });
 attendanceConfigSchema.plugin(timestampPlugin);
 export const AttendanceConfig = model('AttendanceConfig', attendanceConfigSchema);

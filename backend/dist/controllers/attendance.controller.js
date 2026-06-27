@@ -33,6 +33,13 @@ export const updateConfigSchema = z.object({
     })
         .partial()
         .optional(),
+    liveTracking: z
+        .object({
+        enabled: z.boolean().default(false),
+        intervalSeconds: z.number().int().min(30).max(3600).default(120),
+    })
+        .partial()
+        .optional(),
 });
 export async function getConfig(_req, res) {
     let cfg = await AttendanceConfig.findOne({}).exec();
@@ -683,6 +690,14 @@ export async function ingestLocationBatch(req, res) {
     const emp = await getCurrentEmployee();
     if (!emp)
         throw new ValidationAppError('Employee profile not found');
+    // Admin master switch — when live tracking is turned off in the panel we
+    // accept the request but store nothing, so a stale mobile client can't
+    // keep writing location history.
+    const cfg = await AttendanceConfig.findOne({}).exec();
+    if (!cfg?.liveTracking?.enabled) {
+        res.status(200).json({ success: true, ignored: true, message: 'Live tracking disabled' });
+        return;
+    }
     const today = startOfDay(new Date());
     const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
     if (!att || !att.checkIn?.time || att.checkOut?.time) {
