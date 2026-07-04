@@ -85,7 +85,9 @@ export const checkInSchema = z.object({
     liveness: z.boolean().optional(),
     note: z.string().optional(),
 });
-export const checkOutSchema = checkInSchema;
+export const checkOutSchema = checkInSchema.extend({
+    method: z.enum(['face', 'qr', 'dynamic_qr', 'ip', 'site', 'geofence', 'device', 'manual']).default('manual'),
+});
 export const breakStartSchema = z.object({
     type: z.enum(['tea', 'lunch', 'personal', 'other']).default('other'),
 });
