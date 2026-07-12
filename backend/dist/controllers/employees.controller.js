@@ -291,8 +291,13 @@ export async function updateEmployeeStatus(req, res) {
     }).exec();
     if (!employee)
         throw new NotFoundError('Employee not found');
-    if (employee.userId && (body.status === 'terminated' || body.status === 'resigned')) {
-        await User.findByIdAndUpdate(employee.userId, { status: 'inactive' });
+    if (employee.userId) {
+        if (['inactive', 'terminated', 'resigned'].includes(body.status)) {
+            await User.findByIdAndUpdate(employee.userId, { status: 'inactive' });
+        }
+        else if (['active', 'onNotice'].includes(body.status)) {
+            await User.findByIdAndUpdate(employee.userId, { status: 'active' });
+        }
     }
     void audit({
         action: 'update',

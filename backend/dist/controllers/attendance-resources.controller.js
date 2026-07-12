@@ -146,7 +146,10 @@ export const createQRSchema = z.object({
 });
 export async function listQRCodes(req, res) {
     const q = req.query;
-    const result = await QRCode.paginate({}, { page: q.page, limit: q.limit, sort: '-createdAt' });
+    // Only static codes are managed here. Dynamic codes are ephemeral (rotated
+    // every ~45s) and shown live on the display screen, so they never belong in
+    // this list.
+    const result = await QRCode.paginate({ type: 'static' }, { page: q.page, limit: q.limit, sort: '-createdAt' });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 export async function createQRCode(req, res) {
@@ -163,6 +166,10 @@ export async function createQRCode(req, res) {
     res.status(201).json({ success: true, data: qr });
 }
 export async function rotateDynamicQR(_req, res) {
+    // Keep only the latest dynamic code valid: drop previous ones so a stale or
+    // photographed code can't be reused after the display refreshes. (The TTL
+    // index also sweeps expired codes, but this makes rotation immediate.)
+    await QRCode.deleteMany({ type: 'dynamic' }).exec();
     // Generate a new short-lived dynamic QR (45s window)
     const code = randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + 45_000);
