@@ -5,6 +5,8 @@ import { Attendance } from '../models/attendance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { Holiday } from '../models/holiday.model.js';
 import { logger } from '../config/logger.js';
+import { countWeekOffsInMonth } from '../lib/week-off.js';
+import { getWeekOffRule } from './week-off.service.js';
 /* ─────────────── Employee → User ─────────────── */
 /**
  * Called when an employee is created.
@@ -74,14 +76,10 @@ export async function getAttendanceSummaryForPayroll(employeeId, month, year) {
     const holidays = await Holiday.countDocuments({
         date: { $gte: startDate, $lte: endDate },
     });
-    // Total calendar days minus weekends (Sundays) and holidays
+    // Total calendar days minus the configured week-offs and holidays
     const totalCalendarDays = endDate.getDate();
-    let sundays = 0;
-    for (let d = 1; d <= totalCalendarDays; d++) {
-        if (new Date(year, month - 1, d).getDay() === 0)
-            sundays++;
-    }
-    const totalWorkingDays = totalCalendarDays - sundays - holidays;
+    const weekOffs = countWeekOffsInMonth(year, month, await getWeekOffRule());
+    const totalWorkingDays = totalCalendarDays - weekOffs - holidays;
     const records = await Attendance.find({
         employeeId,
         date: { $gte: startDate, $lte: endDate },
@@ -151,14 +149,9 @@ export async function getLeaveDeductionsForPayroll(employeeId, month, year) {
     // Calculate per-day salary for deduction
     const employee = await Employee.findById(employeeId).lean();
     const grossSalary = employee?.salary?.grossSalary ?? 0;
-    // Approximate working days in the month (calendar days minus Sundays)
+    // Approximate working days in the month (calendar days minus week-offs)
     const totalCalendarDays = endDate.getDate();
-    let sundays = 0;
-    for (let d = 1; d <= totalCalendarDays; d++) {
-        if (new Date(year, month - 1, d).getDay() === 0)
-            sundays++;
-    }
-    const workingDays = totalCalendarDays - sundays;
+    const workingDays = totalCalendarDays - countWeekOffsInMonth(year, month, await getWeekOffRule());
     const dailyRate = workingDays > 0 ? grossSalary / workingDays : 0;
     const deductionAmount = Math.round(dailyRate * unpaidLeaveDays * 100) / 100;
     return {

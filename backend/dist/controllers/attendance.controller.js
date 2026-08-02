@@ -8,7 +8,10 @@ import { AttendanceSite } from '../models/attendance-site.model.js';
 import { AllowedIP } from '../models/allowed-ip.model.js';
 import { Employee } from '../models/employee.model.js';
 import { Shift } from '../models/shift.model.js';
+import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
+import { isWeekOff, toKey } from '../lib/week-off.js';
+import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
@@ -40,6 +43,21 @@ export const updateConfigSchema = z.object({
     })
         .partial()
         .optional(),
+    // Which days the company doesn't work. `fullDaysOff` is every week;
+    // `partialDaysOff` picks occurrences, e.g. { day: 6, weeks: [2, 4] } for the
+    // 2nd and 4th Saturday.
+    weekOff: z
+        .object({
+        fullDaysOff: z.array(z.number().int().min(0).max(6)).default([]),
+        partialDaysOff: z
+            .array(z.object({
+            day: z.number().int().min(0).max(6),
+            weeks: z.array(z.number().int().min(1).max(5)).default([]),
+        }))
+            .default([]),
+    })
+        .partial()
+        .optional(),
 });
 export async function getConfig(_req, res) {
     let cfg = await AttendanceConfig.findOne({}).exec();
@@ -55,6 +73,8 @@ export async function updateConfig(req, res) {
         upsert: true,
         setDefaultsOnInsert: true,
     }).exec();
+    // The rule is cached per-process — drop it so the save takes effect now.
+    invalidateWeekOffRule();
     void audit({ action: 'update', entity: 'AttendanceConfig', entityId: String(cfg._id), after: body });
     res.json({ success: true, data: cfg });
 }
@@ -551,7 +571,38 @@ export async function monthlyAttendance(req, res) {
         .sort('date')
         .lean()
         .exec();
-    res.json({ success: true, data: records });
+    // Nobody writes an attendance row for a Sunday or a public holiday, so the
+    // calendars used to render those days as plain (i.e. working) days. Fill the
+    // gaps here rather than in each client, so web and mobile agree.
+    const holidays = await Holiday.find({ date: { $gte: from, $lte: to } })
+        .select('date')
+        .lean()
+        .exec();
+    const holidaySet = new Set(holidays.map((h) => toKey(new Date(h.date))));
+    const rule = await getWeekOffRule();
+    const stored = new Set(records.map((r) => toKey(new Date(r.date))));
+    const filled = [...records];
+    const lastDay = new Date(q.year, q.month, 0).getDate();
+    for (let d = 1; d <= lastDay; d++) {
+        const day = new Date(q.year, q.month - 1, d);
+        const key = toKey(day);
+        if (stored.has(key))
+            continue;
+        const isHoliday = holidaySet.has(key);
+        if (!isHoliday && !isWeekOff(day, rule))
+            continue;
+        filled.push({
+            // Synthetic, never persisted — derived from the calendar, not the DB.
+            _id: `virtual-${key}`,
+            employeeId,
+            date: day,
+            status: isHoliday ? 'holiday' : 'weekend',
+            isVirtual: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        });
+    }
+    filled.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    res.json({ success: true, data: filled });
 }
 export const regularizeSchema = z.object({
     date: z.coerce.date(),
@@ -607,17 +658,30 @@ export const reportQuerySchema = z.object({
 export async function dashboardStats(req, res) {
     const today = startOfDay(new Date());
     const filter = { date: today };
+    // Headcount must be counted the same way the main dashboard counts it —
+    // active employees only — or the two dashboards report different totals.
+    // When a department filter is applied it has to narrow the headcount too,
+    // otherwise the derived absent count is nonsense.
+    const employeeFilter = { status: 'active' };
     if (req.query.departmentId) {
-        const empIds = await Employee.find({ department: String(req.query.departmentId) }).distinct('_id');
+        employeeFilter.department = String(req.query.departmentId);
+        const empIds = await Employee.find(employeeFilter).distinct('_id');
         filter.employeeId = { $in: empIds };
     }
-    const totalEmployees = await Employee.countDocuments({ status: 'active' });
+    const totalEmployees = await Employee.countDocuments(employeeFilter);
     const todayRecords = await Attendance.find(filter).lean().exec();
     const presentCount = todayRecords.filter((r) => r.status === 'present' || r.status === 'late').length;
     const lateCount = todayRecords.filter((r) => r.status === 'late').length;
     const halfDayCount = todayRecords.filter((r) => r.status === 'half_day').length;
     const onLeaveCount = todayRecords.filter((r) => r.status === 'on_leave').length;
-    const absentCount = totalEmployees - presentCount - halfDayCount - onLeaveCount;
+    // On a week off nobody is expected in, so "everyone who didn't check in" is
+    // not absent.
+    const todayIsWeekOff = isWeekOff(today, await getWeekOffRule());
+    const holidayToday = await Holiday.countDocuments({ date: today });
+    const isNonWorkingDay = todayIsWeekOff || holidayToday > 0;
+    const absentCount = isNonWorkingDay
+        ? 0
+        : totalEmployees - presentCount - halfDayCount - onLeaveCount;
     // 30-day heatmap
     const heatFrom = new Date(today);
     heatFrom.setDate(heatFrom.getDate() - 29);
@@ -649,6 +713,7 @@ export async function dashboardStats(req, res) {
                 onLeave: onLeaveCount,
                 absent: Math.max(0, absentCount),
             },
+            isNonWorkingDay,
             heatmap: heatRecords,
             lateComers,
         },

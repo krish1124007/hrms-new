@@ -5,6 +5,8 @@ import { Attendance } from '../models/attendance.model.js';
 import { ConflictError, NotFoundError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { DEFAULT_WORK_DAYS, isWeekOff } from '../lib/week-off.js';
+import { getWeekOffRule } from '../services/week-off.service.js';
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 export const createShiftSchema = z.object({
     name: z.string().min(1),
@@ -13,7 +15,7 @@ export const createShiftSchema = z.object({
     graceMinutes: z.coerce.number().int().min(0).default(15),
     halfDayHours: z.coerce.number().min(0).default(4),
     fullDayHours: z.coerce.number().min(0).default(8),
-    workDays: z.array(z.coerce.number().int().min(0).max(6)).default([1, 2, 3, 4, 5]),
+    workDays: z.array(z.coerce.number().int().min(0).max(6)).default(DEFAULT_WORK_DAYS),
     isNightShift: z.boolean().default(false),
     breakDuration: z.coerce.number().int().min(0).default(60),
     isDefault: z.boolean().default(false),
@@ -134,6 +136,7 @@ async function buildRoster(employees, from, to) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         attMap.set(k, a.status);
     }
+    const weekOffRule = await getWeekOffRule();
     const out = [];
     for (const emp of employees) {
         // `shift` may be unpopulated id, populated doc, or undefined.
@@ -142,14 +145,17 @@ async function buildRoster(employees, from, to) {
             : null;
         // Fallback: pretend Mon–Fri 09:00–18:00 if no shift assigned, so the
         // mobile screen still has something rather than every day "off".
-        const workDays = shift?.workDays ?? [1, 2, 3, 4, 5];
+        const workDays = shift?.workDays ?? DEFAULT_WORK_DAYS;
         for (const date of eachDay(from, to)) {
             const dow = date.getUTCDay();
             const isWorkDay = workDays.includes(dow);
+            // `eachDay` walks UTC days; rebuild the same calendar day in local time
+            // so the week-off rule reads the date the company actually works.
+            const calendarDay = new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
             const dateKey = date.toISOString().slice(0, 10);
             const att = attMap.get(`${String(emp._id)}|${dateKey}`);
             let status = 'planned';
-            if (!isWorkDay || att === 'weekend' || att === 'holiday')
+            if (!isWorkDay || isWeekOff(calendarDay, weekOffRule) || att === 'weekend' || att === 'holiday')
                 status = 'off';
             else if (att === 'on_leave')
                 status = 'off';

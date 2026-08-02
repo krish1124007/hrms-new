@@ -4,6 +4,8 @@ import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from 
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
+import { getWeekOffRule } from '../services/week-off.service.js';
 // ---------- Helpers ----------
 async function getCurrentEmployee() {
     const userId = getUserId();
@@ -12,8 +14,9 @@ async function getCurrentEmployee() {
     return Employee.findOne({ userId: new Types.ObjectId(userId) }).exec();
 }
 /**
- * Compute working days between startDate..endDate inclusive,
- * excluding non-work days (shift.workDays) and holidays.
+ * Compute working days between startDate..endDate inclusive, excluding
+ * company week-offs (Sunday + 4th Saturday), non-work days (shift.workDays)
+ * and holidays.
  */
 async function computeWorkingDays(start, end, workDays, isHalfDay) {
     if (end < start)
@@ -26,13 +29,14 @@ async function computeWorkingDays(start, end, workDays, isHalfDay) {
         .select('date')
         .lean()
         .exec();
-    const holidaySet = new Set(holidays.map((h) => new Date(h.date).toISOString().slice(0, 10)));
+    const holidaySet = new Set(holidays.map((h) => toKey(new Date(h.date))));
+    const rule = await getWeekOffRule();
     let count = 0;
     const cur = new Date(startDay);
     while (cur <= endDay) {
         const dow = cur.getDay();
-        const key = cur.toISOString().slice(0, 10);
-        if (workDays.includes(dow) && !holidaySet.has(key))
+        const key = toKey(cur);
+        if (!isWeekOff(cur, rule) && workDays.includes(dow) && !holidaySet.has(key))
             count += 1;
         cur.setDate(cur.getDate() + 1);
     }
@@ -359,7 +363,7 @@ export async function applyLeave(req, res) {
         throw new NotFoundError('Employee not found');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const shift = emp.shift;
-    const workDays = shift?.workDays ?? [1, 2, 3, 4, 5];
+    const workDays = shift?.workDays ?? DEFAULT_WORK_DAYS;
     // Compute working days
     const days = await computeWorkingDays(body.startDate, body.endDate, workDays, body.isHalfDay);
     if (days <= 0) {

@@ -7,7 +7,8 @@ const shiftSchema = new Schema({
     graceMinutes: { type: Number, default: 15 },
     halfDayHours: { type: Number, default: 4 },
     fullDayHours: { type: Number, default: 8 },
-    workDays: { type: [Number], default: [1, 2, 3, 4, 5] },
+    // Mon–Sat. Sunday and the 4th Saturday come off via `lib/week-off.ts`.
+    workDays: { type: [Number], default: [1, 2, 3, 4, 5, 6] },
     isNightShift: { type: Boolean, default: false },
     breakDuration: { type: Number, default: 60 },
     isDefault: { type: Boolean, default: false },

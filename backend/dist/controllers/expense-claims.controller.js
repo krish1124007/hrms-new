@@ -70,7 +70,8 @@ export async function deleteCategory(req, res) {
     res.json({ success: true, message: 'Expense category deleted' });
 }
 // ---------- Expense Claim ----------
-export const createClaimSchema = z.object({
+export const createClaimSchema = z
+    .object({
     employeeId: z.string().optional(),
     category: z.string(),
     amount: z.coerce.number().min(0),
@@ -85,8 +86,22 @@ export const createClaimSchema = z.object({
         .default([]),
     paymentMethod: z.enum(['cash', 'bank', 'card', 'upi', 'cheque', 'other']).optional(),
     status: z.enum(['draft', 'pending']).default('pending'),
+})
+    // A claim without a bill can't be verified, so it must not reach an
+    // approver. Drafts are the employee's own scratch space and stay exempt.
+    .superRefine((v, ctx) => {
+    if (v.status !== 'draft' && v.receiptUrls.length === 0) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['receiptUrls'],
+            message: 'A receipt or bill photo is required to submit an expense claim',
+        });
+    }
 });
-export const updateClaimSchema = createClaimSchema.partial().omit({ employeeId: true });
+export const updateClaimSchema = createClaimSchema
+    .innerType()
+    .partial()
+    .omit({ employeeId: true });
 export const claimQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
@@ -228,6 +243,11 @@ export async function updateClaim(req, res) {
         throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
     }
     Object.assign(doc, req.body);
+    // Same rule as create: a claim can only leave draft with a bill attached,
+    // so editing can't be used to strip the receipt off a pending claim.
+    if (doc.status !== 'draft' && doc.receiptUrls.length === 0) {
+        throw new ValidationAppError('A receipt or bill photo is required to submit an expense claim');
+    }
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id) });
     res.json({ success: true, data: doc });
