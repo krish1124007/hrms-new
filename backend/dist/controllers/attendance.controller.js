@@ -451,7 +451,38 @@ export const listRecordsSchema = z.object({
         .optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
+    // `YYYY-MM` shorthand for from/to spanning one calendar month. Clients were
+    // already sending this; it used to be dropped silently, which made
+    // month-scoped screens count every record ever recorded.
+    month: z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'month must be YYYY-MM')
+        .optional(),
 });
+/**
+ * Build the `date` filter from either `month=YYYY-MM` or an explicit
+ * `from`/`to` pair. `month` wins when both are supplied — it's the more
+ * specific intent. Returns undefined when the query isn't date-scoped.
+ */
+function dateRangeFilter(q) {
+    if (q.month) {
+        const [year, month] = q.month.split('-').map(Number);
+        return {
+            $gte: new Date(year, month - 1, 1),
+            // Day 0 of the next month is the last day of this one.
+            $lte: new Date(year, month, 0, 23, 59, 59, 999),
+        };
+    }
+    if (q.from || q.to) {
+        const range = {};
+        if (q.from)
+            range.$gte = q.from;
+        if (q.to)
+            range.$lte = q.to;
+        return range;
+    }
+    return undefined;
+}
 export async function listRecords(req, res) {
     const q = req.query;
     const filter = {};
@@ -459,14 +490,9 @@ export async function listRecords(req, res) {
         filter.employeeId = new Types.ObjectId(q.employeeId);
     if (q.status)
         filter.status = q.status;
-    if (q.from || q.to) {
-        const dateFilter = {};
-        if (q.from)
-            dateFilter.$gte = q.from;
-        if (q.to)
-            dateFilter.$lte = q.to;
+    const dateFilter = dateRangeFilter(q);
+    if (dateFilter)
         filter.date = dateFilter;
-    }
     let validEmpIds = null;
     if (q.departmentId) {
         const deptEmps = await Employee.find({ department: q.departmentId }).distinct('_id');
@@ -514,14 +540,9 @@ export async function myAttendance(req, res) {
         throw new ForbiddenError('No employee profile found for current user');
     const q = req.query;
     const filter = { employeeId: emp.id };
-    if (q.from || q.to) {
-        const dateFilter = {};
-        if (q.from)
-            dateFilter.$gte = q.from;
-        if (q.to)
-            dateFilter.$lte = q.to;
+    const dateFilter = dateRangeFilter(q);
+    if (dateFilter)
         filter.date = dateFilter;
-    }
     const result = await Attendance.paginate(filter, {
         page: q.page ?? 1,
         limit: q.limit ?? 50,

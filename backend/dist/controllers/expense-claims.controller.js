@@ -88,13 +88,15 @@ export const createClaimSchema = z
     status: z.enum(['draft', 'pending']).default('pending'),
 })
     // A claim without a bill can't be verified, so it must not reach an
-    // approver. Drafts are the employee's own scratch space and stay exempt.
+    // approver. Two exemptions: drafts are the employee's own scratch space,
+    // and zero-amount entries claim no money at all — they're the "no expense
+    // today" marker the check-out flow requires, so there is no bill to attach.
     .superRefine((v, ctx) => {
-    if (v.status !== 'draft' && v.receiptUrls.length === 0) {
+    if (v.status !== 'draft' && v.amount > 0 && v.receiptUrls.length === 0) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['receiptUrls'],
-            message: 'A receipt or bill photo is required to submit an expense claim',
+            message: 'A receipt or bill photo is required to claim an amount',
         });
     }
 });
@@ -206,7 +208,9 @@ export async function createClaim(req, res) {
     if (cat.limit && body.amount > cat.limit) {
         throw new ValidationAppError(`Amount exceeds category limit of ${cat.limit}`);
     }
-    if (cat.requiresReceipt && body.receiptUrls.length === 0) {
+    // Category-level receipt rule applies only when money is actually claimed —
+    // a zero-amount entry has no bill to produce.
+    if (cat.requiresReceipt && body.amount > 0 && body.receiptUrls.length === 0) {
         throw new ValidationAppError('Receipt is required for this category');
     }
     const status = body.amount === 0 ? 'approved' : body.status;
@@ -243,10 +247,11 @@ export async function updateClaim(req, res) {
         throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
     }
     Object.assign(doc, req.body);
-    // Same rule as create: a claim can only leave draft with a bill attached,
-    // so editing can't be used to strip the receipt off a pending claim.
-    if (doc.status !== 'draft' && doc.receiptUrls.length === 0) {
-        throw new ValidationAppError('A receipt or bill photo is required to submit an expense claim');
+    // Same rule as create: a claim for an amount can only leave draft with a
+    // bill attached, so editing can't be used to strip the receipt off a
+    // pending claim — or to raise a zero-amount entry into a billed one.
+    if (doc.status !== 'draft' && doc.amount > 0 && doc.receiptUrls.length === 0) {
+        throw new ValidationAppError('A receipt or bill photo is required to claim an amount');
     }
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id) });
