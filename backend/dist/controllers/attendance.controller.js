@@ -342,6 +342,42 @@ export async function checkIn(req, res) {
     void audit({ action: 'create', entity: 'Attendance', entityId: String(att._id), after: { method: body.method } });
     res.status(201).json({ success: true, data: att });
 }
+const ms = (v) => v ? new Date(v).getTime() : null;
+/** Worked milliseconds between check-in and `until`, minus break time. */
+function workedMs(att, until) {
+    const inMs = ms(att.checkIn?.time);
+    if (inMs === null)
+        return 0;
+    const outMs = ms(att.checkOut?.time) ?? until.getTime();
+    const breakMs = (att.breaks ?? []).reduce((acc, b) => {
+        const start = ms(b.startTime);
+        if (start === null)
+            return acc;
+        // An open break is still running — count it up to `until`, otherwise a
+        // check-out taken mid-break silently credited the whole break as work.
+        const end = ms(b.endTime) ?? Math.min(outMs, until.getTime());
+        return acc + Math.max(0, end - start);
+    }, 0);
+    return Math.max(0, outMs - inMs - breakMs);
+}
+/** Worked hours, rounded to 2 decimals — the unit `totalWorkingHours` uses. */
+function workedHours(att, until = new Date()) {
+    return +(workedMs(att, until) / 3_600_000).toFixed(2);
+}
+/**
+ * Fill in `totalWorkingHours` for a day that is still running. Finished days
+ * keep their stored value; nothing is written back to the database.
+ */
+function withLiveHours(att, now = new Date()) {
+    if (!att?.checkIn?.time || att.checkOut?.time)
+        return att;
+    // Callers hand us either lean objects or hydrated documents (paginate()
+    // does not lean). Spreading a document would serialise its internals, so
+    // convert first.
+    const asDoc = att;
+    const plain = typeof asDoc.toObject === 'function' ? asDoc.toObject() : att;
+    return { ...plain, totalWorkingHours: workedHours(att, now) };
+}
 export async function checkOut(req, res) {
     const body = req.body;
     const emp = await getCurrentEmployee();
@@ -380,16 +416,10 @@ export async function checkOut(req, res) {
         deviceInfo: body.deviceInfo,
         metadata,
     };
-    // total working hours = (out - in) - sum(break durations)
-    const inMs = att.checkIn.time.getTime();
-    const outMs = now.getTime();
-    const breakMs = att.breaks.reduce((acc, b) => {
-        if (b.startTime && b.endTime)
-            return acc + (b.endTime.getTime() - b.startTime.getTime());
-        return acc;
-    }, 0);
-    const workMs = Math.max(0, outMs - inMs - breakMs);
-    att.totalWorkingHours = +(workMs / 3_600_000).toFixed(2);
+    // total working hours = (out - in) - break time, including a break that is
+    // still open at check-out (previously such a break was never deducted).
+    att.totalWorkingHours = workedHours(att, now);
+    const workMs = att.totalWorkingHours * 3_600_000;
     const cfg = await AttendanceConfig.findOne({}).exec();
     const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
     const halfDayHours = cfg?.settings.halfDayThresholdHours ?? 4;
@@ -549,15 +579,20 @@ export async function myAttendance(req, res) {
         limit: q.limit ?? 50,
         sort: '-date',
     });
-    res.json({ success: true, data: result.data, pagination: result.pagination });
+    // Today's row is still running until check-out — report hours so far so the
+    // month summary built from this list isn't missing today's work.
+    const data = result.data.map((r) => withLiveHours(r));
+    res.json({ success: true, data, pagination: result.pagination });
 }
 export async function todayAttendance(_req, res) {
     const emp = await getCurrentEmployee();
     if (!emp)
         throw new ForbiddenError('No employee profile found for current user');
     const today = startOfDay(new Date());
-    const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
-    res.json({ success: true, data: att });
+    const att = await Attendance.findOne({ employeeId: emp.id, date: today }).lean().exec();
+    // Hours-so-far for a day still in progress — this is the record every
+    // "Hours today" tile on web and mobile reads.
+    res.json({ success: true, data: att ? withLiveHours(att) : null });
 }
 export async function myShift(_req, res) {
     const emp = await getCurrentEmployee();
@@ -624,7 +659,10 @@ export async function monthlyAttendance(req, res) {
         });
     }
     filled.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    res.json({ success: true, data: filled });
+    // Same as /my — today's row is still open, so report hours so far. The
+    // mobile month summary is built from this endpoint.
+    const withHours = filled.map((r) => withLiveHours(r));
+    res.json({ success: true, data: withHours });
 }
 export const regularizeSchema = z.object({
     date: z.coerce.date(),
