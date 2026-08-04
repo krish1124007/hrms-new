@@ -10,6 +10,7 @@ import { Employee } from '../models/employee.model.js';
 import { Shift } from '../models/shift.model.js';
 import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
+import { LeaveRequest } from '../models/leave-request.model.js';
 import { isWeekOff, toKey } from '../lib/week-off.js';
 import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
@@ -694,7 +695,36 @@ export async function dashboardStats(req, res) {
     const presentCount = todayRecords.filter((r) => r.status === 'present' || r.status === 'late').length;
     const lateCount = todayRecords.filter((r) => r.status === 'late').length;
     const halfDayCount = todayRecords.filter((r) => r.status === 'half_day').length;
-    const onLeaveCount = todayRecords.filter((r) => r.status === 'on_leave').length;
+    // Approved leave lives in LeaveRequest — nothing stamps an `on_leave`
+    // attendance row, so counting only those rows left this tile permanently at
+    // 0 and pushed everyone on leave into the derived absent count (which is
+    // why this dashboard disagreed with the main one). Read both sources and
+    // de-dupe by employee, and count only employees in scope so an inactive
+    // employee's leave can't inflate the tile past the headcount.
+    const inScopeIds = new Set((await Employee.find(employeeFilter).distinct('_id')).map((id) => String(id)));
+    const endOfToday = new Date(today);
+    endOfToday.setHours(23, 59, 59, 999);
+    const approvedLeaves = await LeaveRequest.find({
+        status: 'approved',
+        startDate: { $lte: endOfToday },
+        endDate: { $gte: today },
+    })
+        .select('employeeId')
+        .lean()
+        .exec();
+    // Someone who actually checked in is counted where they stand, not on
+    // leave — otherwise the buckets overlap and absent comes out too low.
+    const attendedIds = new Set(todayRecords
+        .filter((r) => r.status === 'present' || r.status === 'late' || r.status === 'half_day')
+        .map((r) => String(r.employeeId)));
+    const onLeaveIds = new Set();
+    for (const r of todayRecords) {
+        if (r.status === 'on_leave')
+            onLeaveIds.add(String(r.employeeId));
+    }
+    for (const l of approvedLeaves)
+        onLeaveIds.add(String(l.employeeId));
+    const onLeaveCount = [...onLeaveIds].filter((id) => inScopeIds.has(id) && !attendedIds.has(id)).length;
     // On a week off nobody is expected in, so "everyone who didn't check in" is
     // not absent.
     const todayIsWeekOff = isWeekOff(today, await getWeekOffRule());

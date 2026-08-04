@@ -79,9 +79,12 @@ export async function getDashboardData(enabledModules, userId) {
         tasks.push((async () => {
             try {
                 const [presentToday, absentToday, lateToday] = await Promise.all([
+                    // Late arrivals are still in the building — the attendance
+                    // dashboard counts them as present, so this tile must too or the
+                    // two "Present today" numbers disagree every time someone is late.
                     Attendance.countDocuments({
                         date: { $gte: todayStart, $lte: todayEnd },
-                        status: 'present',
+                        status: { $in: ['present', 'late'] },
                     }),
                     Attendance.countDocuments({
                         date: { $gte: todayStart, $lte: todayEnd },
