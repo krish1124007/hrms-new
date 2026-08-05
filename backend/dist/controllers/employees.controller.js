@@ -61,6 +61,8 @@ export const createEmployeeSchema = z.object({
     department: z.string().optional(),
     designation: z.string().optional(),
     shift: z.string().optional(),
+    /** Force this employee to share location when clocking in / out. */
+    requireLocation: z.boolean().optional(),
     reportingManager: z.string().optional(),
     joiningDate: z.coerce.date(),
     confirmationDate: z.coerce.date().optional(),

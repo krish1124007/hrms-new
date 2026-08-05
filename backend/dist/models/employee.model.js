@@ -77,6 +77,9 @@ const employeeSchema = new Schema({
     maritalStatus: { type: String, enum: ['single', 'married', 'divorced', 'widowed'] },
     bloodGroup: String,
     profileImage: String,
+    // When on, this employee must share their location to clock in or out.
+    // Per-employee on purpose: field staff need it, office staff usually don't.
+    requireLocation: { type: Boolean, default: false },
     address: {
         current: addressSchema,
         permanent: addressSchema,

@@ -151,6 +151,24 @@ async function getCurrentEmployee() {
     const emp = await Employee.findOne({ userId }).exec();
     return emp ? { id: emp._id, doc: emp } : null;
 }
+/**
+ * Enforce the per-employee "location is compulsory" flag.
+ *
+ * Set by an admin on the employee record. When on, a punch without usable
+ * coordinates is rejected outright rather than stored without a location —
+ * an attendance row you cannot place is worth very little after the fact.
+ * Employees without the flag are unaffected.
+ */
+function assertLocationIfRequired(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+employee, location, action) {
+    if (!employee?.requireLocation)
+        return;
+    const hasFix = typeof location?.lat === 'number' && typeof location?.lng === 'number';
+    if (!hasFix) {
+        throw new AppError(`Location sharing is required for you to ${action}. Enable location access and try again.`, 400, 'LOCATION_REQUIRED');
+    }
+}
 async function validateMethod(method, body, req) {
     const cfg = await AttendanceConfig.findOne({}).exec();
     if (cfg && !cfg.enabledMethods.includes(method)) {
@@ -285,6 +303,7 @@ export async function checkIn(req, res) {
     if (cfg?.settings.requirePhotoOnCheckIn && !body.photo) {
         throw new ValidationAppError('Photo is required for check-in');
     }
+    assertLocationIfRequired(emp.doc, body.location, 'check in');
     const { metadata } = await validateMethod(body.method, body, req);
     const today = startOfDay(new Date());
     let att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
@@ -404,6 +423,7 @@ export async function checkOut(req, res) {
         throw new ValidationAppError('You must check in first');
     if (att.checkOut?.time)
         throw new ValidationAppError('Already checked out today');
+    assertLocationIfRequired(emp.doc, body.location, 'check out');
     // Company policy: every check-out must be preceded by an expense claim
     // for the day. The frontend opens an expense form when this 400 fires.
     // The error code `EXPENSE_REQUIRED_FOR_CHECKOUT` is the contract — the
@@ -529,6 +549,48 @@ function dateRangeFilter(q) {
     }
     return undefined;
 }
+async function loadKnownAreas() {
+    const [sites, zones] = await Promise.all([
+        AttendanceSite.find({ isActive: true }).select('name location radius').lean().exec(),
+        GeofenceZone.find({}).select('name center radius').lean().exec(),
+    ]);
+    const areas = [];
+    for (const s of sites) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const loc = s.location;
+        if (typeof loc?.lat === 'number' && typeof loc?.lng === 'number') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            areas.push({ name: s.name, lat: loc.lat, lng: loc.lng, radius: s.radius ?? 100 });
+        }
+    }
+    for (const z of zones) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const c = z.center;
+        if (typeof c?.lat === 'number' && typeof c?.lng === 'number') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            areas.push({ name: z.name, lat: c.lat, lng: c.lng, radius: z.radius ?? 200 });
+        }
+    }
+    return areas;
+}
+/**
+ * Nearest configured area to a point: its name, the distance in metres, and
+ * whether the point is inside the area's radius. Null when there are no
+ * coordinates or no areas configured — the UI then falls back to lat/lng.
+ */
+function describeArea(loc, areas) {
+    if (typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number' || areas.length === 0) {
+        return null;
+    }
+    let best = null;
+    for (const a of areas) {
+        const distance = Math.round(haversineMeters({ lat: loc.lat, lng: loc.lng }, a));
+        if (!best || distance < best.distance) {
+            best = { name: a.name, distance, inside: distance <= a.radius };
+        }
+    }
+    return best;
+}
 export async function listRecords(req, res) {
     const q = req.query;
     const filter = {};
@@ -580,7 +642,19 @@ export async function listRecords(req, res) {
     });
     // Same live-hours treatment as /my — without it the admin records and
     // timesheet pages report 0.00h for everyone still checked in.
-    const data = result.data.map((r) => withLiveHours(r));
+    const areas = await loadKnownAreas();
+    const data = result.data.map((r) => {
+        const row = withLiveHours(r);
+        // withLiveHours already converted in-progress rows; convert the rest.
+        const plain = typeof row.toObject === 'function'
+            ? row.toObject()
+            : { ...row };
+        return {
+            ...plain,
+            checkInArea: describeArea(row.checkIn?.location, areas),
+            checkOutArea: describeArea(row.checkOut?.location, areas),
+        };
+    });
     res.json({ success: true, data, pagination: result.pagination });
 }
 export async function myAttendance(req, res) {
@@ -790,6 +864,11 @@ export async function correctRecord(req, res) {
             att.status = 'present';
         if (att.totalWorkingHours < halfDayHours)
             att.status = 'half_day';
+    }
+    else if (att.status === 'absent') {
+        // Clock-in set on its own (employee forgot to punch in): they were here,
+        // so the day is no longer absent. Hours stay derived until they check out.
+        att.status = 'present';
     }
     // Mark it as an HR correction so the row is not mistaken for a clean punch.
     att.isRegularized = true;

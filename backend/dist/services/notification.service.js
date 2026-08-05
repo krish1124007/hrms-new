@@ -60,7 +60,8 @@ export async function notifyExpenseRequest(approverId, employeeName, amount) {
         type: 'expense_request',
         title: 'Expense Claim Submitted',
         message: `${employeeName} submitted an expense claim of ${formatted}.`,
-        link: '/expenses/claims',
+        // Route is /expense-claims/requests — '/expenses/claims' 404s.
+        link: '/expense-claims/requests',
         metadata: { employeeName, amount },
     });
 }
