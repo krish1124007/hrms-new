@@ -342,6 +342,12 @@ export async function checkIn(req, res) {
     void audit({ action: 'create', entity: 'Attendance', entityId: String(att._id), after: { method: body.method } });
     res.status(201).json({ success: true, data: att });
 }
+/** Same calendar day in server-local time — matches how `date` is stored. */
+function isSameDay(a, b) {
+    return (a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate());
+}
 const ms = (v) => v ? new Date(v).getTime() : null;
 /** Worked milliseconds between check-in and `until`, minus break time. */
 function workedMs(att, until) {
@@ -370,6 +376,15 @@ function workedHours(att, until = new Date()) {
  */
 function withLiveHours(att, now = new Date()) {
     if (!att?.checkIn?.time || att.checkOut?.time)
+        return att;
+    // ONLY today's row is genuinely in progress. An older record with no
+    // check-out is a forgotten check-out, and treating it as "still running"
+    // grows without bound — a day missed in August reported 44.67 hours and
+    // climbing, which then inflated every month total built from these rows.
+    // Leave such records on their stored value so they stay visible as the
+    // anomaly they are and can be regularised.
+    const recordDay = att.date ? new Date(att.date) : new Date(att.checkIn.time);
+    if (!isSameDay(recordDay, now))
         return att;
     // Callers hand us either lean objects or hydrated documents (paginate()
     // does not lean). Spreading a document would serialise its internals, so
@@ -563,7 +578,10 @@ export async function listRecords(req, res) {
         sort: '-date',
         populate: { path: 'employeeId', select: 'firstName lastName employeeId department' },
     });
-    res.json({ success: true, data: result.data, pagination: result.pagination });
+    // Same live-hours treatment as /my — without it the admin records and
+    // timesheet pages report 0.00h for everyone still checked in.
+    const data = result.data.map((r) => withLiveHours(r));
+    res.json({ success: true, data, pagination: result.pagination });
 }
 export async function myAttendance(req, res) {
     const emp = await getCurrentEmployee();
@@ -708,6 +726,93 @@ export async function decideRegularization(req, res) {
     }
     await att.save();
     void audit({ action: 'update', entity: 'Attendance', entityId: String(att._id), after: { regularization: status } });
+    res.json({ success: true, data: att });
+}
+export const correctRecordSchema = z
+    .object({
+    checkIn: z.coerce.date().optional(),
+    checkOut: z.coerce.date().optional(),
+    reason: z.string().min(3, 'Give a reason — it is stored on the record'),
+})
+    .refine((v) => v.checkIn || v.checkOut, {
+    message: 'Provide checkIn, checkOut, or both',
+});
+/**
+ * PATCH /api/v1/attendance/records/:id — HR corrects a check-in/check-out.
+ *
+ * Employees forget to check out, which leaves the day stored as 0 hours (the
+ * timestamps are there but the total is only written at check-out). There was
+ * no way to fix such a record: `/check-out` only ever acts on the *caller's*
+ * own record, so an admin could not close someone else's day. This closes it
+ * on their behalf and recomputes hours, overtime and half-day status with the
+ * same rules a normal check-out uses.
+ */
+export async function correctRecord(req, res) {
+    const body = req.body;
+    const att = await Attendance.findById(String(req.params.id)).exec();
+    if (!att)
+        throw new NotFoundError('Attendance record not found');
+    const before = {
+        checkIn: att.checkIn?.time,
+        checkOut: att.checkOut?.time,
+        totalWorkingHours: att.totalWorkingHours,
+    };
+    if (body.checkIn) {
+        att.checkIn = { ...(att.checkIn ?? {}), time: body.checkIn, method: att.checkIn?.method ?? 'manual' };
+    }
+    if (body.checkOut) {
+        att.checkOut = { ...(att.checkOut ?? {}), time: body.checkOut, method: 'manual' };
+    }
+    const inTime = att.checkIn?.time;
+    const outTime = att.checkOut?.time;
+    if (!inTime)
+        throw new ValidationAppError('Record has no check-in to correct against');
+    if (outTime && outTime.getTime() <= inTime.getTime()) {
+        throw new ValidationAppError('Check-out must be after check-in');
+    }
+    // Close any break left open, so it is deducted rather than counted as work.
+    if (outTime) {
+        for (const b of att.breaks) {
+            if (b.startTime && !b.endTime) {
+                b.endTime = outTime < b.startTime ? b.startTime : outTime;
+                b.duration = Math.round((b.endTime.getTime() - b.startTime.getTime()) / 60_000);
+            }
+        }
+    }
+    if (outTime) {
+        att.totalWorkingHours = workedHours(att, outTime);
+        const cfg = await AttendanceConfig.findOne({}).exec();
+        const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
+        const halfDayHours = cfg?.settings.halfDayThresholdHours ?? 4;
+        const workMin = att.totalWorkingHours * 60;
+        att.overtimeHours = workMin > otThresholdMin ? +((workMin - otThresholdMin) / 60).toFixed(2) : 0;
+        if (att.status === 'absent' || att.status === 'half_day')
+            att.status = 'present';
+        if (att.totalWorkingHours < halfDayHours)
+            att.status = 'half_day';
+    }
+    // Mark it as an HR correction so the row is not mistaken for a clean punch.
+    att.isRegularized = true;
+    att.regularization = {
+        requestedAt: new Date(),
+        reason: body.reason,
+        approvedBy: getUserId() ? new Types.ObjectId(getUserId()) : undefined,
+        approvedAt: new Date(),
+        status: 'approved',
+    };
+    await att.save();
+    void audit({
+        action: 'update',
+        entity: 'Attendance',
+        entityId: String(att._id),
+        before,
+        after: {
+            checkIn: att.checkIn?.time,
+            checkOut: att.checkOut?.time,
+            totalWorkingHours: att.totalWorkingHours,
+            reason: body.reason,
+        },
+    });
     res.json({ success: true, data: att });
 }
 export const reportQuerySchema = z.object({

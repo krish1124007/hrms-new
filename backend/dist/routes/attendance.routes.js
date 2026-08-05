@@ -17,6 +17,9 @@ router.post('/breaks/start', requirePermission('attendance.checkin'), validate(c
 router.post('/breaks/end', requirePermission('attendance.checkin'), asyncHandler(ctrl.endBreak));
 // ---------- RECORDS ----------
 router.get('/records', requirePermission('attendance.view'), validate(ctrl.listRecordsSchema, 'query'), asyncHandler(ctrl.listRecords));
+// HR fix-up for a record an employee mis-punched (typically a missing
+// check-out). Deliberately separate from /check-out, which is self-service.
+router.patch('/records/:id', requirePermission('attendance.manage'), validate(ctrl.correctRecordSchema), asyncHandler(ctrl.correctRecord));
 router.get('/my', asyncHandler(ctrl.myAttendance));
 router.get('/my-shift', asyncHandler(ctrl.myShift));
 router.get('/today', asyncHandler(ctrl.todayAttendance));
