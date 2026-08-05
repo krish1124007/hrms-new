@@ -5,6 +5,12 @@ import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
 const router = Router();
+/**
+ * PUBLIC — what a QR scan opens. Registered before `authMiddleware` on
+ * purpose: a guard or visitor scanning a card is not logged in. The code is
+ * HMAC-signed, and the response is a fixed, minimal set of fields.
+ */
+router.get('/verify/:code', asyncHandler(ctrl.verifyIdCard));
 router.use(authMiddleware);
 /**
  * Self-service — every employee gets their own card and only their own. The
