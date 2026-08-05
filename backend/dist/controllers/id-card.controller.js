@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import QRCode from 'qrcode';
 import { IDCardTemplate as IdCardTemplate } from '../models/id-card-template.model.js';
 import { Employee } from '../models/employee.model.js';
-import { NotFoundError } from '../lib/errors.js';
+import { ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
+import { getUserId } from '../lib/async-context.js';
 // ---------- Validation Schemas ----------
 export const createTemplateSchema = z.object({
     name: z.string().min(1),
@@ -35,22 +37,82 @@ export async function updateTemplate(req, res) {
     void audit({ action: 'update', entity: 'IdCardTemplate', entityId: String(template._id) });
     res.json({ success: true, data: template });
 }
+/** Joining + 5 years — the rule the web and mobile cards already use. */
+function validUntilFor(joiningDate) {
+    if (!joiningDate)
+        return null;
+    const d = new Date(joiningDate);
+    d.setFullYear(d.getFullYear() + 5);
+    return d;
+}
+/**
+ * Build the card DTO for one employee.
+ *
+ * The QR encodes the employee code only — enough for your own gate scanners
+ * to identify the holder, and it carries nothing sensitive if photographed.
+ * It is deliberately NOT a proof of authenticity; that needs a signed token
+ * plus a public verify endpoint, which is a separate decision.
+ */
+async function buildCard(employee) {
+    const qr = await QRCode.toDataURL(`DDIPL:${employee.employeeId}`, {
+        margin: 1,
+        width: 256,
+        errorCorrectionLevel: 'M',
+    });
+    return {
+        employeeId: employee.employeeId,
+        firstName: employee.firstName,
+        lastName: employee.lastName,
+        designation: employee.designation?.name ?? null,
+        department: employee.department?.name ?? null,
+        profileImage: employee.profileImage ?? null,
+        bloodGroup: employee.bloodGroup ?? null,
+        joiningDate: employee.joiningDate ?? null,
+        validUntil: validUntilFor(employee.joiningDate),
+        qr,
+    };
+}
+/**
+ * GET /api/v1/id-cards/my — the caller's own card.
+ *
+ * There is no id parameter by design: the employee is resolved from the
+ * authenticated user, so this route cannot return anybody else's card no
+ * matter what the client sends.
+ */
+export async function myIdCard(_req, res) {
+    const userId = getUserId();
+    if (!userId)
+        throw new ForbiddenError('Not authenticated');
+    const employee = await Employee.findOne({ userId })
+        .populate('department', 'name')
+        .populate('designation', 'name')
+        .lean()
+        .exec();
+    if (!employee)
+        throw new NotFoundError('No employee profile found for your account');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    res.json({ success: true, data: await buildCard(employee) });
+}
+/**
+ * GET /api/v1/id-cards/generate/:employeeId — any employee's card, for HR.
+ *
+ * Previously this populated `departmentId`/`designationId`, which are not
+ * fields on the Employee schema — Mongoose 8 rejects unknown populate paths,
+ * so the route always failed. It also had no permission guard at all.
+ */
 export async function generateIdCard(req, res) {
     const employeeId = String(req.params.employeeId);
     const employee = await Employee.findById(employeeId)
-        .populate('departmentId', 'name')
-        .populate('designationId', 'title')
+        .populate('department', 'name')
+        .populate('designation', 'name')
         .lean()
         .exec();
     if (!employee)
         throw new NotFoundError('Employee not found');
-    // Return employee data formatted for ID card generation
     res.json({
         success: true,
-        data: {
-            employee,
-            generatedAt: new Date().toISOString(),
-        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: { employee: await buildCard(employee), generatedAt: new Date().toISOString() },
     });
 }
 //# sourceMappingURL=id-card.controller.js.map
