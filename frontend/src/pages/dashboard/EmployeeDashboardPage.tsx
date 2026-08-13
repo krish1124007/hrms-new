@@ -401,22 +401,22 @@ export default function EmployeeDashboardPage(): ReactElement {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
           label="Present"
-          value={monthQ.isLoading ? <InlineSkel /> : summary.present}
+          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.present}
           icon={UserCheck}
         />
         <StatCard
           label="Late"
-          value={monthQ.isLoading ? <InlineSkel /> : summary.late}
+          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.late}
           icon={Clock}
         />
         <StatCard
           label="Absent"
-          value={monthQ.isLoading ? <InlineSkel /> : summary.absent}
+          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.absent}
           icon={CalendarOff}
         />
         <StatCard
           label="Hours this month"
-          value={monthQ.isLoading ? <InlineSkel /> : fmtHours(summary.totalHours)}
+          value={monthQ.isLoading ? (<InlineSkel /> as any) : fmtHours(summary.totalHours)}
           icon={Activity}
         />
       </div>
@@ -441,7 +441,7 @@ export default function EmployeeDashboardPage(): ReactElement {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-foreground">
-                    {monthName(latestPayslip.month)} {latestPayslip.year}
+                    {monthName((latestPayslip as any).month)} {(latestPayslip as any).year}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Net pay
