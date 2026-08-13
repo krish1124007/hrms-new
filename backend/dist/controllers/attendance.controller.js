@@ -12,6 +12,7 @@ import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { isWeekOff, toKey } from '../lib/week-off.js';
+import { startOfBusinessDay } from '../lib/business-day.js';
 import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
@@ -32,6 +33,7 @@ export const updateConfigSchema = z.object({
         lateMarkAfterMinutes: z.number().int().min(0).default(15),
         halfDayThresholdHours: z.number().min(0).default(4),
         requirePhotoOnCheckIn: z.boolean().default(false),
+        requireLocation: z.boolean().default(false),
         requireNoteOnLateCheckIn: z.boolean().default(false),
         freeLateDaysPerMonth: z.number().int().min(0).default(3),
     })
@@ -113,10 +115,21 @@ export const breakStartSchema = z.object({
     type: z.enum(['tea', 'lunch', 'personal', 'other']).default('other'),
 });
 export const breakEndSchema = z.object({});
+/**
+ * Which attendance day an instant belongs to, resolved in the business
+ * timezone. See `lib/business-day.ts` — this used to be server-local
+ * (UTC), which filed pre-05:30 IST punches against the previous day.
+ */
 function startOfDay(d) {
-    const x = new Date(d);
-    x.setHours(0, 0, 0, 0);
-    return x;
+    return startOfBusinessDay(d);
+}
+/** A punch time in the business timezone, for messages employees read. */
+function formatPunchTime(t) {
+    return t.toLocaleTimeString('en-IN', {
+        timeZone: process.env.TIMEZONE || 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 function haversineMeters(a, b) {
     const R = 6371000;
@@ -161,8 +174,8 @@ async function getCurrentEmployee() {
  */
 function assertLocationIfRequired(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-employee, location, action) {
-    if (!employee?.requireLocation)
+employee, location, action, globalRequireLocation) {
+    if (!employee?.requireLocation && !globalRequireLocation)
         return;
     const hasFix = typeof location?.lat === 'number' && typeof location?.lng === 'number';
     if (!hasFix) {
@@ -303,12 +316,12 @@ export async function checkIn(req, res) {
     if (cfg?.settings.requirePhotoOnCheckIn && !body.photo) {
         throw new ValidationAppError('Photo is required for check-in');
     }
-    assertLocationIfRequired(emp.doc, body.location, 'check in');
+    assertLocationIfRequired(emp.doc, body.location, 'check in', cfg?.settings.requireLocation);
     const { metadata } = await validateMethod(body.method, body, req);
     const today = startOfDay(new Date());
     let att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
     if (att?.checkIn?.time) {
-        throw new ValidationAppError('Already checked in today');
+        throw new ValidationAppError(`Already checked in today at ${formatPunchTime(att.checkIn.time)}.`);
     }
     const now = new Date();
     // late by calculation against shift start
@@ -361,12 +374,6 @@ export async function checkIn(req, res) {
     void audit({ action: 'create', entity: 'Attendance', entityId: String(att._id), after: { method: body.method } });
     res.status(201).json({ success: true, data: att });
 }
-/** Same calendar day in server-local time — matches how `date` is stored. */
-function isSameDay(a, b) {
-    return (a.getFullYear() === b.getFullYear() &&
-        a.getMonth() === b.getMonth() &&
-        a.getDate() === b.getDate());
-}
 const ms = (v) => v ? new Date(v).getTime() : null;
 /** Worked milliseconds between check-in and `until`, minus break time. */
 function workedMs(att, until) {
@@ -402,8 +409,12 @@ function withLiveHours(att, now = new Date()) {
     // climbing, which then inflated every month total built from these rows.
     // Leave such records on their stored value so they stay visible as the
     // anomaly they are and can be regularised.
-    const recordDay = att.date ? new Date(att.date) : new Date(att.checkIn.time);
-    if (!isSameDay(recordDay, now))
+    // `date` is already a UTC-midnight day label; a bare timestamp has to be
+    // resolved to one first. Compare against today's label in business time.
+    const recordLabel = att.date
+        ? new Date(att.date)
+        : startOfBusinessDay(new Date(att.checkIn.time));
+    if (recordLabel.getTime() !== startOfBusinessDay(now).getTime())
         return att;
     // Callers hand us either lean objects or hydrated documents (paginate()
     // does not lean). Spreading a document would serialise its internals, so
@@ -421,9 +432,15 @@ export async function checkOut(req, res) {
     const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
     if (!att || !att.checkIn?.time)
         throw new ValidationAppError('You must check in first');
-    if (att.checkOut?.time)
-        throw new ValidationAppError('Already checked out today');
-    assertLocationIfRequired(emp.doc, body.location, 'check out');
+    if (att.checkOut?.time) {
+        // Name the recorded time. Employees hit this without knowingly checking
+        // out — most often because submitting the expense from the check-out flow
+        // completes the check-out for them — and a bare "Already checked out"
+        // gives them nothing to reconcile against.
+        throw new ValidationAppError(`Already checked out today at ${formatPunchTime(att.checkOut.time)}.`);
+    }
+    const cfg = await AttendanceConfig.findOne({}).exec();
+    assertLocationIfRequired(emp.doc, body.location, 'check out', cfg?.settings.requireLocation);
     // Company policy: every check-out must be preceded by an expense claim
     // for the day. The frontend opens an expense form when this 400 fires.
     // The error code `EXPENSE_REQUIRED_FOR_CHECKOUT` is the contract — the
@@ -455,7 +472,6 @@ export async function checkOut(req, res) {
     // still open at check-out (previously such a break was never deducted).
     att.totalWorkingHours = workedHours(att, now);
     const workMs = att.totalWorkingHours * 3_600_000;
-    const cfg = await AttendanceConfig.findOne({}).exec();
     const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
     const halfDayHours = cfg?.settings.halfDayThresholdHours ?? 4;
     const workMin = workMs / 60_000;
@@ -1080,8 +1096,10 @@ export async function ingestLocationBatch(req, res) {
     res.status(201).json({ success: true, data: { ingested: docs.length } });
 }
 export async function getLiveTracking(_req, res) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    // Same day label as every other attendance query — with the old
+    // server-local version this looked up *yesterday* between 00:00 and 05:30
+    // IST and showed a stale set of "currently working" people.
+    const start = startOfBusinessDay(new Date());
     const todayRecords = await Attendance.find({
         date: start,
         'checkIn.time': { $exists: true },

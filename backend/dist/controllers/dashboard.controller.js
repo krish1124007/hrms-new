@@ -12,6 +12,7 @@ import { Task } from '../models/task.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { getDashboardData } from '../services/dashboard.service.js';
 import { UnauthorizedError } from '../lib/errors.js';
+import { startOfBusinessDay, endOfBusinessDay } from '../lib/business-day.js';
 /**
  * Tenant-facing dashboard aggregates.
  *
@@ -24,15 +25,13 @@ import { UnauthorizedError } from '../lib/errors.js';
  * countDocuments + aggregate pipelines hitting indexed fields only
  * (tenantId + createdAt + status). No full-collection scans.
  */
+/** Business-timezone day bounds — shared with attendance so both agree on
+ *  what "today" means. See lib/business-day.ts. */
 function startOfDay(d = new Date()) {
-    const s = new Date(d);
-    s.setHours(0, 0, 0, 0);
-    return s;
+    return startOfBusinessDay(d);
 }
 function endOfDay(d = new Date()) {
-    const e = new Date(d);
-    e.setHours(23, 59, 59, 999);
-    return e;
+    return endOfBusinessDay(d);
 }
 /* ─────────── Overview (per-module cards) ─────────── */
 export async function overview(req, res) {

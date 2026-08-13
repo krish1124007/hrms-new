@@ -12,6 +12,7 @@ const attendanceConfigSchema = new Schema({
         lateMarkAfterMinutes: { type: Number, default: 15 },
         halfDayThresholdHours: { type: Number, default: 4 },
         requirePhotoOnCheckIn: { type: Boolean, default: false },
+        requireLocation: { type: Boolean, default: false },
         requireNoteOnLateCheckIn: { type: Boolean, default: false },
         freeLateDaysPerMonth: { type: Number, default: 3, min: 0 },
     },

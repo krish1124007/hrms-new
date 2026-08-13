@@ -14,16 +14,15 @@ import { Visit } from '../models/visit.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { logger } from '../config/logger.js';
+import { startOfBusinessDay, endOfBusinessDay } from '../lib/business-day.js';
 /* ─────────────── Helpers ─────────────── */
+/** Business-timezone day bounds — the attendance controller uses the same
+ *  helpers, so "present today" here means the same day it does there. */
 function startOfDay(d = new Date()) {
-    const s = new Date(d);
-    s.setHours(0, 0, 0, 0);
-    return s;
+    return startOfBusinessDay(d);
 }
 function endOfDay(d = new Date()) {
-    const e = new Date(d);
-    e.setHours(23, 59, 59, 999);
-    return e;
+    return endOfBusinessDay(d);
 }
 function startOfMonth(d = new Date()) {
     return new Date(d.getFullYear(), d.getMonth(), 1);

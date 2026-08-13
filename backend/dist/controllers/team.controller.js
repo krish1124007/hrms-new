@@ -3,6 +3,7 @@ import { Attendance } from '../models/attendance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { getUserId } from '../lib/async-context.js';
 import { ForbiddenError } from '../lib/errors.js';
+import { startOfBusinessDay } from '../lib/business-day.js';
 /**
  * GET /api/v1/team/overview
  *
@@ -16,11 +17,9 @@ import { ForbiddenError } from '../lib/errors.js';
  * Designed to fit in one round-trip from the mobile TeamDashboardScreen.
  * Heavy filters / pagination stay on the per-domain endpoints.
  */
-const startOfDay = (d) => {
-    const x = new Date(d);
-    x.setHours(0, 0, 0, 0);
-    return x;
-};
+/** Business-timezone day label — must match attendance, or the team view
+ *  reports a different "today" than the attendance screens. */
+const startOfDay = (d) => startOfBusinessDay(d);
 const startOfMonth = (d) => {
     const x = new Date(d.getFullYear(), d.getMonth(), 1);
     x.setHours(0, 0, 0, 0);

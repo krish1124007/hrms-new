@@ -4,7 +4,7 @@ const auditLogSchema = new Schema({
     userId: { type: Schema.Types.ObjectId, ref: 'User' },
     action: {
         type: String,
-        enum: ['create', 'update', 'delete', 'login', 'logout', 'export', 'import'],
+        enum: ['create', 'update', 'delete', 'login', 'logout', 'export', 'import', 'failure'],
         required: true,
     },
     entity: { type: String, required: true },

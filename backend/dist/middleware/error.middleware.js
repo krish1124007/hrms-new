@@ -5,6 +5,13 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../lib/errors.js';
 import { CircuitOpenError } from '../lib/circuit-breaker.js';
 import { Sentry } from '../lib/sentry.js';
+import { audit } from '../services/audit.service.js';
+/**
+ * Failures that say nothing about a real problem — an expired access token is
+ * routine (the client refreshes and retries), and logging every one would bury
+ * the failures worth reading.
+ */
+const NOISY_CODES = new Set(['INVALID_TOKEN', 'TOKEN_EXPIRED', 'UNAUTHORIZED']);
 export function errorMiddleware(err, req, res, 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 _next) {
@@ -106,6 +113,26 @@ _next) {
     }
     else {
         logger.warn({ code: payload.error.code, requestId: req.requestId, path: req.path }, payload.error.message);
+    }
+    // ── Failure trail ──
+    // Every refused request lands in the audit log so an admin can see exactly
+    // which errors employees are hitting, when, and on what — instead of a
+    // support message saying "it showed an error". Fire-and-forget: writing the
+    // trail must never turn a 400 into a 500.
+    if (statusCode !== 401 || !NOISY_CODES.has(payload.error.code)) {
+        void audit({
+            action: 'failure',
+            entity: 'Request',
+            entityId: req.requestId,
+            metadata: {
+                code: payload.error.code,
+                message: payload.error.message,
+                status: statusCode,
+                method: req.method,
+                path: req.originalUrl ?? req.path,
+                details: payload.error.details,
+            },
+        });
     }
     res.status(statusCode).json(payload);
 }
