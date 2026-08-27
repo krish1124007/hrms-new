@@ -16,6 +16,7 @@ router.delete('/types/:id', requirePermission('leaves.delete'), asyncHandler(ctr
 router.get('/balances/my', requirePermission('leaves.view'), asyncHandler(ctrl.myLeaveBalances));
 router.post('/balances/allocate', requirePermission('leaves.update'), validate(ctrl.allocateBalanceSchema), asyncHandler(ctrl.allocateLeaveBalances));
 router.patch('/balances/:id/adjust', requirePermission('leaves.update'), validate(ctrl.adjustBalanceSchema), asyncHandler(ctrl.adjustLeaveBalance));
+router.post('/balances/reset', requirePermission('leaves.update'), validate(ctrl.resetBalanceSchema), asyncHandler(ctrl.resetLeaveBalances));
 router.get('/balances', requirePermission('leaves.view'), validate(ctrl.balanceQuerySchema, 'query'), asyncHandler(ctrl.listLeaveBalances));
 // ---------- Reports ----------
 router.get('/reports', requirePermission('leaves.view'), asyncHandler(ctrl.leaveReports));
@@ -28,7 +29,7 @@ router.post('/requests', requirePermission('leaves.create'), validate(ctrl.creat
 router.get('/requests/:id', requirePermission('leaves.view'), asyncHandler(ctrl.getLeaveRequest));
 router.patch('/requests/:id/approve', requirePermission('leaves.approve'), asyncHandler(ctrl.approveLeaveRequest));
 router.patch('/requests/:id/reject', requirePermission('leaves.approve'), validate(ctrl.rejectLeaveSchema), asyncHandler(ctrl.rejectLeaveRequest));
-router.patch('/requests/:id/cancel', requirePermission('leaves.update'), asyncHandler(ctrl.cancelLeaveRequest));
+router.patch('/requests/:id/cancel', asyncHandler(ctrl.cancelLeaveRequest));
 router.delete('/requests/:id', requirePermission('leaves.delete'), asyncHandler(ctrl.deleteLeaveRequest));
 export default router;
 //# sourceMappingURL=leaves.routes.js.map

@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from '../models/index.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
@@ -222,6 +222,27 @@ export async function adjustLeaveBalance(req, res) {
         after: { delta: body.delta, reason: body.reason },
     });
     res.json({ success: true, data: doc });
+}
+export const resetBalanceSchema = z.object({
+    year: z.coerce.number().int(),
+    leaveTypeId: z.string().optional(),
+});
+export async function resetLeaveBalances(req, res) {
+    const body = req.body;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const filter = { year: body.year };
+    if (body.leaveTypeId) {
+        filter.leaveTypeId = new Types.ObjectId(body.leaveTypeId);
+    }
+    const result = await LeaveBalance.updateMany(filter, {
+        $set: { allocated: 0, used: 0, carried: 0, adjusted: 0 },
+    }).exec();
+    void audit({
+        action: 'update',
+        entity: 'LeaveBalance',
+        after: { resetYear: body.year, modifiedCount: result.modifiedCount },
+    });
+    res.json({ success: true, data: { modifiedCount: result.modifiedCount } });
 }
 // ---------- Leave Request ----------
 export const createLeaveRequestSchema = z.object({
@@ -476,6 +497,18 @@ export async function cancelLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
+    const me = await getCurrentEmployee();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const user = req.user;
+    const userPerms = new Set([
+        ...(user?.role?.permissions ?? []),
+        ...(user?.customPermissions ?? []),
+    ]);
+    const hasUpdatePermission = userPerms.has('*') || userPerms.has('leaves.update');
+    const isOwner = me && String(doc.employeeId) === String(me._id);
+    if (!hasUpdatePermission && !isOwner) {
+        throw new ForbiddenError('You do not have permission to cancel this leave request');
+    }
     if (doc.status === 'cancelled' || doc.status === 'rejected') {
         throw new ValidationAppError(`Cannot cancel a ${doc.status} request`);
     }
