@@ -5,38 +5,90 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy Policy - DD HRMS</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; color: #333; }
-        h1 { color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        h2 { color: #34495e; margin-top: 30px; }
-        .last-updated { color: #7f8c8d; font-style: italic; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 24px; color: #1e293b; background-color: #f8fafc; }
+        .container { background: #ffffff; padding: 32px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
+        h1 { color: #0f172a; border-bottom: 2px solid #cbd5e1; padding-bottom: 12px; margin-top: 0; font-size: 28px; }
+        h2 { color: #1e293b; margin-top: 28px; font-size: 20px; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px; }
+        p, li { font-size: 15px; color: #334155; }
+        ul { padding-left: 20px; }
+        li { margin-bottom: 8px; }
+        .last-updated { color: #64748b; font-style: italic; font-size: 14px; margin-bottom: 24px; }
+        .highlight-box { background-color: #f1f5f9; border-left: 4px solid #0284c7; padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; font-size: 14px; }
+        code { background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; color: #0f172a; }
     </style>
 </head>
 <body>
-    <h1>Privacy Policy</h1>
-    <p class="last-updated">Last updated: August 2026</p>
+    <div class="container">
+        <h1>Privacy Policy</h1>
+        <p class="last-updated">Last updated: September 2026</p>
 
-    <p>Welcome to DD HRMS. We respect your privacy and are committed to protecting your personal data. This Privacy Policy will inform you about how we look after your personal data when you visit our website or use our services.</p>
+        <p>This Privacy Policy applies to the <strong>DD HRMS</strong> application and website created by DDIPL for enterprise Human Resource Management System (HRMS) operations. This policy explains how we collect, use, store, and protect your information.</p>
 
-    <h2>1. The Data We Collect About You</h2>
-    <p>We may collect, use, store and transfer different kinds of personal data about you which we have grouped together as follows:</p>
-    <ul>
-        <li><strong>Identity Data:</strong> includes first name, last name, username or similar identifier, and employee ID.</li>
-        <li><strong>Contact Data:</strong> includes email address and telephone numbers.</li>
-        <li><strong>Location Data:</strong> strictly for attendance check-in/check-out purposes, we collect GPS coordinates when explicitly permitted by you or your employer.</li>
-    </ul>
+        <div class="highlight-box">
+            <strong>Key Summary:</strong> DD HRMS is an internal enterprise application. We collect first-party data (such as workplace GPS location, operational photos, and push notification tokens) strictly to perform workplace HRMS functions (attendance check-in, visit verification, field task management, and push alerts). <strong>We do NOT track users across apps or websites, do NOT collect advertising identifiers (IDFA), do NOT serve advertisements, and do NOT share data with ad networks or data brokers.</strong>
+        </div>
 
-    <h2>2. How We Use Your Personal Data</h2>
-    <p>We will only use your personal data when the law allows us to. Most commonly, we will use your personal data in the following circumstances:</p>
-    <ul>
-        <li>To manage your employment profile and attendance records.</li>
-        <li>To process payroll and expense claims.</li>
-        <li>Where we need to comply with a legal or regulatory obligation.</li>
-    </ul>
+        <h2>1. Information We Collect</h2>
+        <p>We collect information necessary to provide core HR management and workforce operation services to your employer:</p>
+        <ul>
+            <li><strong>Account & Identity Data:</strong> User account credentials (email address, password hash), employee ID, full name, job title, assigned role/permissions, and profile photo.</li>
+            <li><strong>GPS Location Data:</strong> Precise device location (latitude, longitude, accuracy, speed, altitude, heading) requested via standard location permissions. Location is recorded during:
+                <ul>
+                    <li>Employee attendance check-in and check-out</li>
+                    <li>Client visit check-in verification</li>
+                    <li>On-duty live field service representative tracking while active on duty</li>
+                </ul>
+            </li>
+            <li><strong>Push Notification & Device Information:</strong> Firebase Cloud Messaging (FCM) push tokens, device platform (iOS / Android), OS version, app version, and device model name used to route operational notifications.</li>
+            <li><strong>Photos & Camera Content:</strong> Photos captured via the device camera or uploaded from the photo library, including:
+                <ul>
+                    <li>Attendance check-in selfies (captured for workplace identity verification)</li>
+                    <li>Client visit proof photos and field task completion attachments</li>
+                    <li>Expense claim receipt attachments</li>
+                </ul>
+            </li>
+            <li><strong>Workplace Operations Data:</strong> Shift schedules, leave requests, expense claims, field task logs, and client visit reports.</li>
+        </ul>
 
-    <h2>3. Data Security</h2>
-    <p>We have put in place appropriate security measures to prevent your personal data from being accidentally lost, used or accessed in an unauthorised way, altered or disclosed.</p>
+        <h2>2. How We Use Your Information</h2>
+        <p>Your information is used strictly for workplace HR management and field operation purposes, including:</p>
+        <ul>
+            <li>Authenticating your account and managing user session security.</li>
+            <li>Verifying workplace attendance check-ins, check-outs, and geofencing compliance.</li>
+            <li>Verifying client visits and managing field sales/service duty logs.</li>
+            <li>Delivering operational push notifications (such as shift reminders, leave request approvals, attendance alerts, and field task assignments).</li>
+            <li>Processing payroll, expense reimbursements, and leave applications.</li>
+        </ul>
 
-    <h2>4. Contact Us</h2>
-    <p>If you have any questions about this Privacy Policy, please contact your HR administrator directly.</p>
+        <h2>3. Data Transmission & Storage</h2>
+        <ul>
+            <li><strong>Backend Server Transmission:</strong> Account credentials, location coordinates, photos, and operational logs are transmitted securely via encrypted HTTPS/TLS connections to our backend servers (<code>https://hrms.ddipl.org</code>).</li>
+            <li><strong>On-Device Local Storage:</strong> Authentication session tokens (JWT access and refresh tokens) and user preferences are stored securely in encrypted local device storage (MMKV).</li>
+            <li><strong>Push Notification Provider:</strong> FCM push tokens are processed through Google Firebase Cloud Messaging solely to deliver operational push notifications to your device.</li>
+        </ul>
+
+        <h2>4. No Tracking, No Advertising & ATT Compliance</h2>
+        <ul>
+            <li><strong>No Cross-App Tracking:</strong> We do NOT track users across other companies' apps or websites.</li>
+            <li><strong>No IDFA / Advertising IDs:</strong> We do NOT collect or access Apple's Identifier for Advertisers (IDFA), Google Advertising ID, or any device tracking identifiers.</li>
+            <li><strong>No Advertising SDKs:</strong> The Application contains no advertising frameworks, ad measurement tools, or ad networks.</li>
+            <li><strong>No Analytics Tracking SDKs:</strong> The Application contains no third-party user behavior analytics SDKs (e.g., no Google Analytics, Firebase Analytics, Mixpanel, Segment, or Sentry).</li>
+            <li><strong>No Third-Party Data Selling:</strong> We do NOT sell, rent, or trade your personal data to ad networks, data brokers, or commercial third parties.</li>
+            <li><strong>AppTrackingTransparency (ATT):</strong> Because the Application does NOT perform tracking under Apple's AppTrackingTransparency definition, ATT authorization is not required or implemented.</li>
+        </ul>
+
+        <h2>5. Data Security</h2>
+        <p>We implement industry-standard technical and organizational security measures to protect your personal data during transmission (HTTPS/TLS) and storage. Access to administrative data is restricted to authorized HR administrators and managers assigned by your employer.</p>
+
+        <h2>6. Data Retention & Account Deletion</h2>
+        <p>Your personal data is retained for the duration of your employment or as required by your employer's corporate governance, HR policies, and applicable legal regulations. Account deactivation or data deletion requests must be initiated through your company's HR administrator.</p>
+
+        <h2>7. Your Rights & Permission Controls</h2>
+        <p>You can manage permissions for Location, Camera, Photo Library, and Push Notifications at any time through your device's Settings. Please note that revoking permissions may disable related features (for example, revoking Location permission will prevent automated location verification during attendance check-in).</p>
+        <p>You have the right to inspect and request updates to your profile information by contacting your HR department.</p>
+
+        <h2>8. Contact Us</h2>
+        <p>If you have any questions or privacy concerns regarding this Privacy Policy or the Application, please contact your company's HR administrator directly.</p>
+    </div>
 </body>
 </html>
