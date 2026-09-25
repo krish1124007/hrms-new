@@ -109,6 +109,10 @@ const employeeSchema = new Schema({
     exitReason: String,
     probationEndDate: Date,
     noticePeriod: Number,
+    assetName: { type: String, required: false },
+    assetCode: { type: String, required: false },
+    category: { type: String, required: false },
+    condition: { type: String, required: false },
 });
 employeeSchema.plugin(timestampPlugin);
 employeeSchema.plugin(softDeletePlugin);

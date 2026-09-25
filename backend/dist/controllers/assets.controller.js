@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import * as XLSX from 'xlsx';
 import { Asset } from '../models/asset.model.js';
 import { Employee } from '../models/employee.model.js';
+import { User } from '../models/user.model.js';
 import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { getUserId } from '../lib/async-context.js';
 import { audit } from '../services/audit.service.js';
@@ -271,5 +273,220 @@ export async function unassignAsset(req, res) {
         metadata: { unassigned: true },
     });
     res.json({ success: true, data: asset });
+}
+/** POST /api/v1/assets/import — Bulk import assets from Excel / CSV or JSON */
+export async function importAssets(req, res) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let rawRows = [];
+    if (req.file) {
+        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        if (sheetName) {
+            const sheet = workbook.Sheets[sheetName];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        }
+    }
+    else if (Array.isArray(req.body?.rows)) {
+        rawRows = req.body.rows;
+    }
+    else if (Array.isArray(req.body?.items)) {
+        rawRows = req.body.items;
+    }
+    else if (Array.isArray(req.body)) {
+        rawRows = req.body;
+    }
+    if (!rawRows || rawRows.length === 0) {
+        throw new ValidationAppError('No data found in uploaded Excel or request body');
+    }
+    let createdCount = 0;
+    let updatedCount = 0;
+    const errors = [];
+    for (let i = 0; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        try {
+            const keys = Object.keys(row);
+            const findKey = (pattern) => keys.find((k) => pattern.test(k.trim()));
+            const empNameKey = findKey(/employee.*name|emp.*name|^name$/i);
+            const emailKey = findKey(/employee.*mail|mail.*id|email|employee.*email|^mail$/i);
+            const assetNameKey = findKey(/asset.*name|^asset$|assets|device.*name/i);
+            const assetCodeKey = findKey(/asset.*code|^code$/i);
+            const categoryKey = findKey(/category|type/i);
+            const statusKey = findKey(/status/i);
+            const conditionKey = findKey(/condition|conediton/i); // Handles "Conediton" header typo
+            const empName = String(row[empNameKey ?? ''] ?? '').trim();
+            const email = String(row[emailKey ?? ''] ?? '').trim().toLowerCase();
+            const assetName = String(row[assetNameKey ?? ''] ?? '').trim();
+            const rawAssetCode = String(row[assetCodeKey ?? ''] ?? '').trim();
+            const rawCategory = String(row[categoryKey ?? ''] ?? '').trim().toLowerCase();
+            const rawStatus = String(row[statusKey ?? ''] ?? '').trim().toLowerCase();
+            const rawCondition = String(row[conditionKey ?? ''] ?? '').trim().toLowerCase();
+            if (!assetName && !rawAssetCode) {
+                continue; // Skip empty rows
+            }
+            // Normalize category
+            let category = 'other';
+            if (rawCategory.includes('desktop'))
+                category = 'desktop';
+            else if (rawCategory.includes('laptop'))
+                category = 'laptop';
+            else if (rawCategory.includes('mobile') || rawCategory.includes('phone'))
+                category = 'mobile';
+            else if (rawCategory.includes('tablet') || rawCategory.includes('ipad'))
+                category = 'tablet';
+            else if (rawCategory.includes('monitor') || rawCategory.includes('screen'))
+                category = 'monitor';
+            else if (rawCategory.includes('peripheral') || rawCategory.includes('mouse') || rawCategory.includes('keyboard'))
+                category = 'peripheral';
+            else if (ASSET_CATEGORIES.includes(rawCategory))
+                category = rawCategory;
+            // Normalize status
+            let status = 'assigned';
+            if (rawStatus.includes('available'))
+                status = 'available';
+            else if (rawStatus.includes('maintenance'))
+                status = 'maintenance';
+            else if (rawStatus.includes('retired'))
+                status = 'retired';
+            else if (rawStatus.includes('lost'))
+                status = 'lost';
+            else if (rawStatus.includes('assigned'))
+                status = 'assigned';
+            // Normalize condition
+            let condition = 'good';
+            if (rawCondition.includes('new'))
+                condition = 'new';
+            else if (rawCondition.includes('good'))
+                condition = 'good';
+            else if (rawCondition.includes('fair'))
+                condition = 'fair';
+            else if (rawCondition.includes('poor'))
+                condition = 'poor';
+            else if (rawCondition.includes('damaged'))
+                condition = 'damaged';
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let employeeDoc = null;
+            if (email) {
+                employeeDoc = await Employee.findOne({ email: new RegExp(`^${email}$`, 'i') }).exec();
+                if (!employeeDoc) {
+                    const userDoc = await User.findOne({ email: new RegExp(`^${email}$`, 'i') }).exec();
+                    const nameParts = empName ? empName.split(' ') : ['Employee'];
+                    const firstName = nameParts[0] || 'Employee';
+                    const lastName = nameParts.slice(1).join(' ') || 'User';
+                    if (userDoc) {
+                        employeeDoc = await Employee.create({
+                            userId: userDoc._id,
+                            firstName: userDoc.firstName || firstName,
+                            lastName: userDoc.lastName || lastName,
+                            email: email,
+                            joiningDate: new Date(),
+                            employmentType: 'full-time',
+                            assetName,
+                            assetCode: rawAssetCode,
+                            category,
+                            condition,
+                        });
+                    }
+                    else if (empName || email) {
+                        employeeDoc = await Employee.create({
+                            firstName,
+                            lastName,
+                            email,
+                            joiningDate: new Date(),
+                            employmentType: 'full-time',
+                            assetName,
+                            assetCode: rawAssetCode,
+                            category,
+                            condition,
+                        });
+                    }
+                }
+                else {
+                    employeeDoc.assetName = assetName || employeeDoc.assetName;
+                    employeeDoc.assetCode = rawAssetCode || employeeDoc.assetCode;
+                    employeeDoc.category = category;
+                    employeeDoc.condition = condition;
+                    await employeeDoc.save();
+                }
+                if (employeeDoc?.userId || email) {
+                    const uQuery = employeeDoc?.userId ? { _id: employeeDoc.userId } : { email };
+                    await User.updateOne(uQuery, {
+                        assetName,
+                        assetCode: rawAssetCode,
+                        category,
+                        condition,
+                    }).exec();
+                }
+            }
+            const assetCode = rawAssetCode || (await nextAssetCode());
+            const finalName = assetName || `Asset ${assetCode}`;
+            let asset = await Asset.findOne({ assetCode: new RegExp(`^${assetCode}$`, 'i') }).exec();
+            if (asset) {
+                asset.name = finalName;
+                asset.category = category;
+                asset.status = status;
+                asset.condition = condition;
+                if (employeeDoc) {
+                    asset.assignedTo = employeeDoc._id;
+                    asset.assignedAt = asset.assignedAt || new Date();
+                    asset.status = 'assigned';
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    if (!asset.history.some((h) => String(h.employee) === String(employeeDoc?._id) && !h.returnedAt)) {
+                        asset.history.push({
+                            employee: employeeDoc._id,
+                            assignedAt: new Date(),
+                            notes: 'Updated via Excel Import',
+                        });
+                    }
+                }
+                await asset.save();
+                updatedCount++;
+            }
+            else {
+                asset = await Asset.create({
+                    name: finalName,
+                    assetCode,
+                    category,
+                    status: employeeDoc ? 'assigned' : status,
+                    condition,
+                    assignedTo: employeeDoc ? employeeDoc._id : null,
+                    assignedAt: employeeDoc ? new Date() : null,
+                    history: employeeDoc
+                        ? [
+                            {
+                                employee: employeeDoc._id,
+                                assignedAt: new Date(),
+                                notes: 'Created via Excel Import',
+                            },
+                        ]
+                        : [],
+                });
+                createdCount++;
+            }
+        }
+        catch (err) {
+            errors.push({
+                row: i + 2,
+                email: rawRows[i]?.['Employee Mail ID'] || rawRows[i]?.['Email'],
+                error: err.message,
+            });
+        }
+    }
+    void audit({
+        action: 'create',
+        entity: 'Asset',
+        metadata: { createdCount, updatedCount, totalRows: rawRows.length },
+    });
+    res.status(200).json({
+        success: true,
+        message: `Import completed: ${createdCount} created, ${updatedCount} updated`,
+        data: {
+            totalRows: rawRows.length,
+            createdCount,
+            updatedCount,
+            errorCount: errors.length,
+            errors,
+        },
+    });
 }
 //# sourceMappingURL=assets.controller.js.map

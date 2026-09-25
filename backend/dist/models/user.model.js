@@ -33,6 +33,10 @@ const userSchema = new Schema({
     // Incremented on logout-all / password-change / revoke-all-sessions.
     // JWTs carry `sv` in payload; auth middleware rejects tokens with stale sv.
     sessionVersion: { type: Number, default: 0 },
+    assetName: { type: String, required: false },
+    assetCode: { type: String, required: false },
+    category: { type: String, required: false },
+    condition: { type: String, required: false },
     // Consent snapshot from signup / consent-update flow. Stored on the user
     // doc so an auditor / legal review can see what the user agreed to, when,
     // from which IP/UA, and which document versions they accepted.
