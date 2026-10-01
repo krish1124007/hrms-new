@@ -7,6 +7,19 @@ import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
 import { getWeekOffRule } from '../services/week-off.service.js';
 // ---------- Helpers ----------
+export function isUnpaidLeaveType(leaveType) {
+    if (!leaveType)
+        return false;
+    if (leaveType.paidLeave === false)
+        return true;
+    const code = (leaveType.code ?? '').toUpperCase();
+    const name = (leaveType.name ?? '').toLowerCase();
+    if (['LWP', 'LOP', 'UL', 'UNPAID'].includes(code))
+        return true;
+    if (name.includes('unpaid') || name.includes('un-paid') || name.includes('loss of pay') || name.includes('lwp'))
+        return true;
+    return false;
+}
 async function getCurrentEmployee() {
     const userId = getUserId();
     if (!userId)
@@ -169,8 +182,14 @@ export async function myLeaveBalances(req, res) {
     // Merge: for each type, if no balance exists, create a virtual 0 balance
     const list = types.map((t) => {
         const existing = existingBalances.find((b) => String(typeof b.leaveTypeId === 'object' ? b.leaveTypeId._id : b.leaveTypeId) === String(t._id));
-        if (existing)
+        const unpaid = isUnpaidLeaveType(t);
+        if (existing) {
+            if (typeof existing.leaveTypeId === 'object' && existing.leaveTypeId) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                existing.leaveTypeId.paidLeave = !unpaid;
+            }
             return existing;
+        }
         return {
             _id: `virtual_${t._id}`,
             employeeId: employee._id,
@@ -179,7 +198,7 @@ export async function myLeaveBalances(req, res) {
                 name: t.name,
                 code: t.code,
                 color: t.color,
-                paidLeave: t.paidLeave,
+                paidLeave: !unpaid,
             },
             year,
             allocated: 0,
@@ -413,7 +432,11 @@ export async function applyLeave(req, res) {
         leaveTypeId: leaveTypeOid,
         year,
     }).exec();
-    const isUnpaid = !leaveType.paidLeave;
+    const isUnpaid = isUnpaidLeaveType(leaveType);
+    if (isUnpaid && leaveType.paidLeave !== false) {
+        leaveType.paidLeave = false;
+        await leaveType.save().catch(() => { });
+    }
     if (!balance) {
         if (!isUnpaid && (!leaveType.daysAllowed || leaveType.daysAllowed <= 0)) {
             throw new ValidationAppError(`${leaveType.name} has no annual allocation — please contact HR to set one`);
