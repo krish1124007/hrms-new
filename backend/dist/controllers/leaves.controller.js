@@ -149,7 +149,7 @@ export async function listLeaveBalances(req, res) {
         sort: '-year',
         populate: [
             { path: 'employeeId', select: 'firstName lastName employeeId' },
-            { path: 'leaveTypeId', select: 'name code color' },
+            { path: 'leaveTypeId', select: 'name code color paidLeave' },
         ],
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
@@ -163,7 +163,7 @@ export async function myLeaveBalances(req, res) {
     const types = await LeaveType.find({ isActive: true }).lean().exec();
     // Get existing balances for this employee and year
     const existingBalances = await LeaveBalance.find({ employeeId: employee._id, year })
-        .populate('leaveTypeId', 'name code color')
+        .populate('leaveTypeId', 'name code color paidLeave')
         .lean()
         .exec();
     // Merge: for each type, if no balance exists, create a virtual 0 balance
@@ -179,6 +179,7 @@ export async function myLeaveBalances(req, res) {
                 name: t.name,
                 code: t.code,
                 color: t.color,
+                paidLeave: t.paidLeave,
             },
             year,
             allocated: 0,
@@ -404,31 +405,34 @@ export async function applyLeave(req, res) {
     // so HR doesn't need to run the bulk-allocate endpoint before employees apply.
     const year = body.startDate.getFullYear();
     const leaveTypeOid = new Types.ObjectId(body.leaveTypeId);
+    const leaveType = await LeaveType.findById(leaveTypeOid).exec();
+    if (!leaveType)
+        throw new ValidationAppError('Invalid leave type');
     let balance = await LeaveBalance.findOne({
         employeeId,
         leaveTypeId: leaveTypeOid,
         year,
     }).exec();
+    const isUnpaid = !leaveType.paidLeave;
     if (!balance) {
-        const leaveType = await LeaveType.findById(leaveTypeOid).exec();
-        if (!leaveType)
-            throw new ValidationAppError('Invalid leave type');
-        if (!leaveType.daysAllowed || leaveType.daysAllowed <= 0) {
+        if (!isUnpaid && (!leaveType.daysAllowed || leaveType.daysAllowed <= 0)) {
             throw new ValidationAppError(`${leaveType.name} has no annual allocation — please contact HR to set one`);
         }
         balance = await LeaveBalance.create({
             employeeId,
             leaveTypeId: leaveTypeOid,
             year,
-            allocated: leaveType.daysAllowed,
+            allocated: leaveType.daysAllowed ?? 0,
         });
     }
-    const remaining = (balance.allocated ?? 0) +
-        (balance.carried ?? 0) +
-        (balance.adjusted ?? 0) -
-        (balance.used ?? 0);
-    if (days > remaining) {
-        throw new ValidationAppError(`Insufficient leave balance (available: ${remaining}, requested: ${days})`);
+    if (!isUnpaid) {
+        const remaining = (balance.allocated ?? 0) +
+            (balance.carried ?? 0) +
+            (balance.adjusted ?? 0) -
+            (balance.used ?? 0);
+        if (days > remaining) {
+            throw new ValidationAppError(`Insufficient leave balance (available: ${remaining}, requested: ${days})`);
+        }
     }
     const doc = await LeaveRequest.create({
         employeeId,
