@@ -106,7 +106,7 @@ export const addDocumentSchema = z.object({
     }),
 });
 export const importEmployeesSchema = z.object({
-    employees: z.array(createEmployeeSchema.omit({ createUserAccount: true, roleId: true })).min(1),
+    employees: z.array(z.record(z.any())).min(1),
 });
 export const listQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
@@ -393,19 +393,29 @@ export async function importEmployees(req, res) {
     const created = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const failed = [];
+    const rowSchema = createEmployeeSchema.omit({ createUserAccount: true, roleId: true });
     for (const data of employees) {
         try {
-            const email = data.email.trim().toLowerCase();
-            const dup = await Employee.findOne({ email }).setOptions({ withDeleted: true }).exec();
-            if (dup) {
-                failed.push({ email: data.email, reason: dup.isDeleted ? 'deleted_record_exists' : 'duplicate' });
+            const parsed = rowSchema.safeParse(data);
+            if (!parsed.success) {
+                failed.push({
+                    email: data.email || data.firstName || 'Unknown Row',
+                    reason: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')
+                });
                 continue;
             }
-            const e = await Employee.create({ ...data, email });
+            const validData = parsed.data;
+            const email = validData.email.trim().toLowerCase();
+            const dup = await Employee.findOne({ email }).setOptions({ withDeleted: true }).exec();
+            if (dup) {
+                failed.push({ email: validData.email, reason: dup.isDeleted ? 'deleted_record_exists' : 'duplicate' });
+                continue;
+            }
+            const e = await Employee.create({ ...validData, email });
             created.push(e);
         }
         catch (err) {
-            failed.push({ email: data.email, reason: err.message });
+            failed.push({ email: data.email || 'Unknown', reason: err.message });
         }
     }
     res.status(201).json({ success: true, data: { created: created.length, failed } });
