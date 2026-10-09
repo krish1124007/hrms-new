@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { Employee } from '../models/employee.model.js';
 import { User } from '../models/user.model.js';
 import { Role } from '../models/role.model.js';
+import { Department } from '../models/department.model.js';
+import { Designation } from '../models/designation.model.js';
 import { DocumentModel } from '../models/document.model.js';
 import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { sendMail } from '../services/email.service.js';
@@ -405,10 +407,34 @@ export async function importEmployees(req, res) {
                 continue;
             }
             const validData = parsed.data;
+            if (data.status && ['active', 'inactive', 'terminated', 'resigned', 'onnotice'].includes(String(data.status).toLowerCase())) {
+                const s = String(data.status).toLowerCase();
+                validData.status = s === 'onnotice' ? 'onNotice' : s;
+            }
+            if (data.departmentName) {
+                let dept = await Department.findOne({ name: { $regex: new RegExp(`^${data.departmentName}$`, 'i') } });
+                if (!dept) {
+                    const code = data.departmentName.replace(/[^A-Za-z]/g, '').substring(0, 3).toUpperCase() + Math.floor(100 + Math.random() * 900);
+                    dept = await Department.create({ name: data.departmentName, code });
+                }
+                validData.department = dept._id.toString();
+            }
+            if (data.designationName) {
+                let desig = await Designation.findOne({ name: { $regex: new RegExp(`^${data.designationName}$`, 'i') } });
+                if (!desig)
+                    desig = await Designation.create({ name: data.designationName });
+                validData.designation = desig._id.toString();
+            }
             const email = validData.email.trim().toLowerCase();
             const dup = await Employee.findOne({ email }).setOptions({ withDeleted: true }).exec();
             if (dup) {
-                failed.push({ email: validData.email, reason: dup.isDeleted ? 'deleted_record_exists' : 'duplicate' });
+                if (dup.isDeleted) {
+                    failed.push({ email: validData.email, reason: 'deleted_record_exists' });
+                    continue;
+                }
+                // Update employee
+                const updated = await Employee.findByIdAndUpdate(dup._id, { $set: validData }, { new: true });
+                created.push(updated);
                 continue;
             }
             const e = await Employee.create({ ...validData, email });
