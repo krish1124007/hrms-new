@@ -31,8 +31,11 @@ export function compressionTelemetry(
   res.end = (chunk?: any, ...rest: any[]) => {
     if (chunk) uncompressedBytes += Buffer.byteLength(chunk);
     // Content-Length after compression (set by compression middleware) vs pre-compression byte count
+    // Streamed responses (express.static, sendFile, pipes) have already flushed
+    // their headers by the time end() runs; setHeader() would throw
+    // ERR_HTTP_HEADERS_SENT from inside the stream callback and crash the process.
     const wire = parseInt(res.getHeader('content-length') as string, 10);
-    if (!Number.isNaN(wire) && wire > 0 && uncompressedBytes > 0) {
+    if (!res.headersSent && !Number.isNaN(wire) && wire > 0 && uncompressedBytes > 0) {
       res.setHeader('X-Compression-Ratio', `${uncompressedBytes}/${wire}`);
     }
     return origEnd(chunk, ...rest);
