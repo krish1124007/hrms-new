@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "seed": "tsx src/scripts/seed.ts",
+    "seed:admin": "tsx src/scripts/seed-admin.ts",
     "migrate:create": "migrate-mongo create",
     "migrate:up": "migrate-mongo up",
     "migrate:down": "migrate-mongo down",

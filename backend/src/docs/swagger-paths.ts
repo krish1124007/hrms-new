@@ -102,23 +102,6 @@ export const swaggerPaths: Record<string, unknown> = {
   /* ================================================================
    * AUTH
    * ================================================================ */
-  '/auth/register': {
-    post: {
-      tags: ['Auth'],
-      summary: 'Register a new tenant & admin user',
-      description: 'Creates a new tenant organisation and the first admin user. Returns JWT tokens.',
-      security: [],
-      requestBody: {
-        required: true,
-        content: { 'application/json': { schema: ref('RegisterRequest') } },
-      },
-      responses: {
-        ...res201('Registration successful', ref('AuthTokens')),
-        ...{ 400: errResponses[400] },
-        ...{ 500: errResponses[500] },
-      },
-    },
-  },
   '/auth/login': {
     post: {
       tags: ['Auth'],

@@ -1,16 +1,13 @@
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'node:crypto';
-import { Types } from 'mongoose';
 import { User } from '../models/user.model.js';
-import { Role, DEFAULT_ROLES } from '../models/role.model.js';
 import { Session } from '../models/session.model.js';
 
 import { env } from '../config/env.js';
 import { setContext, runWithContext } from '../lib/async-context.js';
 import {
   AppError,
-  ConflictError,
   NotFoundError,
   UnauthorizedError,
   ForbiddenError,
@@ -18,22 +15,9 @@ import {
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { revokeToken, revokeAllUserTokens } from '../lib/token-blacklist.js';
-import { withTransaction } from '../lib/transaction.js';
-import type { RegisterInput, LoginInput } from '../validators/auth.validators.js';
+import type { LoginInput } from '../validators/auth.validators.js';
 
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-async function ensureDefaultRoles(): Promise<Map<string, Types.ObjectId>> {
-  const bySlug = new Map<string, Types.ObjectId>();
-  for (const r of DEFAULT_ROLES) {
-    let role = await Role.findOne({ slug: r.slug }).exec();
-    if (!role) {
-      role = await Role.create({ ...r });
-    }
-    bySlug.set(role.slug, role._id as Types.ObjectId);
-  }
-  return bySlug;
-}
 
 async function persistSession(
   user: { _id: unknown },
@@ -50,103 +34,6 @@ async function persistSession(
     userAgent: req.header('user-agent'),
     expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
     isActive: true,
-  });
-}
-
-export async function register(req: Request, res: Response): Promise<void> {
-  const body = req.body as RegisterInput;
-
-  if (env.NODE_ENV === 'production') {
-    if (body.acceptTerms !== true || body.acceptPrivacy !== true) {
-      throw new AppError(
-        'You must accept the Terms of Service and Privacy Policy to continue',
-        400,
-        'CONSENT_REQUIRED',
-      );
-    }
-  }
-
-  const { validateNewPassword } = await import('../lib/password-security.js');
-  const pwCheck = await validateNewPassword(body.password);
-  if (!pwCheck.ok) {
-    throw new AppError(pwCheck.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
-  }
-
-  const { user, verificationToken, accessToken, refreshToken } = await withTransaction(
-    async (session) => {
-      const roles = await ensureDefaultRoles();
-      const adminRoleId = roles.get('admin') ?? roles.values().next().value;
-      if (!adminRoleId) throw new AppError('Failed to seed roles', 500);
-
-      const existingQuery = User.findOne({ email: body.email.toLowerCase() });
-      if (session) existingQuery.session(session);
-      const existing = await existingQuery.exec();
-      if (existing) throw new ConflictError('Email already registered');
-
-      const verToken = randomBytes(32).toString('hex');
-      const [createdUser] = await User.create(
-        [
-          {
-            email: body.email,
-            password: body.password,
-            firstName: body.firstName,
-            lastName: body.lastName,
-            role: adminRoleId,
-            status: 'active',
-            emailVerified: false,
-            emailVerificationToken: verToken,
-            consents: {
-              termsOfService: body.acceptTerms === true,
-              privacyPolicy: body.acceptPrivacy === true,
-              marketing: body.marketingOptIn ?? false,
-              analytics: false,
-              recordedAt: new Date(),
-              ip: req.ip,
-              userAgent: req.header('user-agent'),
-              documentVersions: {
-                ...(body.termsVersion ? { termsOfService: body.termsVersion } : {}),
-                ...(body.privacyVersion ? { privacyPolicy: body.privacyVersion } : {}),
-              },
-            },
-          },
-        ],
-        { session },
-      );
-
-      setContext({ userId: String(createdUser._id) });
-      const accessTok = createdUser.generateAccessToken();
-      const refreshTok = createdUser.generateRefreshToken();
-      await persistSession(createdUser, accessTok, refreshTok, req);
-
-      return {
-        user: createdUser,
-        verificationToken: verToken,
-        accessToken: accessTok,
-        refreshToken: refreshTok,
-      };
-    },
-  );
-
-  void sendMail({
-    to: user.email,
-    subject: 'Welcome — verify your email',
-    html: `<p>Hi ${user.firstName},</p><p>Please verify your email by clicking the link below:</p><p><a href="${env.CORS_ORIGIN}/verify-email/${verificationToken}">Verify email</a></p>`,
-  });
-
-  void audit({ action: 'create', entity: 'User', entityId: String(user._id) });
-
-  res.status(201).json({
-    success: true,
-    data: {
-      user: {
-        _id: user._id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-      },
-      accessToken,
-      refreshToken,
-    },
   });
 }
 

@@ -86,16 +86,6 @@ const options: swaggerJsdoc.Options = {
         },
 
         // ─── Auth ───
-        RegisterRequest: {
-          type: 'object',
-          required: ['name', 'email', 'password', 'companyName'],
-          properties: {
-            name: { type: 'string', example: 'John Doe' },
-            email: { type: 'string', format: 'email', example: 'john@acme.com' },
-            password: { type: 'string', minLength: 8, example: 'Str0ng!Pass' },
-            companyName: { type: 'string', example: 'Acme Inc.' },
-          },
-        },
         LoginRequest: {
           type: 'object',
           required: ['email', 'password'],

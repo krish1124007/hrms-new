@@ -22,11 +22,10 @@ Install Mongo + Redis any way you like — Homebrew, MongoDB Atlas free tier, et
 cd backend
 cp .env.example .env       # edit MONGODB_URI, JWT_SECRET, etc.
 npm install
-npm run seed               # creates default roles + admin user
+npm run seed               # creates the default roles (no users)
+ADMIN_EMAIL=you@company.com ADMIN_PASSWORD='a strong password' ADMIN_FIRST_NAME=Jane ADMIN_LAST_NAME=Doe npm run seed:admin   # creates the first admin
 npm run dev                # starts on http://localhost:4000
 ```
-
-Default admin login: `admin@example.com` / `Admin@123` (change immediately).
 
 ### 2. Frontend
 
