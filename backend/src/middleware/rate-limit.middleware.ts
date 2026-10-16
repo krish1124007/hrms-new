@@ -69,11 +69,11 @@ export const authRateLimit = buildLimiter({
 });
 
 /* ──────────────────────────────────────────────────────────────
- * Account lockout helpers — slow down password guessing against a
- * known account. Counters and locks are scoped to email + client IP, so
- * an attacker spamming a victim's email only locks themselves out;
- * the real user signing in from another address is unaffected. Callers
- * must only track failures for accounts that exist.
+ * Account lockout helpers — slow down password guessing. Counters and
+ * locks are scoped to email + client IP, so an attacker spamming a
+ * victim's email only locks themselves out; the real user signing in
+ * from another address is unaffected. Callers track unknown emails the
+ * same as real ones so lockout is not an account-existence oracle.
  * ────────────────────────────────────────────────────────────── */
 
 const failKey = (email: string, ip: string): string => `login-fail:${email.toLowerCase()}:${ip}`;

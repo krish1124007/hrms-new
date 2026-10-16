@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
+import { redis } from '../config/redis.js';
 import { authRateLimit } from './rate-limit.middleware.js';
 
 function fakeRes() {
@@ -58,5 +59,25 @@ describe('authRateLimit', () => {
     );
     expect(other.status).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledTimes(21);
+  });
+
+  it('falls back to the full window for Retry-After when the key has no usable ttl', async () => {
+    const req = { ip: '198.51.100.9' } as unknown as Request;
+    const next = vi.fn();
+    for (let i = 0; i < 20; i++) {
+      await authRateLimit(req, fakeRes() as unknown as Response, next as unknown as NextFunction);
+    }
+
+    const ttl = vi.spyOn(redis, 'ttl').mockResolvedValue(-1);
+    try {
+      const blocked = fakeRes();
+      await authRateLimit(req, blocked as unknown as Response, next as unknown as NextFunction);
+
+      expect(ttl).toHaveBeenCalledWith('ratelimit:auth:198.51.100.9');
+      expect(blocked.status).toHaveBeenCalledWith(429);
+      expect(blocked.setHeader).toHaveBeenCalledWith('Retry-After', '900');
+    } finally {
+      ttl.mockRestore();
+    }
   });
 });

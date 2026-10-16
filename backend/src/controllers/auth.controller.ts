@@ -62,29 +62,26 @@ export async function login(req: Request, res: Response): Promise<void> {
     .populate('role')
     .exec();
 
-  // Failures are only tracked (and locks only set) for accounts that exist,
-  // and always per email+ip, so spamming someone else's address cannot lock
-  // them out and unknown emails never create Redis keys.
-  const recordFailure = async (): Promise<never> => {
+  // Failures are tracked and locked per email+ip for unknown emails exactly as
+  // for real ones, so neither the message nor the lockout timing reveals whether
+  // an account exists. Spamming someone else's address only locks the attacker's
+  // own IP; key growth is bounded by the per-IP authRateLimit.
+  const recordFailure = async (reason: 'not_found' | 'bad_password'): Promise<never> => {
     const failures = await trackLoginFailure(emailLower, ip);
     const { loginAttempts } = await import('../lib/metrics.js');
     if (failures >= 5) {
       await lockAccount(emailLower, ip, 15);
       loginAttempts.labels('locked').inc();
     } else {
-      loginAttempts.labels('bad_password').inc();
+      loginAttempts.labels(reason).inc();
     }
     throw new UnauthorizedError('Invalid credentials');
   };
 
-  if (!user) {
-    const { loginAttempts } = await import('../lib/metrics.js');
-    loginAttempts.labels('not_found').inc();
-    throw new UnauthorizedError('Invalid credentials');
-  }
-  const validUser = user;
+  if (!user) await recordFailure('not_found');
+  const validUser = user!;
   const valid = await validUser.comparePassword(body.password);
-  if (!valid) await recordFailure();
+  if (!valid) await recordFailure('bad_password');
 
   if (validUser.status !== 'active') throw new ForbiddenError(`User is ${validUser.status}`);
 
