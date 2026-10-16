@@ -3,6 +3,7 @@ import request from 'supertest';
 import { describe, it, expect } from 'vitest';
 import { presignResponse, unsignRequestBody } from './presign-response.middleware.js';
 import { signFileUrl, verifyFileSignature } from '../lib/file-urls.js';
+import { errorMiddleware } from './error.middleware.js';
 
 /** Bare app: JSON parser + the middleware under test + one route answering `body`. */
 function appAnswering(body: unknown) {
@@ -67,16 +68,23 @@ describe('presignResponse', () => {
   });
 });
 
+/** Bare app: JSON parser + unsignRequestBody + the real error handler; records what the route saw. */
+function appRecordingBody() {
+  const seen: { body?: unknown } = {};
+  const app = express();
+  app.use(express.json());
+  app.use(unsignRequestBody);
+  app.post('/t', (req, res) => {
+    seen.body = req.body;
+    res.status(204).end();
+  });
+  app.use(errorMiddleware);
+  return { app, seen };
+}
+
 describe('unsignRequestBody', () => {
   it('turns signed file URLs in a JSON body back into their stored /uploads/ form', async () => {
-    let seen: unknown;
-    const app = express();
-    app.use(express.json());
-    app.use(unsignRequestBody);
-    app.post('/t', (req, res) => {
-      seen = req.body;
-      res.status(204).end();
-    });
+    const { app, seen } = appRecordingBody();
 
     const signed = signFileUrl('/uploads/documents/2026/05/receipt one.pdf');
     const forged = signed.replace('receipt%20one.pdf', 'other.pdf');
@@ -85,10 +93,54 @@ describe('unsignRequestBody', () => {
       .send({ receiptUrls: [{ name: 'r', fileUrl: signed }], forged, other: 'plain' })
       .expect(204);
 
-    expect(seen).toEqual({
+    expect(seen.body).toEqual({
       receiptUrls: [{ name: 'r', fileUrl: '/uploads/documents/2026/05/receipt one.pdf' }],
       forged, // signature does not match → left exactly as sent
       other: 'plain',
     });
+  });
+
+  it('rejects a raw /uploads/ reference supplied by the client', async () => {
+    const { app, seen } = appRecordingBody();
+    const res = await request(app).post('/t').send({ fileUrl: '/uploads/x.pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'INVALID_FILE_REFERENCE',
+        message: 'File references must be links issued by the API',
+      },
+    });
+    expect(seen.body).toBeUndefined();
+  });
+
+  it('rejects a raw reference nested inside an array, even next to a valid signed link', async () => {
+    const { app } = appRecordingBody();
+    const res = await request(app)
+      .post('/t')
+      .send({
+        receiptUrls: [
+          { name: 'ok', fileUrl: signFileUrl('/uploads/documents/a.pdf') },
+          { name: 'bad', fileUrl: '/uploads/payslips/2026-05/EMP001.pdf' },
+        ],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_FILE_REFERENCE');
+  });
+
+  it('rejects spellings the server would normalise into /uploads/ (leading space, no slash, backslashes)', async () => {
+    const { app } = appRecordingBody();
+    for (const folder of [' /uploads/backups', 'uploads/backups', '\\uploads\\backups']) {
+      const res = await request(app).post('/t').send({ folder });
+      expect(res.status, JSON.stringify(folder)).toBe(400);
+    }
+  });
+
+  it('lets ordinary strings that merely mention uploads through', async () => {
+    const { app, seen } = appRecordingBody();
+    const body = { note: 'see /uploads/x.pdf', link: 'https://cdn.example.com/uploads/x.pdf', word: 'uploads' };
+    await request(app).post('/t').send(body).expect(204);
+    expect(seen.body).toEqual(body);
   });
 });

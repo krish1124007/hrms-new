@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as ctrl from '../controllers/assets.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { rejectRawUploadRefs } from '../middleware/presign-response.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
@@ -29,6 +30,7 @@ router.post(
   '/import',
   requirePermission('assets.manage'),
   upload.single('file'),
+  rejectRawUploadRefs,
   asyncHandler(ctrl.importAssets),
 );
 router.post(

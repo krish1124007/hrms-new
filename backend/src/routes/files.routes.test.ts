@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import request from 'supertest';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { signFileUrl } from '../lib/file-urls.js';
 import { deleteFile, uploadRoot } from '../lib/local-storage.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
 import { Employee } from '../models/employee.model.js';
 import { DocumentModel } from '../models/document.model.js';
+import { AuditLog } from '../models/audit-log.model.js';
 
 const FIXTURE_DIR = 'files-route-test';
 const SIBLING_DIR = `${uploadRoot()}-sibling`; // shares UPLOAD_DIR's name as a prefix
@@ -123,6 +124,25 @@ describe('GET /api/v1/files/*', () => {
     expect(dir.status).toBe(404);
   });
 
+  it('does not write an audit row for an invalid or expired link (anonymous route)', async () => {
+    const app = createApp();
+    expect(await AuditLog.countDocuments()).toBe(0);
+
+    const unsigned = await request(app).get(`/api/v1/files/${FIXTURE_DIR}/evil.html`);
+    expect(unsigned.status).toBe(401);
+    const expired = await request(app).get(pathAndQuery(signFileUrl(`/uploads/${FIXTURE_DIR}/evil.html`, -1)));
+    expect(expired.status).toBe(401);
+
+    // Positive control: a 404 from the same route IS audited. Once its row has
+    // landed, any row from the earlier (fire-and-forget) 401s would have too.
+    const missing = await request(app).get(pathAndQuery(signFileUrl(`/uploads/${FIXTURE_DIR}/nope.pdf`)));
+    expect(missing.status).toBe(404);
+    await vi.waitFor(async () => expect(await AuditLog.countDocuments()).toBeGreaterThanOrEqual(1));
+
+    const rows = await AuditLog.find().lean();
+    expect(rows.map((r) => r.metadata?.code)).toEqual(['NOT_FOUND']);
+  });
+
   it('no longer serves /uploads statically', async () => {
     const res = await request(createApp()).get(`/uploads/${FIXTURE_DIR}/payslip.pdf`);
     expect(res.status).toBe(404);
@@ -203,5 +223,44 @@ describe('uploads through the API', () => {
     expect(reloaded?.documents[0]?.fileUrl).toBe(storedUrl);
     const doc = await DocumentModel.findById(upload.body.data._id).lean();
     expect(doc?.sharedWith.map((s) => String(s.userId))).toContain(String(staff._id));
+  });
+
+  it('rejects raw /uploads/ references in multipart text fields', async () => {
+    const app = createApp();
+    const { token } = await createUser({ roleSlug: 'admin' });
+
+    for (const [field, value] of [
+      ['name', '/uploads/evil'],
+      ['folder', 'uploads/backups'], // normaliseFolder would turn this into /uploads/backups
+    ] as const) {
+      const res = await request(app)
+        .post('/api/v1/documents/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field(field, value)
+        .attach('file', Buffer.from('a,b\n'), { filename: 'ok.csv', contentType: 'text/csv' });
+      expect(res.status, `${field}=${value}`).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_FILE_REFERENCE');
+    }
+    expect(await DocumentModel.countDocuments()).toBe(0);
+  });
+
+  it('rejects a raw /uploads/ reference in a JSON body and stores nothing', async () => {
+    const app = createApp();
+    const { token } = await createUser({ roleSlug: 'admin' });
+    const { user: staff } = await createUser({ roleSlug: 'employee' });
+    const employee = await createEmployeeFor(staff);
+
+    const res = await request(app)
+      .post(`/api/v1/employees/${String(employee._id)}/documents`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ type: 'payslip', name: 'peek', fileUrl: '/uploads/payslips/2026-05/EMP001.pdf' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_FILE_REFERENCE');
+    expect((await Employee.findById(employee._id).lean())?.documents).toHaveLength(0);
+
+    // Not audited either (positive control as in the files-route audit test).
+    await request(app).get(pathAndQuery(signFileUrl(`/uploads/${FIXTURE_DIR}/nope.pdf`)));
+    await vi.waitFor(async () => expect(await AuditLog.countDocuments()).toBeGreaterThanOrEqual(1));
+    expect((await AuditLog.find().lean()).map((r) => r.metadata?.code)).toEqual(['NOT_FOUND']);
   });
 });

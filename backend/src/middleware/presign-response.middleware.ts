@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { signFileUrl, storedFormOfSignedUrl } from '../lib/file-urls.js';
+import { AppError } from '../lib/errors.js';
 
 const UPLOADS_PREFIX = '/uploads/';
 const FILES_PATH = '/api/v1/files/';
@@ -38,15 +39,61 @@ export function presignResponse(_req: Request, res: Response, next: NextFunction
 }
 
 /**
- * The inbound half: clients post back the signed links they were given (an
- * upload's URL attached to an employee or an expense claim). Turn any link
- * this server signed back into its stored `/uploads/<key>` form, so what lands
- * in the database never expires. Strings whose signature does not check out
- * are left exactly as sent.
+ * A client-supplied string that is, or that server-side clean-up (trimming,
+ * `\` → `/`, adding a leading `/` as document folders do) could turn into, a
+ * stored `/uploads/` reference — which presignResponse would then sign.
+ */
+const RAW_UPLOAD_REF = /^[\s\\/]*uploads[\\/]/;
+
+/**
+ * The inbound half. Clients may reference files only through links the API
+ * issued:
+ *  - a signed link this server issued (an upload's URL attached to an
+ *    employee or an expense claim) is turned back into its stored
+ *    `/uploads/<key>` form, so what lands in the database never expires;
+ *    links whose signature does not check out are left exactly as sent;
+ *  - a raw `/uploads/…` reference is refused with 400 INVALID_FILE_REFERENCE:
+ *    echoed back, it would be signed into a download grant for any key.
+ * The raw check runs on the strings as the client sent them, before any
+ * signed link is converted.
  */
 export function unsignRequestBody(req: Request, _res: Response, next: NextFunction): void {
-  if (req.body !== null && typeof req.body === 'object' && JSON.stringify(req.body).includes(FILES_PATH)) {
-    req.body = mapStrings(req.body, unsignIfSigned);
+  const body: unknown = req.body;
+  if (body === null || typeof body !== 'object') {
+    next();
+    return;
   }
+  const serialised = JSON.stringify(body);
+  if (!serialised.includes('uploads') && !serialised.includes(FILES_PATH)) {
+    next();
+    return;
+  }
+  let raw = false;
+  const normalised = mapStrings(body, (s) => {
+    if (RAW_UPLOAD_REF.test(s)) {
+      raw = true;
+      return s;
+    }
+    return unsignIfSigned(s);
+  });
+  if (raw) {
+    next(new AppError('File references must be links issued by the API', 400, 'INVALID_FILE_REFERENCE'));
+    return;
+  }
+  req.body = normalised;
   next();
+}
+
+/**
+ * The same check for multipart text fields, which multer parses after the
+ * global middleware has run. Mount right after `upload.single(...)`. Other
+ * bodies were already handled globally (and must not be checked twice: their
+ * converted links now start with `/uploads/`).
+ */
+export function rejectRawUploadRefs(req: Request, res: Response, next: NextFunction): void {
+  if (!req.is('multipart/form-data')) {
+    next();
+    return;
+  }
+  unsignRequestBody(req, res, next);
 }

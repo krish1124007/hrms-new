@@ -2,6 +2,7 @@ import { Router, type RequestHandler } from 'express';
 import multer, { MulterError } from 'multer';
 import * as ctrl from '../controllers/hr-policies.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { rejectRawUploadRefs } from '../middleware/presign-response.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
@@ -90,6 +91,7 @@ router.post(
   '/:id/attachments',
   requirePermission('policies.manage'),
   uploadAttachmentFile,
+  rejectRawUploadRefs,
   asyncHandler(ctrl.uploadAttachment),
 );
 router.delete(

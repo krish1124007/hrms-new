@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as ctrl from '../controllers/document.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { rejectRawUploadRefs } from '../middleware/presign-response.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
 import { uploadFileFilter } from '../lib/upload-policy.js';
@@ -18,7 +19,7 @@ const upload = multer({
 
 router.get('/', validate(ctrl.listDocumentsQuerySchema, 'query'), asyncHandler(ctrl.listDocuments));
 router.get('/folders', asyncHandler(ctrl.listFolders));
-router.post('/upload', upload.single('file'), asyncHandler(ctrl.uploadDocument));
+router.post('/upload', upload.single('file'), rejectRawUploadRefs, asyncHandler(ctrl.uploadDocument));
 router.get('/:id', asyncHandler(ctrl.getDocument));
 router.patch('/:id', validate(ctrl.updateDocumentSchema), asyncHandler(ctrl.updateDocument));
 router.delete('/:id', asyncHandler(ctrl.deleteDocument));
