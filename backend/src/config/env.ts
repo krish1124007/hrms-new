@@ -16,10 +16,19 @@ const envSchema = z.object({
 
   /**
    * Local upload directory. Generated/uploaded files (payslip PDFs, backup
-   * tarballs, document attachments) are written here and served at /uploads/*
-   * by Express.
+   * tarballs, document attachments) are written here. Nothing in it is served
+   * publicly: the API hands out short-lived signed links to /api/v1/files/*.
    */
   UPLOAD_DIR: z.string().default('./uploads'),
+
+  /**
+   * Public origin that signed file links are built on. Defaults to CORS_ORIGIN
+   * in production (nginx proxies /api/v1 on the web origin) and to the API's
+   * own http://localhost:PORT elsewhere.
+   */
+  PUBLIC_BASE_URL: z.string().url().optional(),
+  /** Lifetime of a signed file link, in seconds. */
+  FILE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
 
   MEILISEARCH_HOST: z.string().url().default('http://localhost:7700'),
   MEILISEARCH_API_KEY: z.string().default('masterKey'),

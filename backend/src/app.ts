@@ -19,9 +19,10 @@ import { apiVersionMiddleware } from './middleware/api-version.middleware.js';
 import { compressionTelemetry } from './middleware/compression-telemetry.middleware.js';
 import { metricsMiddleware } from './middleware/metrics.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { presignResponse, unsignRequestBody } from './middleware/presign-response.middleware.js';
 
-import { uploadRoot } from './lib/local-storage.js';
 import apiRoutes from './routes/index.js';
+import filesRoutes from './routes/files.routes.js';
 import healthRoutes, { healthHandler } from './routes/health.routes.js';
 
 /**
@@ -78,11 +79,12 @@ export function createApp(): Express {
   app.use(compression());
   app.use(compressionTelemetry); // emit X-Compression-Ratio for monitoring
 
-  // Static-serve user uploads (payslips, attachments, backups) from local disk.
-  app.use('/uploads', express.static(uploadRoot(), { maxAge: '1d' }));
-
+  // Uploads are never served statically: responses carry short-lived signed
+  // links (presignResponse) and only /api/v1/files serves the bytes.
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use(presignResponse); // stored /uploads/<key> → signed /api/v1/files/<key> link
+  app.use(unsignRequestBody); // signed links posted back → stored /uploads/<key>
   app.use(cookieParser());
   app.use(sanitizeInputs); // strip MongoDB operators from all inputs
   app.use(paginationGuard); // clamp ?page/?limit to prevent DoS
@@ -137,6 +139,8 @@ export function createApp(): Express {
   });
 
   // ─── API routes ───
+  // Signed file downloads: authorised by the link's signature, not a session.
+  app.use('/api/v1/files', filesRoutes);
   app.use('/api/v1', apiRoutes);
 
   // ─── 404 + error handler ───

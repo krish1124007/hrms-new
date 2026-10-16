@@ -4,6 +4,7 @@ import * as ctrl from '../controllers/document.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
+import { uploadFileFilter } from '../lib/upload-policy.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -12,6 +13,7 @@ router.use(authMiddleware);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: uploadFileFilter,
 });
 
 router.get('/', validate(ctrl.listDocumentsQuerySchema, 'query'), asyncHandler(ctrl.listDocuments));

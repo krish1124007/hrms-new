@@ -45,15 +45,6 @@ export default defineConfig((): UserConfig => {
     server: {
       port: 5173,
       host: true,
-      // Forward static-file requests to the API in dev. The API serves payslips,
-      // backups, attachments, etc. under `/uploads/<key>` — without this proxy
-      // the dev server (5173) would 404 on those paths.
-      proxy: {
-        '/uploads': {
-          target: 'http://localhost:4000',
-          changeOrigin: true,
-        },
-      },
     },
     build: {
       // Warn when any chunk > 600kb gzipped — pushes us to investigate

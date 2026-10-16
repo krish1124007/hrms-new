@@ -12,6 +12,7 @@
  */
 import PDFDocument from 'pdfkit';
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../config/logger.js';
 import { saveFile } from '../lib/local-storage.js';
@@ -608,7 +609,8 @@ export async function generatePayslipPdf(
   ytd: YtdTotals,
 ): Promise<string> {
   const buffer = await renderToBuffer(record, cycle, employee, tenant, ytd);
-  const key = `payslips/${cycle.year}-${String(cycle.month).padStart(2, '0')}/${employee.employeeId}.pdf`;
+  // Random suffix: the key must not be guessable from the employee ID.
+  const key = `payslips/${cycle.year}-${String(cycle.month).padStart(2, '0')}/${employee.employeeId}-${randomBytes(6).toString('hex')}.pdf`;
 
   try {
     return await saveFile(key, buffer, 'application/pdf');

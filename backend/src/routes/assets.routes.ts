@@ -5,6 +5,7 @@ import { authMiddleware } from '../middleware/auth.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
+import { uploadFileFilter } from '../lib/upload-policy.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -12,6 +13,7 @@ router.use(authMiddleware);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: uploadFileFilter,
 });
 
 router.get('/me', asyncHandler(ctrl.myAssets));
