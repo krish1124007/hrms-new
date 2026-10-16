@@ -11,8 +11,9 @@
 import { vi, beforeAll, afterAll, afterEach } from 'vitest';
 
 // vi.hoisted runs ahead of the (hoisted) static imports below, which is the
-// only place env can be set early enough for config/env.ts.
-vi.hoisted(async () => {
+// only place env can be set early enough for config/env.ts. It is awaited so
+// the assignments are guaranteed to have landed before any app module loads.
+await vi.hoisted(async () => {
   const os = await import('node:os');
   const path = await import('node:path');
   const fs = await import('node:fs');
@@ -28,6 +29,12 @@ vi.hoisted(async () => {
     ENCRYPTION_KEY: 'test-encryption-key-0123456789abcdef0123456789ab',
     UPLOAD_DIR: uploadDir,
     CORS_ORIGIN: 'http://localhost:5173',
+    // Blank (not merely unset) so a developer's .env can never switch the
+    // email service from its dev/no-op transport to Resend or real SMTP.
+    RESEND_API_KEY: '',
+    SMTP_HOST: '',
+    SMTP_USER: '',
+    SMTP_PASS: '',
     // Never let a test reach a developer's real Redis or Meilisearch.
     REDIS_URL: 'redis://127.0.0.1:1',
     MEILISEARCH_HOST: 'http://127.0.0.1:1',

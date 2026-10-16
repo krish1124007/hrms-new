@@ -19,7 +19,12 @@ const router = Router();
  * where a transient Redis hiccup restarts every pod simultaneously.
  */
 
-router.get('/health', (_req: Request, res: Response) => {
+/**
+ * Liveness handler. Exported so `createApp()` can expose exactly this one
+ * probe at `/api/v1/health` without also publishing `/readyz` or `/metrics`
+ * under the versioned prefix.
+ */
+export function healthHandler(_req: Request, res: Response): void {
   const mem = process.memoryUsage();
   res.status(200).json({
     success: true,
@@ -35,7 +40,9 @@ router.get('/health', (_req: Request, res: Response) => {
       version: process.env.npm_package_version || '1.0.0',
     },
   });
-});
+}
+
+router.get('/health', healthHandler);
 
 router.get('/readyz', async (_req: Request, res: Response) => {
   const dbState = mongoose.connection.readyState; // 1 = connected

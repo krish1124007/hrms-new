@@ -22,7 +22,7 @@ import { errorMiddleware } from './middleware/error.middleware.js';
 
 import { uploadRoot } from './lib/local-storage.js';
 import apiRoutes from './routes/index.js';
-import healthRoutes from './routes/health.routes.js';
+import healthRoutes, { healthHandler } from './routes/health.routes.js';
 
 /**
  * Builds the fully-wired Express application: middleware chain, health/docs,
@@ -109,10 +109,12 @@ export function createApp(): Express {
   // ─── Health, metrics & docs ───
   // Mounted before tenant/auth middleware so they remain accessible
   // for Prometheus scraping, load balancers, and uptime monitors.
-  // Served at both /api/* (what probes and load balancers use today) and
-  // /api/v1/* (what the access-log filter and API clients expect).
+  // The full probe set (health, readyz, metrics) lives under /api. Only the
+  // liveness probe is also reachable at /api/v1/health (where the access-log
+  // filter and API clients expect it); readyz and metrics must never be
+  // exposed unauthenticated under the versioned prefix.
   app.use('/api', healthRoutes);
-  app.use('/api/v1', healthRoutes);
+  app.get('/api/v1/health', healthHandler);
   app.use(
     '/api/docs',
     swaggerUi.serve,

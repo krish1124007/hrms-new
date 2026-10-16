@@ -15,6 +15,11 @@ describe('test environment', () => {
     expect(env.LOG_LEVEL).toBe('error');
     expect(env.CORS_ORIGIN).toBe('http://localhost:5173');
     expect(env.UPLOAD_DIR).toBe(path.join(os.tmpdir(), 'hrms-test-uploads'));
+    // Pinned to blank (not left unset) so a developer's .env cannot enable real mail.
+    expect(env.RESEND_API_KEY).toBe('');
+    expect(env.SMTP_HOST).toBe('');
+    expect(env.SMTP_USER).toBe('');
+    expect(env.SMTP_PASS).toBe('');
     expect(env.JWT_SECRET).not.toBe(env.JWT_REFRESH_SECRET);
     expect(env.JWT_SECRET.length).toBeGreaterThanOrEqual(32);
     expect(env.ENCRYPTION_KEY.length).toBeGreaterThanOrEqual(32);
