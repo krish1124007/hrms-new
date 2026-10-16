@@ -28,7 +28,6 @@ function buildLimiter(opts: RateLimitOptions) {
       res.setHeader('X-RateLimit-Limit', String(opts.max));
       res.setHeader('X-RateLimit-Remaining', String(Math.max(0, opts.max - count)));
 
-      /* 
       if (count > opts.max) {
         const retryAfter = await redis.ttl(key);
         res.setHeader('Retry-After', String(retryAfter > 0 ? retryAfter : ttlSeconds));
@@ -41,7 +40,6 @@ function buildLimiter(opts: RateLimitOptions) {
         });
         return;
       }
-      */
 
       next();
     } catch (err) {
@@ -61,44 +59,50 @@ export const userRateLimit = buildLimiter({
 
 /**
  * Strict rate limit for auth endpoints.
- * Blocks after 10 tries in 15 minutes per IP.
+ * Blocks after 20 tries in 15 minutes per IP.
  */
 export const authRateLimit = buildLimiter({
   windowMs: 15 * 60_000,
-  max: 10,
+  max: 20,
   keyPrefix: 'auth',
   scope: 'ip',
 });
 
 /* ──────────────────────────────────────────────────────────────
- * Account lockout helpers — prevent password spraying where
- * attackers rotate IPs. Tracks failed attempts per email in Redis.
+ * Account lockout helpers — slow down password guessing against a
+ * known account. Counters and locks are scoped to email + client IP, so
+ * an attacker spamming a victim's email only locks themselves out;
+ * the real user signing in from another address is unaffected. Callers
+ * must only track failures for accounts that exist.
  * ────────────────────────────────────────────────────────────── */
 
-export async function trackLoginFailure(email: string): Promise<number> {
+const failKey = (email: string, ip: string): string => `login-fail:${email.toLowerCase()}:${ip}`;
+const lockKey = (email: string, ip: string): string => `login-lock:${email.toLowerCase()}:${ip}`;
+
+export async function trackLoginFailure(email: string, ip: string): Promise<number> {
   const { redis } = await import('../config/redis.js');
-  const key = `login-fail:${email.toLowerCase()}`;
+  const key = failKey(email, ip);
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, 30 * 60);
   return count;
 }
 
-export async function clearLoginFailures(email: string): Promise<void> {
+export async function clearLoginFailures(email: string, ip: string): Promise<void> {
   const { redis } = await import('../config/redis.js');
-  await redis.del(`login-fail:${email.toLowerCase()}`);
+  await redis.del(failKey(email, ip));
 }
 
-export async function isAccountLocked(email: string): Promise<boolean> {
+export async function isAccountLocked(email: string, ip: string): Promise<boolean> {
   const { redis } = await import('../config/redis.js');
-  return Boolean(await redis.get(`login-lock:${email.toLowerCase()}`));
+  return Boolean(await redis.get(lockKey(email, ip)));
 }
 
-export async function lockAccount(email: string, minutes = 15): Promise<void> {
+export async function lockAccount(email: string, ip: string, minutes = 15): Promise<void> {
   const { redis } = await import('../config/redis.js');
-  await redis.set(`login-lock:${email.toLowerCase()}`, '1', 'EX', minutes * 60);
+  await redis.set(lockKey(email, ip), '1', 'EX', minutes * 60);
 }
 
-export async function getLockTTL(email: string): Promise<number> {
+export async function getLockTTL(email: string, ip: string): Promise<number> {
   const { redis } = await import('../config/redis.js');
-  return redis.ttl(`login-lock:${email.toLowerCase()}`);
+  return redis.ttl(lockKey(email, ip));
 }

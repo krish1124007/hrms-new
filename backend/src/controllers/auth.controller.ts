@@ -40,6 +40,7 @@ async function persistSession(
 export async function login(req: Request, res: Response): Promise<void> {
   const body = req.body as LoginInput;
   const emailLower = body.email.toLowerCase();
+  const ip = req.ip ?? 'unknown';
 
   const {
     isAccountLocked,
@@ -49,8 +50,8 @@ export async function login(req: Request, res: Response): Promise<void> {
     getLockTTL,
   } = await import('../middleware/rate-limit.middleware.js');
 
-  if (await isAccountLocked(emailLower)) {
-    const ttl = await getLockTTL(emailLower);
+  if (await isAccountLocked(emailLower, ip)) {
+    const ttl = await getLockTTL(emailLower, ip);
     throw new UnauthorizedError(
       `Account locked due to too many failed attempts. Try again in ${Math.ceil(ttl / 60)} minutes.`,
     );
@@ -61,27 +62,33 @@ export async function login(req: Request, res: Response): Promise<void> {
     .populate('role')
     .exec();
 
-  const recordFailure = async (reason: 'not_found' | 'bad_password'): Promise<never> => {
-    const failures = await trackLoginFailure(emailLower);
+  // Failures are only tracked (and locks only set) for accounts that exist,
+  // and always per email+ip, so spamming someone else's address cannot lock
+  // them out and unknown emails never create Redis keys.
+  const recordFailure = async (): Promise<never> => {
+    const failures = await trackLoginFailure(emailLower, ip);
+    const { loginAttempts } = await import('../lib/metrics.js');
     if (failures >= 5) {
-      await lockAccount(emailLower, 15);
-      const { loginAttempts } = await import('../lib/metrics.js');
+      await lockAccount(emailLower, ip, 15);
       loginAttempts.labels('locked').inc();
     } else {
-      const { loginAttempts } = await import('../lib/metrics.js');
-      loginAttempts.labels(reason).inc();
+      loginAttempts.labels('bad_password').inc();
     }
     throw new UnauthorizedError('Invalid credentials');
   };
 
-  if (!user) await recordFailure('not_found');
-  const validUser = user!;
+  if (!user) {
+    const { loginAttempts } = await import('../lib/metrics.js');
+    loginAttempts.labels('not_found').inc();
+    throw new UnauthorizedError('Invalid credentials');
+  }
+  const validUser = user;
   const valid = await validUser.comparePassword(body.password);
-  if (!valid) await recordFailure('bad_password');
+  if (!valid) await recordFailure();
 
   if (validUser.status !== 'active') throw new ForbiddenError(`User is ${validUser.status}`);
 
-  await clearLoginFailures(emailLower);
+  await clearLoginFailures(emailLower, ip);
   const { loginAttempts } = await import('../lib/metrics.js');
   loginAttempts.labels('success').inc();
 

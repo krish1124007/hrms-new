@@ -10,7 +10,7 @@ import { loginSchema, refreshTokenSchema, forgotPasswordSchema, resetPasswordSch
 const router = Router();
 
 // Strict rate limiting on all auth endpoints to prevent brute-force attacks.
-// 10 attempts per IP per 15 minutes.
+// 20 attempts per IP per 15 minutes.
 router.use(['/login', '/forgot-password', '/reset-password'], authRateLimit);
 
 router.post('/login', TIGHT_JSON, validate(loginSchema), asyncHandler(auth.login));
