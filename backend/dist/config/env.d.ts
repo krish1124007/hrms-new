@@ -1,0 +1,32 @@
+import 'dotenv/config';
+export declare const env: {
+    NODE_ENV: "development" | "test" | "production";
+    PORT: number;
+    MONGODB_URI: string;
+    REDIS_URL: string;
+    JWT_SECRET: string;
+    JWT_REFRESH_SECRET: string;
+    JWT_ACCESS_TTL: string;
+    JWT_REFRESH_TTL: string;
+    UPLOAD_DIR: string;
+    MEILISEARCH_HOST: string;
+    MEILISEARCH_API_KEY: string;
+    SMTP_FROM: string;
+    COMPANY_NAME: string;
+    COMPANY_STATE_CODE: string;
+    COMPANY_GSTIN: string;
+    GST_RATE_PERCENT: number;
+    CORS_ORIGIN: string;
+    LOG_LEVEL: "error" | "fatal" | "warn" | "info" | "debug" | "trace";
+    ENCRYPTION_KEY: string;
+    RESEND_API_KEY?: string | undefined;
+    SMTP_HOST?: string | undefined;
+    SMTP_PORT?: number | undefined;
+    SMTP_USER?: string | undefined;
+    SMTP_PASS?: string | undefined;
+    COMPANY_EMAIL?: string | undefined;
+    AGORA_APP_ID?: string | undefined;
+    AGORA_APP_CERTIFICATE?: string | undefined;
+};
+export type Env = typeof env;
+//# sourceMappingURL=env.d.ts.map

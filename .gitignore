@@ -1,14 +1,7 @@
 # Dependencies
 node_modules/
 
-# Ignore Source Code & Configs (Local Only)
-**/src/
-**/*.ts
-**/*.tsx
-**/tsconfig*.json
-**/vite.config.ts
-**/.eslintrc*
-**/.prettier*
+# TypeScript incremental build info
 *.tsbuildinfo
 
 # Environment / secrets — NEVER commit
@@ -24,9 +17,16 @@ node_modules/
 
 # Project Specific
 uploads/
+backend/uploads/
 backups/
 
-# ALLOW Production Build Files
-!**/dist/
-# Keep migrations as they are needed for DB updates
-!backend/migrations/
+# Local tooling / scratch workspaces
+.claude/
+.superpowers/
+
+# OS junk
+.DS_Store
+__MACOSX/
+
+# Mobile app lives here but is deployed separately (Play Store / App Store) — never push it with the web app
+dhrms-iosfinal/

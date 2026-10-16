@@ -1,0 +1,68 @@
+import { type Document, type Model, type Types } from 'mongoose';
+import { type PaginateModel } from '../lib/mongoose-plugins.js';
+import type { AttendanceMethod } from './attendance-config.model.js';
+export type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'late' | 'on_leave' | 'holiday' | 'weekend';
+export type RegularizationStatus = 'pending' | 'approved' | 'rejected';
+export type BreakType = 'tea' | 'lunch' | 'personal' | 'other';
+export interface ILocationPoint {
+    lat?: number;
+    lng?: number;
+    accuracy?: number;
+    address?: string;
+}
+export interface IDeviceInfo {
+    model?: string;
+    os?: string;
+    appVersion?: string;
+}
+export interface ICheckinMetadata {
+    qrCodeId?: string;
+    ipAddress?: string;
+    siteId?: string;
+    geofenceId?: string;
+    deviceId?: string;
+    faceConfidence?: number;
+}
+export interface ICheckinRecord {
+    time?: Date;
+    method?: AttendanceMethod;
+    location?: ILocationPoint;
+    photo?: string;
+    deviceInfo?: IDeviceInfo;
+    metadata?: ICheckinMetadata;
+}
+export interface IBreakRecord {
+    startTime: Date;
+    endTime?: Date;
+    duration?: number;
+    type: BreakType;
+}
+export interface IRegularization {
+    requestedAt: Date;
+    reason: string;
+    approvedBy?: Types.ObjectId;
+    approvedAt?: Date;
+    status: RegularizationStatus;
+}
+export interface IAttendance extends Document {
+    employeeId: Types.ObjectId;
+    date: Date;
+    checkIn?: ICheckinRecord;
+    checkOut?: ICheckinRecord;
+    breaks: IBreakRecord[];
+    totalWorkingHours: number;
+    overtimeHours: number;
+    status: AttendanceStatus;
+    lateBy: number;
+    earlyLeaveBy: number;
+    isRegularized: boolean;
+    regularization?: IRegularization;
+    createdAt: Date;
+    updatedAt: Date;
+}
+export declare const Attendance: PaginateModel<IAttendance> & Model<IAttendance, {}, {}, {}, Document<unknown, {}, IAttendance, {}, {}> & IAttendance & Required<{
+    _id: Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
+//# sourceMappingURL=attendance.model.d.ts.map
