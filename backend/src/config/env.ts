@@ -15,11 +15,25 @@ const envSchema = z.object({
   JWT_REFRESH_TTL: z.string().default('30d'),
 
   /**
-   * Local upload directory. Generated/uploaded files (payslip PDFs, backup
-   * tarballs, document attachments) are written here. Nothing in it is served
-   * publicly: the API hands out short-lived signed links to /api/v1/files/*.
+   * Local upload directory. Generated/uploaded files (payslip PDFs, document
+   * attachments) are written here. Nothing in it is served publicly: the API
+   * hands out short-lived signed links to /api/v1/files/*.
    */
   UPLOAD_DIR: z.string().default('./uploads'),
+
+  /**
+   * Database backup tarballs. Must be outside UPLOAD_DIR: backups are never
+   * signed into file links, only streamed by GET /api/v1/backups/:id/download
+   * (permission `backups.manage`). Created on demand.
+   */
+  BACKUP_DIR: z.string().default('./backups'),
+
+  /**
+   * The only database a backup may be restored into (a throwaway scratch DB,
+   * never prod). Must name a database other than MONGODB_URI's. Unset: the
+   * restore endpoint answers 400 RESTORE_TARGET_NOT_CONFIGURED.
+   */
+  BACKUP_SCRATCH_MONGO_URI: z.string().url().optional(),
 
   /**
    * Public origin that signed file links are built on. Defaults to CORS_ORIGIN

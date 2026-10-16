@@ -14,6 +14,7 @@ import { asyncHandler } from '../lib/async-handler.js';
 import { AppError, NotFoundError } from '../lib/errors.js';
 import { verifyFileSignature } from '../lib/file-urls.js';
 import { pathFor } from '../lib/local-storage.js';
+import { legacyBackupRoot } from '../lib/backups.js';
 
 const router = Router();
 
@@ -46,6 +47,13 @@ async function serveFile(req: Request, res: Response): Promise<void> {
   try {
     abs = pathFor(key); // throws when the key escapes UPLOAD_DIR
   } catch {
+    throw new NotFoundError('File not found');
+  }
+  // Database backups not yet moved to BACKUP_DIR: only GET /backups/:id/download
+  // serves them. Compared case-insensitively for case-insensitive filesystems.
+  const legacyBackups = legacyBackupRoot().toLowerCase();
+  const lowered = abs.toLowerCase();
+  if (lowered === legacyBackups || lowered.startsWith(legacyBackups + path.sep)) {
     throw new NotFoundError('File not found');
   }
   const stat = await fs.promises.stat(abs).catch(() => null);

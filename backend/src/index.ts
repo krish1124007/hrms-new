@@ -52,14 +52,21 @@ async function bootstrap(): Promise<void> {
   startBackupWorker();
   logger.info('Backup worker started');
 
-  // Register the monthly auto-backup schedule. Idempotent — re-registering
-  // simply overwrites the existing repeatable job in Redis. Operators can
-  // disable via the API: PUT /api/v1/backups/schedule { enabled: false }.
+  // Re-apply the operator's monthly auto-backup choice, persisted by
+  // PUT /api/v1/backups/schedule { enabled } (enabled on a fresh install).
+  // Idempotent — re-registering overwrites the repeatable job in Redis.
   try {
-    await setMonthlyBackupSchedule(true);
-    logger.info('Monthly auto-backup schedule registered (last day of every month, 23:50)');
+    const { getSetting } = await import('./models/system-setting.model.js');
+    const { MONTHLY_BACKUP_SETTING } = await import('./lib/backups.js');
+    const enabled = (await getSetting<unknown>(MONTHLY_BACKUP_SETTING, true)) !== false;
+    await setMonthlyBackupSchedule(enabled);
+    logger.info(
+      enabled
+        ? 'Monthly auto-backup schedule registered (last day of every month, 23:50)'
+        : 'Monthly auto-backup schedule left disabled (operator setting)',
+    );
   } catch (err) {
-    logger.warn({ err }, 'Failed to register monthly backup schedule');
+    logger.warn({ err }, 'Failed to apply the monthly backup schedule');
   }
 
   // ─── Graceful shutdown ───

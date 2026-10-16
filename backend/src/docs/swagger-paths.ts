@@ -1650,6 +1650,7 @@ export const swaggerPaths: Record<string, unknown> = {
   '/backups/{id}': {
     delete: { tags: ['Backups'], summary: 'Delete backup', parameters: [idParam()], responses: { ...res200('Deleted') } },
   },
-  '/backups/{id}/restore': { post: { tags: ['Backups'], summary: 'Restore from backup', parameters: [idParam()], responses: { ...res200('Restore initiated') } } },
+  '/backups/{id}/restore': { post: { tags: ['Backups'], summary: 'Restore into the scratch database (BACKUP_SCRATCH_MONGO_URI)', parameters: [idParam()], responses: { ...res200('Restore initiated') } } },
+  '/backups/{id}/download': { get: { tags: ['Backups'], summary: 'Download backup tarball (backups.manage)', parameters: [idParam()], responses: { 200: { description: 'Backup tarball', content: { 'application/gzip': { schema: { type: 'string', format: 'binary' } } } } } } },
 
 };

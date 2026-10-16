@@ -20,6 +20,8 @@ await vi.hoisted(async () => {
 
   const uploadDir = path.join(os.tmpdir(), 'hrms-test-uploads');
   fs.mkdirSync(uploadDir, { recursive: true });
+  // Created on demand by the code under test; never inside the upload root.
+  const backupDir = path.join(os.tmpdir(), 'hrms-test-backups');
 
   Object.assign(process.env, {
     NODE_ENV: 'test',
@@ -28,6 +30,7 @@ await vi.hoisted(async () => {
     JWT_REFRESH_SECRET: 'test-refresh-secret-0123456789abcdef0123456789ab',
     ENCRYPTION_KEY: 'test-encryption-key-0123456789abcdef0123456789ab',
     UPLOAD_DIR: uploadDir,
+    BACKUP_DIR: backupDir,
     CORS_ORIGIN: 'http://localhost:5173',
     // Blank (not merely unset) so a developer's .env can never switch the
     // email service from its dev/no-op transport to Resend or real SMTP.
