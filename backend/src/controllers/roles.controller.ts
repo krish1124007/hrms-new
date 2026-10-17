@@ -5,17 +5,19 @@ import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { slugify } from '../lib/slugify.js';
 import { cached, invalidate } from '../lib/cache.js';
+import { PERMISSIONS_BY_MODULE } from '../config/permissions.js';
+import { assertCanGrant, permissionListSchema } from '../lib/permission-grants.js';
 
 export const createRoleSchema = z.object({
   name: z.string().min(2).max(64),
   description: z.string().optional(),
-  permissions: z.array(z.string()).default([]),
+  permissions: permissionListSchema.default([]),
 });
 
 export const updateRoleSchema = z.object({
   name: z.string().min(2).max(64).optional(),
   description: z.string().optional(),
-  permissions: z.array(z.string()).optional(),
+  permissions: permissionListSchema.optional(),
 });
 
 export async function listRoles(_req: Request, res: Response): Promise<void> {
@@ -32,6 +34,9 @@ async function invalidateRolesCache(): Promise<void> {
 
 export async function createRole(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createRoleSchema>;
+  // Names were validated against the catalogue by the schema; `*` and anything
+  // else the caller does not hold themselves is for a `*` holder to grant.
+  assertCanGrant(req.user, body.permissions);
   const slug = slugify(body.name);
   const existing = await Role.findOne({ slug }).exec();
   if (existing) throw new ConflictError('A role with this name already exists');
@@ -60,6 +65,16 @@ export async function updateRole(req: Request, res: Response): Promise<void> {
   if (role.isSystem) throw new ForbiddenError('System roles cannot be modified');
 
   const body = req.body as z.infer<typeof updateRoleSchema>;
+  if (body.permissions !== undefined) {
+    // Only what is being *added* needs the caller's blessing: re-saving a role
+    // that already carries a permission the caller lacks must not be blocked,
+    // but nobody may widen a role (their own included) beyond what they hold.
+    const current = new Set(role.permissions);
+    assertCanGrant(
+      req.user,
+      body.permissions.filter((permission) => !current.has(permission)),
+    );
+  }
   if (body.name !== undefined) {
     role.name = body.name;
     role.slug = slugify(body.name);
@@ -83,32 +98,6 @@ export async function deleteRole(req: Request, res: Response): Promise<void> {
   await invalidateRolesCache();
   res.json({ success: true, message: 'Role deleted' });
 }
-
-export const PERMISSIONS_BY_MODULE: Record<string, string[]> = {
-  users: ['users.view', 'users.create', 'users.update', 'users.delete'],
-  roles: ['roles.view', 'roles.create', 'roles.update', 'roles.delete'],
-  employees: ['employees.view', 'employees.create', 'employees.update', 'employees.delete', 'employees.export'],
-  departments: ['departments.view', 'departments.manage'],
-  designations: ['designations.view', 'designations.manage'],
-  shifts: ['shifts.view', 'shifts.manage'],
-  holidays: ['holidays.view', 'holidays.create', 'holidays.update', 'holidays.delete'],
-  attendance: ['attendance.view', 'attendance.manage', 'attendance.config'],
-  leaves: ['leaves.view', 'leaves.approve', 'leaves.config', 'leaves.update'],
-  payroll: ['payroll.view', 'payroll.process', 'payroll.config'],
-  'expense-claims': ['expense-claims.view', 'expense-claims.approve', 'expense-claims.update'],
-  overtime: ['overtime.view', 'overtime.approve'],
-  assets: ['assets.view', 'assets.manage'],
-  loans: ['loans.view', 'loans.manage', 'loans.approve'],
-  disciplinary: ['disciplinary.view', 'disciplinary.manage'],
-  policies: ['policies.view', 'policies.manage'],
-  notices: ['notices.view', 'notices.manage'],
-  documents: ['documents.view', 'documents.manage'],
-  field: ['field-sales.view', 'field-sales.manage'],
-  projects: ['projects.view', 'projects.manage'],
-  audit: ['audit.view'],
-  backups: ['backups.view', 'backups.manage'],
-  settings: ['settings.view', 'settings.manage'],
-};
 
 export async function listPermissions(_req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: PERMISSIONS_BY_MODULE });

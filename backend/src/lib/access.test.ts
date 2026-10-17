@@ -122,14 +122,15 @@ describe('assertOwnOrPermission', () => {
   });
 
   it('accepts a list of permissions — any one of them is enough', async () => {
-    const { user } = await createUser({ roleSlug: 'hr_manager' }); // has leaves.approve
+    // hr_manager holds leaves.approve but not users.delete / roles.delete.
+    const { user } = await createUser({ roleSlug: 'hr_manager' });
     const authed = await User.findById(user._id).populate('role').orFail();
     const someoneElse = new Types.ObjectId();
     await expect(
-      assertOwnOrPermission(reqFor(authed), someoneElse, ['leaves.approve', 'leaves.update']),
+      assertOwnOrPermission(reqFor(authed), someoneElse, ['users.delete', 'leaves.approve']),
     ).resolves.toBeUndefined();
     await expect(
-      assertOwnOrPermission(reqFor(authed), someoneElse, ['overtime.view', 'leaves.update']),
+      assertOwnOrPermission(reqFor(authed), someoneElse, ['users.delete', 'roles.delete']),
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 

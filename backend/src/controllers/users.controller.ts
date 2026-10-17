@@ -7,6 +7,11 @@ import { ConflictError, NotFoundError } from '../lib/errors.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
+import {
+  assertCanAssignRole,
+  assertCanGrant,
+  permissionListSchema,
+} from '../lib/permission-grants.js';
 
 export const inviteUserSchema = z.object({
   email: z.string().email(),
@@ -20,7 +25,7 @@ export const updateUserSchema = z.object({
   lastName: z.string().min(1).optional(),
   avatar: z.string().url().optional(),
   roleId: z.string().optional(),
-  customPermissions: z.array(z.string()).optional(),
+  customPermissions: permissionListSchema.optional(),
 });
 
 export const updateStatusSchema = z.object({
@@ -66,6 +71,7 @@ export async function inviteUser(req: Request, res: Response): Promise<void> {
 
   const role = await Role.findById(body.roleId).exec();
   if (!role) throw new NotFoundError('Role not found');
+  assertCanAssignRole(req.user, role);
 
   const existing = await User.findOne({ email: body.email.toLowerCase() }).exec();
   if (existing) throw new ConflictError('User with this email already exists');
@@ -103,6 +109,26 @@ export async function getUser(req: Request, res: Response): Promise<void> {
 
 export async function updateUser(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateUserSchema>;
+
+  const target = await User.findById(String(req.params.id)).exec();
+  if (!target) throw new NotFoundError('User not found');
+
+  // Nobody can use this endpoint to give anyone (themselves included) more
+  // than they hold. Only what actually changes is checked, so editing a user
+  // who already holds more than the caller (e.g. fixing a name) still works.
+  if (body.customPermissions !== undefined) {
+    const current = new Set(target.customPermissions ?? []);
+    assertCanGrant(
+      req.user,
+      body.customPermissions.filter((permission) => !current.has(permission)),
+    );
+  }
+  if (body.roleId !== undefined) {
+    const role = await Role.findById(body.roleId).exec();
+    if (!role) throw new NotFoundError('Role not found');
+    if (String(role._id) !== String(target.role)) assertCanAssignRole(req.user, role);
+  }
+
   const update: Record<string, unknown> = {};
   if (body.firstName !== undefined) update.firstName = body.firstName;
   if (body.lastName !== undefined) update.lastName = body.lastName;

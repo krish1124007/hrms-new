@@ -20,7 +20,8 @@ import 'dotenv/config';
 import { z } from 'zod';
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { User } from '../models/user.model.js';
-import { Role, DEFAULT_ROLES } from '../models/role.model.js';
+import { Role } from '../models/role.model.js';
+import { ensureSystemRoles } from '../lib/seed-roles.js';
 import { validateNewPassword } from '../lib/password-security.js';
 
 const REQUIRED_VARS = ['ADMIN_EMAIL', 'ADMIN_PASSWORD', 'ADMIN_FIRST_NAME', 'ADMIN_LAST_NAME'] as const;
@@ -58,25 +59,6 @@ function readAdminInput(): AdminInput {
   };
 }
 
-/** Same upsert logic as src/scripts/seed.ts — keeps the built-in roles present and current. */
-async function ensureSystemRoles(): Promise<void> {
-  for (const r of DEFAULT_ROLES) {
-    const existing = await Role.findOne({ slug: r.slug }).exec();
-    if (!existing) {
-      await Role.create({ ...r });
-      console.log(`Created role "${r.slug}"`);
-      continue;
-    }
-    if (r.isSystem) {
-      existing.name = r.name;
-      existing.description = r.description;
-      existing.permissions = r.permissions;
-      existing.isSystem = true;
-      await existing.save();
-    }
-  }
-}
-
 async function seedAdmin(): Promise<void> {
   const input = readAdminInput();
 
@@ -88,7 +70,8 @@ async function seedAdmin(): Promise<void> {
 
   await connectDatabase();
   try {
-    await ensureSystemRoles();
+    const { created, refreshed } = await ensureSystemRoles();
+    console.log(`Roles: ${created} created, ${refreshed} refreshed`);
     const adminRole = await Role.findOne({ slug: 'admin' }).orFail().exec();
 
     const existing = await User.findOne({ email: input.email })

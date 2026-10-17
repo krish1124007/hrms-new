@@ -10,7 +10,8 @@
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { User } from '../models/user.model.js';
-import { Role, DEFAULT_ROLES } from '../models/role.model.js';
+import { Role } from '../models/role.model.js';
+import { ensureSystemRoles } from '../lib/seed-roles.js';
 import { Employee } from '../models/employee.model.js';
 
 const PASSWORD = 'Demo@123';
@@ -34,13 +35,7 @@ const SPECS: SeedSpec[] = [
 async function seedUsers(): Promise<void> {
   await connectDatabase();
 
-  for (const r of DEFAULT_ROLES) {
-    const existing = await Role.findOne({ slug: r.slug }).exec();
-    if (!existing) {
-      await Role.create({ ...r });
-      logger.info(`Created role "${r.slug}"`);
-    }
-  }
+  await ensureSystemRoles();
 
   const allRoles = await Role.find().exec();
   const roleBySlug = new Map(allRoles.map((r) => [r.slug, r]));

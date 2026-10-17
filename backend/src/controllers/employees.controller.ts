@@ -11,6 +11,7 @@ import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
+import { assertCanAssignRole } from '../lib/permission-grants.js';
 
 const addressSchema = z
   .object({
@@ -205,6 +206,9 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
       if (!role) role = await Role.findOne({ slug: 'member' }).exec();
     }
     if (!role) throw new ValidationAppError('No employee role found; specify roleId');
+    // An explicitly chosen role must not exceed what the caller holds (no
+    // minting an admin login through employee onboarding).
+    if (body.roleId) assertCanAssignRole(req.user, role);
 
     const existingUser = await User.findOne({ email }).setOptions({ withDeleted: true }).exec();
     if (existingUser) {
