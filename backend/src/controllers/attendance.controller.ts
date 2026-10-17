@@ -27,7 +27,14 @@ import { closeBusinessDay, DayCloseError, type DayCloseCounts } from '../service
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
-import { currentEmployeeId, hasPermission } from '../lib/access.js';
+import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { logger } from '../config/logger.js';
+import {
+  formatBusinessDate,
+  notifyRegularization,
+  notifyRegularizationDecision,
+  reportingManagerUserId,
+} from '../services/notification.service.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
 
@@ -899,29 +906,160 @@ export async function monthlyAttendance(req: Request, res: Response): Promise<vo
   res.json({ success: true, data: withHours });
 }
 
-export const regularizeSchema = z.object({
-  date: z.coerce.date(),
-  reason: z.string().min(3),
-});
+// ============================================================================
+// REGULARIZATION — ask for a day's punches to be corrected; an approver decides
+// ============================================================================
+
+export const regularizeSchema = z
+  .object({
+    date: z.coerce.date(),
+    reason: z.string().min(3),
+    // The punches being asked for. Nothing is written to the row until an
+    // approver agrees; a request without them is a reason-only request.
+    checkIn: z.coerce.date().optional(),
+    checkOut: z.coerce.date().optional(),
+  })
+  .refine((v) => !v.checkOut || v.checkIn, {
+    message: 'A check-out time needs a check-in time',
+    path: ['checkIn'],
+  });
+
+/** A regularized check-out is at most this long after the check-in: one shift, not a day. */
+const MAX_REQUESTED_SPAN_MS = 12 * 60 * 60 * 1000;
+
+const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own regularization request';
+const LEAVE_DAY_MESSAGE = 'Cancel the leave before regularizing this day';
+
+/**
+ * The punches a request asks for must be believable for `day` (a day label):
+ * the check-in on that business day, the check-out no earlier than it and
+ * within a shift of it (it may cross midnight), and neither in the future.
+ */
+function assertRequestedTimes(day: Date, checkIn: Date | undefined, checkOut: Date | undefined, now: Date): void {
+  if (!checkIn) return;
+  if (startOfBusinessDay(checkIn).getTime() !== day.getTime()) {
+    throw new ValidationAppError('The check-in must fall on the day being regularized');
+  }
+  if (checkOut) {
+    const span = checkOut.getTime() - checkIn.getTime();
+    if (span < 0) throw new ValidationAppError('The check-out cannot be before the check-in');
+    if (span > MAX_REQUESTED_SPAN_MS) throw new ValidationAppError('The check-out must be within 12 hours of the check-in');
+  }
+  if (checkIn.getTime() > now.getTime() || (checkOut && checkOut.getTime() > now.getTime())) {
+    throw new ValidationAppError('A requested time cannot be in the future');
+  }
+}
+
+/** Tell the employee's reporting manager about a new request. Never throws. */
+async function notifyManagerOfRegularization(emp: CurrentEmployee, att: IAttendance): Promise<void> {
+  try {
+    const managerUserId = await reportingManagerUserId(emp.doc);
+    if (!managerUserId) return;
+    await notifyRegularization(
+      managerUserId,
+      `${emp.doc.firstName} ${emp.doc.lastName}`,
+      formatBusinessDate(att.date),
+      { attendanceId: String(att._id) },
+    );
+  } catch (err) {
+    logger.warn({ err, attendanceId: String(att._id) }, 'attendance: regularization manager notification failed');
+  }
+}
+
+/** Tell the employee their request was decided. Never throws. */
+async function notifyEmployeeOfRegularizationDecision(
+  ownerUserId: Types.ObjectId | undefined,
+  att: IAttendance,
+  status: 'approved' | 'rejected',
+): Promise<void> {
+  if (!ownerUserId) return;
+  try {
+    await notifyRegularizationDecision(String(ownerUserId), {
+      date: att.date,
+      status,
+      attendanceId: String(att._id),
+    });
+  } catch (err) {
+    logger.warn({ err, attendanceId: String(att._id) }, 'attendance: regularization decision notification failed');
+  }
+}
 
 export async function requestRegularization(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof regularizeSchema>;
   const emp = await getCurrentEmployee();
   if (!emp) throw new ForbiddenError('No employee profile found for current user');
 
-  const date = startOfDay(body.date);
+  const now = new Date();
+  const date = startOfBusinessDay(body.date);
+  if (date.getTime() > startOfBusinessDay(now).getTime()) {
+    throw new ValidationAppError('Cannot regularize a future date');
+  }
+  assertRequestedTimes(date, body.checkIn, body.checkOut, now);
+
+  const pending = () => new AppError('A regularization request is already pending for this day', 409, 'REGULARIZATION_PENDING');
   let att = await Attendance.findOne({ employeeId: emp.id, date }).exec();
+  if (att?.leaveRequestId) throw new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
+  if (att?.regularization?.status === 'pending') throw pending();
   if (!att) {
     att = await Attendance.create({ employeeId: emp.id, date, status: 'absent' });
   }
-  att.regularization = {
-    requestedAt: new Date(),
-    reason: body.reason,
-    status: 'pending',
-  } as any;
-  att.isRegularized = false;
-  await att.save();
-  res.status(201).json({ success: true, data: att });
+
+  // Claim the row only if no request is pending *now*: two submits racing past
+  // the check above (a double tap) must not both land, nor both notify.
+  const claimed = await Attendance.findOneAndUpdate(
+    { _id: att._id, 'regularization.status': { $ne: 'pending' } },
+    {
+      $set: {
+        regularization: {
+          requestedAt: now,
+          reason: body.reason,
+          status: 'pending',
+          ...(body.checkIn ? { requestedCheckIn: body.checkIn } : {}),
+          ...(body.checkOut ? { requestedCheckOut: body.checkOut } : {}),
+        },
+      },
+    },
+    { new: true },
+  ).exec();
+  if (!claimed) throw pending();
+
+  void audit({
+    action: 'create',
+    entity: 'Attendance',
+    entityId: String(claimed._id),
+    after: {
+      regularization: 'pending',
+      date,
+      reason: body.reason,
+      requestedCheckIn: body.checkIn,
+      requestedCheckOut: body.checkOut,
+    },
+  });
+  await notifyManagerOfRegularization(emp, claimed);
+  res.status(201).json({ success: true, data: claimed });
+}
+
+export const listRegularizationsSchema = z.object({
+  status: z.enum(['pending', 'approved', 'rejected']).default('pending'),
+  // The global pagination guard already defaults `limit` to 20 and caps it at
+  // 100 before this runs; these say the same thing.
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+/** GET /api/v1/attendance/regularizations — the approval queue, newest request first. */
+export async function listRegularizations(req: Request, res: Response): Promise<void> {
+  const q = req.query as unknown as z.infer<typeof listRegularizationsSchema>;
+  const result = await Attendance.paginate(
+    { 'regularization.status': q.status },
+    {
+      page: q.page,
+      limit: q.limit,
+      sort: '-regularization.requestedAt -_id',
+      populate: { path: 'employeeId', select: 'firstName lastName employeeId department' },
+    },
+  );
+  res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export const approveRegularizationSchema = z.object({
@@ -933,17 +1071,64 @@ export async function decideRegularization(req: Request, res: Response): Promise
   const att = await Attendance.findById(String(req.params.id)).exec();
   if (!att) throw new NotFoundError('Attendance record not found');
   if (!att.regularization) throw new ValidationAppError('No regularization request on this record');
+  await assertNotSelfApproval(req, att.employeeId, SELF_APPROVAL_MESSAGE);
+  if (att.regularization.status !== 'pending') {
+    throw new ValidationAppError(`This regularization request was already ${att.regularization.status}`);
+  }
+  if (status === 'approved' && att.leaveRequestId) throw new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
+
+  const before = {
+    status: att.status,
+    checkIn: att.checkIn?.time,
+    checkOut: att.checkOut?.time,
+    totalWorkingHours: att.totalWorkingHours,
+  };
+  const owner = await Employee.findById(att.employeeId).setOptions({ withDeleted: true }).select('userId shift').exec();
+
+  const { requestedCheckIn, requestedCheckOut } = att.regularization;
+  if (status === 'approved' && requestedCheckIn) {
+    // The requested check-out, else the one already on the row, must not
+    // precede the check-in being written.
+    const closesAt = requestedCheckOut ?? att.checkOut?.time;
+    if (closesAt && closesAt.getTime() < requestedCheckIn.getTime()) {
+      throw new ValidationAppError('The requested check-in is after the check-out recorded for this day');
+    }
+    att.checkIn = { time: requestedCheckIn, method: 'manual', metadata: { regularized: true } };
+    if (requestedCheckOut) {
+      att.checkOut = { time: requestedCheckOut, method: 'manual', metadata: { regularized: true } };
+    }
+    att.source = 'regularization';
+    // Hours are only stored once the day is closed (see `correctRecord`).
+    if (att.checkOut?.time) att.totalWorkingHours = computeHours(att, att.checkOut.time);
+    // Re-judge the day from scratch with the owner's shift, as a self-service
+    // punch would: an `absent` auto row becomes present / late / half day.
+    const cfg = await AttendanceConfig.findOne({}).exec();
+    applyShiftRules(att, await resolveShift(owner), cfg);
+  }
+  // A reason-only request carries no times to write — approving it can only
+  // record the decision.
+  if (status === 'approved') att.isRegularized = true;
 
   const userId = getUserId();
   att.regularization.status = status;
   att.regularization.approvedAt = new Date();
   if (userId) att.regularization.approvedBy = new Types.ObjectId(userId);
-  if (status === 'approved') {
-    att.isRegularized = true;
-    att.status = 'present';
-  }
   await att.save();
-  void audit({ action: 'update', entity: 'Attendance', entityId: String(att._id), after: { regularization: status } });
+
+  void audit({
+    action: 'update',
+    entity: 'Attendance',
+    entityId: String(att._id),
+    before,
+    after: {
+      regularization: status,
+      status: att.status,
+      checkIn: att.checkIn?.time,
+      checkOut: att.checkOut?.time,
+      totalWorkingHours: att.totalWorkingHours,
+    },
+  });
+  await notifyEmployeeOfRegularizationDecision(owner?.userId, att, status);
   res.json({ success: true, data: att });
 }
 

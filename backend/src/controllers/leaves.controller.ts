@@ -32,6 +32,7 @@ import {
   leaveDecisionEmail,
   notifyLeaveDecision,
   notifyLeaveRequest,
+  reportingManagerUserId,
   type LeaveDecision,
 } from '../services/notification.service.js';
 import { sendMail } from '../services/email.service.js';
@@ -91,12 +92,11 @@ export function validateLeaveTypeRules(
 
 /** Tell the applicant's reporting manager about a new application. Never throws. */
 async function notifyReportingManager(emp: IEmployee, leaveType: ILeaveType, doc: ILeaveRequest): Promise<void> {
-  if (!emp.reportingManager) return;
   try {
-    const manager = await Employee.findById(emp.reportingManager).select('userId').lean().exec();
-    if (!manager?.userId || (emp.userId && manager.userId.equals(emp.userId))) return;
+    const managerUserId = await reportingManagerUserId(emp);
+    if (!managerUserId) return;
     await notifyLeaveRequest(
-      String(manager.userId),
+      managerUserId,
       `${emp.firstName} ${emp.lastName}`,
       leaveType.name,
       formatLeaveDates(doc.startDate, doc.endDate),

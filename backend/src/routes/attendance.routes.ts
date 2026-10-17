@@ -85,6 +85,12 @@ router.post(
   validate(ctrl.regularizeSchema),
   asyncHandler(ctrl.requestRegularization),
 );
+router.get(
+  '/regularizations',
+  requirePermission('attendance.approve'),
+  validate(ctrl.listRegularizationsSchema, 'query'),
+  asyncHandler(ctrl.listRegularizations),
+);
 router.patch(
   '/regularize/:id',
   requirePermission('attendance.approve'),

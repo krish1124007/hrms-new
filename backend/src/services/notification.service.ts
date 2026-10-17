@@ -4,7 +4,9 @@
  * Creates in-app notifications and provides convenience helpers
  * for common cross-module notification scenarios.
  */
+import type { Types } from 'mongoose';
 import { Notification, type NotificationType } from '../models/notification.model.js';
+import { Employee, type IEmployee } from '../models/employee.model.js';
 import { logger } from '../config/logger.js';
 import { getIO } from '../sockets/io-registry.js';
 import { BUSINESS_TZ } from '../lib/business-day.js';
@@ -58,6 +60,26 @@ export async function createNotification(params: CreateNotificationParams): Prom
   }
 }
 
+/**
+ * The user to tell about `emp`'s request: their reporting manager's login.
+ * Null when there is no manager, the manager has no login, or the manager is
+ * the employee themselves (nobody approves their own request). Never throws:
+ * a failed lookup is logged and means "nobody to tell".
+ */
+export async function reportingManagerUserId(
+  emp: Pick<IEmployee, 'reportingManager'> & { userId?: Types.ObjectId | null },
+): Promise<string | null> {
+  if (!emp.reportingManager) return null;
+  try {
+    const manager = await Employee.findById(emp.reportingManager).select('userId').lean().exec();
+    if (!manager?.userId || (emp.userId && manager.userId.equals(emp.userId))) return null;
+    return String(manager.userId);
+  } catch (err) {
+    logger.warn({ err, reportingManager: String(emp.reportingManager) }, 'notification: reporting manager lookup failed');
+    return null;
+  }
+}
+
 /* ─────────────── Trigger Helpers ─────────────── */
 
 const leaveDateFormat = new Intl.DateTimeFormat('en-IN', {
@@ -67,10 +89,15 @@ const leaveDateFormat = new Intl.DateTimeFormat('en-IN', {
   year: 'numeric',
 });
 
+/** "19 Oct 2026" — a day label or an instant, in the business timezone. */
+export function formatBusinessDate(date: Date): string {
+  return leaveDateFormat.format(date);
+}
+
 /** "19 Oct 2026", or "23 Oct 2026 – 27 Oct 2026" for a range (business timezone). */
 export function formatLeaveDates(startDate: Date, endDate: Date): string {
-  const from = leaveDateFormat.format(startDate);
-  const to = leaveDateFormat.format(endDate);
+  const from = formatBusinessDate(startDate);
+  const to = formatBusinessDate(endDate);
   return from === to ? from : `${from} – ${to}`;
 }
 
@@ -121,6 +148,53 @@ export async function notifyLeaveDecision(userId: string, d: LeaveDecision): Pro
       dates: formatLeaveDates(d.startDate, d.endDate),
       ...(d.reason ? { reason: d.reason } : {}),
       ...(d.leaveRequestId ? { leaveRequestId: d.leaveRequestId } : {}),
+    },
+  });
+}
+
+/** Tell a manager an employee asked for a day's attendance to be corrected. */
+export async function notifyRegularization(
+  managerUserId: string,
+  employeeName: string,
+  dateLabel: string,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  await createNotification({
+    userId: managerUserId,
+    type: 'regularization_request',
+    title: 'New Regularization Request',
+    message: `${employeeName} has requested attendance regularization for ${dateLabel}.`,
+    link: '/attendance/regularizations',
+    metadata: { employeeName, date: dateLabel, ...metadata },
+  });
+}
+
+export interface RegularizationDecision {
+  /** The day the request was about (a day label). */
+  date: Date;
+  status: 'approved' | 'rejected';
+  reason?: string;
+  attendanceId?: string;
+}
+
+/** Tell an employee their regularization request was approved or rejected. */
+export async function notifyRegularizationDecision(
+  employeeUserId: string,
+  d: RegularizationDecision,
+): Promise<void> {
+  const date = formatBusinessDate(d.date);
+  const sentence = `Your attendance regularization for ${date} was ${d.status}.`;
+  await createNotification({
+    userId: employeeUserId,
+    type: 'regularization_decision',
+    title: d.status === 'approved' ? 'Regularization approved' : 'Regularization rejected',
+    message: d.reason ? `${sentence} Reason: ${d.reason}` : sentence,
+    link: '/attendance',
+    metadata: {
+      status: d.status,
+      date,
+      ...(d.reason ? { reason: d.reason } : {}),
+      ...(d.attendanceId ? { attendanceId: d.attendanceId } : {}),
     },
   });
 }
