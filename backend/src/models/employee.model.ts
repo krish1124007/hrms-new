@@ -40,7 +40,7 @@ export interface ISalary {
 export interface IEmployeeStatutory {
   /** Whether ESI applies to this employee (decided against the wage ceiling). */
   esiEligible?: boolean;
-  /** The ESI contribution period (e.g. `2026-04`) `esiEligible` was last decided for. */
+  /** The ESI contribution period `esiEligible` was decided for: `YYYY-H1` (Apr–Sep) or `YYYY-H2` (Oct–Mar), named for the year it began (Feb 2027 → `2026-H2`). */
   esiPeriodKey?: string;
 }
 

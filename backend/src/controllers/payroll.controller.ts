@@ -39,47 +39,22 @@ import {
 } from '../services/payslip-pdf.service.js';
 import { deleteFile } from '../lib/local-storage.js';
 import { logger } from '../config/logger.js';
+import {
+  esiEligibility,
+  esiEmployee,
+  esiEmployer,
+  esiPeriodKey,
+  pfEmployee,
+  pfEmployer,
+  professionalTax,
+  ptStateCodeOf,
+} from '../lib/statutory.js';
 
 /* ──────────────────────────────────────────────────────────── */
 /* Helpers                                                       */
 /* ──────────────────────────────────────────────────────────── */
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
-
-/** Professional Tax — flat ₹200 per the seeded component. */
-function professionalTax(grossMonthly: number): number {
-  if (grossMonthly <= 7500) return 0;
-  if (grossMonthly <= 10_000) return 175;
-  return 200;
-}
-
-/** Employee PF: 12% of min(basic, 15,000). NOT prorated by attendance — matches the reference payslip
- *  where Khyati's prorated basic was ₹19,434 yet PF still showed flat ₹1,800. */
-function pfEmployee(fullMonthBasic: number): number {
-  return round2(Math.min(fullMonthBasic, 15_000) * 0.12);
-}
-
-/** Employer PF: 12% of min(basic, 15,000) — matches the salary master sheet
- *  ("Employer PF" column = 1,800 at the cap). Caps at ₹1,800.
- *
- *  Note: regulators allow up to 13% (12% EPS+EPF + 0.5% EDLI + 0.5% admin).
- *  The Group's policy is 12% only — change here if EDLI/admin need to be
- *  bundled in future. */
-function pfEmployer(fullMonthBasic: number): number {
-  return round2(Math.min(fullMonthBasic, 15_000) * 0.12);
-}
-
-/** ESIC eligibility threshold is gross ≤ ₹21,000/month (inclusive). Above
- *  that, neither side contributes. */
-function esicEmployee(gross: number): number {
-  if (gross > 21_000) return 0;
-  return round2(gross * 0.0075);
-}
-
-function esicEmployer(gross: number): number {
-  if (gross > 21_000) return 0;
-  return round2(gross * 0.0325);
-}
 
 function daysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
@@ -424,11 +399,13 @@ async function computeForEmployee(
   const proRate = (val: number): number =>
     monthDays > 0 ? round2((val * daysPaid) / monthDays) : 0;
 
+  const earnedBasic = proRate(basic);
+  const earnedDa = da > 0 ? proRate(da) : 0;
   const earnings: IPayrollLine[] = [
-    { name: 'Basic', amount: proRate(basic) },
+    { name: 'Basic', amount: earnedBasic },
     { name: 'HRA', amount: proRate(hra) },
   ];
-  if (da > 0) earnings.push({ name: 'DA', amount: proRate(da) });
+  if (da > 0) earnings.push({ name: 'DA', amount: earnedDa });
   earnings.push({ name: 'Other Allowance', amount: proRate(otherAllowance) });
 
   // Auto-compute overtime from APPROVED OvertimeRequest rows for the period.
@@ -458,13 +435,29 @@ async function computeForEmployee(
   const grossEarnings = round2(earnings.reduce((s, l) => s + l.amount, 0));
   const lopAmount = round2((fullMonthGross / monthDays) * lopDaysFinal);
 
-  // Statutory deductions
-  // PF Employee = 12% × min(full-month basic, 15,000) — flat, not prorated.
-  // This matches the reference: Khyati's prorated basic was ₹19,434 but PF
-  // showed ₹1,800 (the cap). Same rule for PF Employer at 13%.
-  const pfEmp = pfEmployee(basic);
-  const esicEmp = esicEmployee(grossEarnings);
-  const pt = professionalTax(grossEarnings);
+  // Statutory deductions (rules and rates live in lib/statutory.ts).
+  // PF is on what was EARNED: the pro-rated basic + DA, capped at the wage
+  // ceiling. ESI is on the earned gross; whether it applies is decided once
+  // per Apr–Sep / Oct–Mar period from the full-month gross and then kept.
+  const pfWage = round2(earnedBasic + earnedDa);
+  const pfEmp = pfEmployee(pfWage);
+
+  const periodKey = esiPeriodKey(new Date(Date.UTC(cycle.year, cycle.month - 1, 1)));
+  const storedGross = Number(employee.salary?.grossSalary ?? 0);
+  const esi = esiEligibility(employee, storedGross > 0 ? storedGross : fullMonthGross, periodKey);
+  if (esi.persist) {
+    const statutory = { esiEligible: esi.eligible, esiPeriodKey: periodKey };
+    employee.statutory = statutory;
+    await Employee.updateOne({ _id: employee._id }, { $set: { statutory } }).exec();
+  }
+  const esicEmp = esiEmployee(grossEarnings, esi.eligible);
+
+  const pt = professionalTax({
+    stateCode: ptStateCodeOf(employee),
+    monthlyGross: grossEarnings,
+    month: cycle.month,
+    gender: employee.gender,
+  });
 
   const deductions: IPayrollLine[] = [];
   if (pt > 0) deductions.push({ name: 'P.Tax', amount: pt, statutoryType: 'pt' });
@@ -486,8 +479,8 @@ async function computeForEmployee(
   if (lateDeduction > 0) deductions.push({ name: 'Late Deduction', amount: lateDeduction });
 
   // Employer contributions
-  const pfErp = pfEmployer(basic);
-  const esicErp = esicEmployer(grossEarnings);
+  const pfErp = pfEmployer(pfWage);
+  const esicErp = esiEmployer(grossEarnings, esi.eligible);
   const employerContributions: IPayrollLine[] = [];
   employerContributions.push({ name: 'PF Employer', amount: pfErp, statutoryType: 'pf' });
   employerContributions.push({ name: 'ESI Employer', amount: esicErp, statutoryType: 'esi' });
