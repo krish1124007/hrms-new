@@ -13,7 +13,7 @@
     "test:watch": "vitest --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "i18n:check": "tsx scripts/check-translations.ts",
-    "build:analyze": "ANALYZE=1 tsc -b && ANALYZE=1 vite build",
+    "build:analyze": "ANALYZE=1 tsc -b && ANALYZE=1 vite build && rm -f dist/assets/*.map",
     "clean": "rm -rf dist"
   },
   "engines": {

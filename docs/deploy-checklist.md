@@ -5,6 +5,10 @@ For the production server `hrms.ddipl.org` (`31.97.221.226`): Ubuntu, nginx, pm2
 localhost. The server deploys with `git pull`, so the built output in `backend/dist` and
 `frontend/dist` is committed and nothing is built on the server.
 
+**Prerequisite:** the `production-hardening` branch must be merged into the branch the server
+tracks (check with `git -C /var/www/hrms-new branch --show-current`, normally `main`) and pushed;
+the server's `git pull` only deploys what that branch contains.
+
 > **Read this before you restart anything.** In production the API now **refuses to start**
 > (`No mail transport configured (SMTP_HOST or RESEND_API_KEY)…`, exit code 1) unless `.env`
 > contains a mail transport, or the explicit opt-out `ALLOW_NO_MAIL=true`. pm2 would then loop
@@ -31,17 +35,27 @@ left in that folder is loaded as a second site):
 cp /etc/nginx/sites-enabled/hrms /root/hrms.nginx.$(date +%F).bak
 ```
 
-1. **Stop serving `/uploads/`.** Delete the existing block
+1. **Stop serving `/uploads/`.** Find where uploads are served:
 
-   ```nginx
-   location /uploads/ { alias /var/www/hrms-new/backend/uploads/; }
+   ```bash
+   sudo nginx -T | grep -n 'uploads'
    ```
 
-   and put this in its place:
+   This lists every line mentioning `uploads` across all nginx config files (`sudo grep -Rn uploads
+   /etc/nginx/` also shows the file name). The one to replace is the `location /uploads/` block
+   that has an `alias` ending in `backend/uploads/`; it is expected in `/etc/nginx/sites-enabled/hrms`.
+   Replace the whole block with:
 
    ```nginx
-   location /uploads/ { return 404; }
+   location ^~ /uploads/ { return 404; }
    ```
+
+   `^~` makes this prefix match win over any regex `location` (for example a static-file rule like
+   `location ~* \.(png|jpg|pdf)$`), which nginx would otherwise try first and could serve
+   `/uploads/...` files through.
+
+   If the file also has a **port-80 server block** that serves `/uploads/` itself (a block that
+   only redirects to https needs nothing), make the same change there.
 
    Uploaded files (payslips, documents) are no longer public. The API serves them through
    short-lived signed links at `/api/v1/files/...`.
@@ -97,6 +111,16 @@ from outside even if ufw is off. MongoDB (27017) and Redis (6379) stay closed.
 ## 3. `.env` additions (`/var/www/hrms-new/backend/.env`)
 
 Do this **before** section 4's restart. Never commit `.env`.
+
+First confirm the server runs in production mode:
+
+```bash
+cd /var/www/hrms-new && grep -E '^NODE_ENV=production' backend/.env
+```
+
+It must print the line; if it prints nothing, add `NODE_ENV=production` to `backend/.env`. The mail
+boot guard, the "no automatic index creation" setting (section 4) and the other production-only
+hardening all key off it, so without it the API quietly runs in development mode.
 
 **Required**
 
@@ -166,6 +190,17 @@ pm2 restart all
 - Check the log: `pm2 logs backend --lines 30 --nostream` should show
   `API listening on http://127.0.0.1:4000`. If it shows the "No mail transport" line, go back to section 3.
 
+> **If something fails**
+>
+> - **A command errors out part-way** (a network drop during `git pull` or `npm ci`): run that
+>   same command again. `npm ci` deletes `node_modules` before it reinstalls, so a failed run
+>   leaves it empty or half-filled until a run completes; just repeat it.
+> - **`pm2 list` shows `errored` (or the restart count keeps climbing):** read
+>   `pm2 logs backend --lines 50`. A "No mail transport configured" line means section 3 was
+>   skipped: add the mail settings to `.env`, then `pm2 restart all`.
+> - **Cannot fix it quickly:** go to section 10 (Rollback) and restore the previous version, then
+>   investigate. A broken site costs more than a delayed deploy.
+
 ## 5. Log rotation
 
 ```bash
@@ -229,6 +264,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://hrms.ddipl.org/api/v1/a
 # uploads and old backups are no longer public → 404
 curl -I https://hrms.ddipl.org/uploads/backups/
 curl -s -o /dev/null -w '%{http_code}\n' https://hrms.ddipl.org/uploads/backups/
+curl -s -o /dev/null -w '%{http_code}\n' http://hrms.ddipl.org/uploads/backups/   # 301 (redirect to https) or 404
 
 # the API port is not reachable from outside → "refused" (or a timeout once ufw is on)
 curl -s -m 5 http://31.97.221.226:4000/ || echo refused
@@ -272,7 +308,36 @@ cd backend && npm ci --omit=dev      # only if package-lock.json also changed
 pm2 restart all
 ```
 
-This restores the code, not the data. The seed's role refresh and permission clean-up are not
-undone (harmless: the stripped names were never checked), and relocated backups stay in `BACKUP_DIR`.
-To undo nginx: `cp /root/hrms.nginx.<date>.bak /etc/nginx/sites-enabled/hrms && nginx -t && systemctl reload nginx`.
-The old code does not need the new `.env` entries, and extra ones are ignored, so `.env` can stay as is.
+Also restore the nginx backup from section 1 (command at the end of this section). The old frontend links to files as
+`/uploads/...`; the new nginx answers 404 for those, so uploaded files and images would not load.
+
+**Warning: the rollback leaves the server in a half-changed state.** The files are now staged
+changes in git, and the next `git pull` will refuse ("Your local changes … would be overwritten").
+Before you pull again (to deploy a fix), undo the rollback first. Plain `git checkout HEAD -- …` is
+not enough, because it leaves the old files that the newer version had deleted (the frontend
+source maps among them) on disk. Use all three:
+
+```bash
+cd /var/www/hrms-new
+git reset -q HEAD -- backend/dist frontend/dist
+git checkout -- backend/dist frontend/dist
+git clean -fdq backend/dist frontend/dist
+git status --short                   # should print nothing
+```
+
+What a rollback gives back, and what it does not:
+
+- **Data is not rolled back.** The seed's role refresh and permission clean-up stay (harmless: the
+  stripped names were never checked), and relocated backups stay in `BACKUP_DIR`.
+- **Source maps are public again.** The old frontend ships its `.map` files, and nginx serves them
+  from `frontend/dist`. If you restore the nginx backup, keep or re-add the optional
+  `location ~* \.map$ { return 404; }` from section 1 until you roll forward.
+- **Port 4000 may be open again.** The old API ignores `HOST` and listens on all interfaces. Keep
+  `ufw` active (section 2) so the port stays closed.
+- **`.env` can stay as is.** The old code does not need the new entries, and extra ones are ignored.
+
+To restore nginx:
+
+```bash
+cp /root/hrms.nginx.<date>.bak /etc/nginx/sites-enabled/hrms && nginx -t && systemctl reload nginx
+```
