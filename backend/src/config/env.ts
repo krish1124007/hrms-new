@@ -68,6 +68,10 @@ const envSchema = z.object({
 
   COMPANY_NAME: z.string().default('Company'),
   COMPANY_EMAIL: z.string().optional(),
+  /**
+   * The company's state: the seller state on GST invoices, and the Professional
+   * Tax state of an employee with no state on file (payroll).
+   */
   COMPANY_STATE_CODE: z.string().default('MH'),
   COMPANY_GSTIN: z.string().default('27AAAAA0000A1Z5'),
   GST_RATE_PERCENT: z.coerce.number().default(18),

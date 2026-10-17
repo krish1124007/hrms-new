@@ -163,6 +163,21 @@ describe('ESI — eligibility is fixed for the contribution period', () => {
     expect(await statutoryOf(emp)).toMatchObject({ esiEligible: false, esiPeriodKey: '2026-H2' });
   });
 
+  it('processing an earlier period does not overwrite the later period already stored', async () => {
+    const hr = await hrAuth();
+    const emp = await employee(salaryOf(30000));
+    await Employee.updateOne({ _id: emp._id }, { $set: { statutory: { esiEligible: true, esiPeriodKey: '2026-H2' } } });
+    const stored = await statutoryOf(emp);
+    expect(stored).toMatchObject({ esiEligible: true, esiPeriodKey: '2026-H2' });
+
+    // September 2026 is 2026-H1: decided from the 30,000 gross (out), not from the stored 2026-H2 (in).
+    const record = await recordOf(await processMonth(hr, 2026, 9), emp);
+
+    expect(lineOf(record.deductions, 'esi')!.amount).toBe(0);
+    expect(lineOf(record.employerContributions, 'esi')!.amount).toBe(0);
+    expect(await statutoryOf(emp)).toEqual(stored);
+  });
+
   it('re-processing a cycle keeps the period decision', async () => {
     const hr = await hrAuth();
     const emp = await employee(salaryOf(20500));
@@ -290,15 +305,24 @@ describe('Professional Tax', () => {
     expect(lineOf((await recordOf(id, inACity)).deductions, 'pt')!.amount).toBe(200); // falls back to the address (GJ)
   });
 
-  it('no state on file, or one with no table, pays none', async () => {
+  it('no state on file falls back to the company state (Maharashtra): 30,000 in May → 200', async () => {
     const hr = await hrAuth();
-    const nowhere = await employee(salaryOf(50000));
+    const nowhere = await employee(salaryOf(30000));
+
+    const record = await recordOf(await processMonth(hr, 2026, 5), nowhere);
+
+    expect(lineOf(record.deductions, 'pt')).toEqual(
+      expect.objectContaining({ name: 'P.Tax', amount: 200, statutoryType: 'pt' }),
+    );
+  });
+
+  it('a state with no table pays none — it is not put in the company state', async () => {
+    const hr = await hrAuth();
     const delhi = await employee(salaryOf(50000), { state: 'Delhi' });
 
-    const id = await processMonth(hr, 2026, 10);
+    const record = await recordOf(await processMonth(hr, 2026, 10), delhi);
 
-    expect(lineOf((await recordOf(id, nowhere)).deductions, 'pt')).toBeUndefined();
-    expect(lineOf((await recordOf(id, delhi)).deductions, 'pt')).toBeUndefined();
+    expect(lineOf(record.deductions, 'pt')).toBeUndefined();
   });
 });
 

@@ -92,7 +92,10 @@ export interface EsiEligibility {
  * Whether ESI applies to the employee for the contribution period `periodKey`.
  * A decision already saved for that period is reused — whatever the gross is
  * now. Otherwise it is decided on `fullMonthGross` (inclusive of the ceiling)
- * and `persist` tells the caller to save it.
+ * and `persist` tells the caller to save it — unless the saved decision is for
+ * a LATER period (an earlier month processed again): that run is decided from
+ * the gross but must not overwrite the newer record, so `persist` is false.
+ * (Plain string comparison orders `YYYY-H1` / `YYYY-H2` correctly.)
  */
 export function esiEligibility(
   employee: { statutory?: IEmployeeStatutory | null },
@@ -104,7 +107,11 @@ export function esiEligibility(
   if (saved?.esiPeriodKey === periodKey && typeof saved.esiEligible === 'boolean') {
     return { eligible: saved.esiEligible, persist: false };
   }
-  return { eligible: fullMonthGross <= cfg.ESI_WAGE_CEILING, persist: true };
+  const savedKey = saved?.esiPeriodKey;
+  return {
+    eligible: fullMonthGross <= cfg.ESI_WAGE_CEILING,
+    persist: !savedKey || periodKey >= savedKey,
+  };
 }
 
 /**
@@ -128,13 +135,25 @@ export function esiEmployer(earnedGross: number, eligible: boolean, cfg: Statuto
 
 /**
  * The PT state code of an employee: the state their work location names, else
- * their current address's state. `undefined` when neither names a state we
- * hold a table for (a city in the work location, no address, another state) —
- * such an employee pays no Professional Tax.
+ * their current address's state, else — when they have no state on file at
+ * all — the company's (`COMPANY_STATE_CODE`, Maharashtra by default, which is
+ * where the legacy flat table came from). `undefined` (no Professional Tax)
+ * when the state they name has no table here ("Delhi"), or the company's has
+ * none. A work location that is not a state (a city, "Head office") says
+ * nothing about the state either way.
  */
-export function ptStateCodeOf(employee: {
-  workLocation?: string | null;
-  address?: { current?: { state?: string | null } | null } | null;
-}): string | undefined {
-  return resolvePtStateCode(employee.workLocation) ?? resolvePtStateCode(employee.address?.current?.state);
+export function ptStateCodeOf(
+  employee: {
+    workLocation?: string | null;
+    address?: { current?: { state?: string | null } | null } | null;
+  },
+  companyStateCode: string | null | undefined = env.COMPANY_STATE_CODE,
+): string | undefined {
+  const fromLocation = resolvePtStateCode(employee.workLocation);
+  if (fromLocation) return fromLocation;
+
+  const addressState = employee.address?.current?.state;
+  if (addressState?.trim()) return resolvePtStateCode(addressState); // named, so not the company's
+
+  return resolvePtStateCode(companyStateCode);
 }

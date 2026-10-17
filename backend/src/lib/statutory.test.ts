@@ -14,6 +14,7 @@ import {
   pfEmployee,
   pfEmployer,
   professionalTax,
+  ptStateCodeOf,
 } from './statutory.js';
 
 describe('configuration defaults', () => {
@@ -101,6 +102,21 @@ describe('esiEligibility', () => {
       eligible: true,
       persist: true,
     });
+  });
+
+  it('decides an older period from the gross but never asks to overwrite a later stored one', () => {
+    const employee = { statutory: { esiEligible: true, esiPeriodKey: '2026-H2' } };
+    // September 2026 is 2026-H1, before the stored 2026-H2: decided on the gross (30,000 → out) ...
+    expect(esiEligibility(employee, 30000, '2026-H1', env)).toEqual({ eligible: false, persist: false });
+    expect(esiEligibility(employee, 18000, '2026-H1', env)).toEqual({ eligible: true, persist: false });
+    // ... and an even older year is no different.
+    expect(esiEligibility(employee, 18000, '2025-H2', env)).toEqual({ eligible: true, persist: false });
+  });
+
+  it('asks to persist a decision for a period that is later than the stored one', () => {
+    const employee = { statutory: { esiEligible: false, esiPeriodKey: '2026-H1' } };
+    expect(esiEligibility(employee, 18000, '2026-H2', env)).toEqual({ eligible: true, persist: true });
+    expect(esiEligibility(employee, 18000, '2027-H1', env)).toEqual({ eligible: true, persist: true });
   });
 
   it('decides again when the stored period has no decision in it', () => {
@@ -294,5 +310,31 @@ describe('resolvePtStateCode', () => {
     expect(resolvePtStateCode('   ')).toBeUndefined();
     expect(resolvePtStateCode(undefined)).toBeUndefined();
     expect(resolvePtStateCode(null)).toBeUndefined();
+  });
+});
+
+describe('ptStateCodeOf', () => {
+  it('prefers a work location that names a state, then the current address', () => {
+    expect(ptStateCodeOf({ workLocation: 'Tamil Nadu', address: { current: { state: 'Maharashtra' } } })).toBe('TN');
+    expect(ptStateCodeOf({ workLocation: 'Ahmedabad office', address: { current: { state: 'Gujarat' } } })).toBe('GJ');
+    expect(ptStateCodeOf({ address: { current: { state: 'karnataka' } } })).toBe('KA');
+  });
+
+  it('falls back to the company state when the employee has no state on file', () => {
+    expect(ptStateCodeOf({})).toBe('MH'); // the env default
+    expect(ptStateCodeOf({ address: { current: {} } })).toBe('MH');
+    expect(ptStateCodeOf({ workLocation: 'Head office', address: { current: { state: '  ' } } })).toBe('MH');
+    expect(ptStateCodeOf({}, 'GJ')).toBe('GJ');
+    expect(ptStateCodeOf({}, 'Gujarat')).toBe('GJ');
+  });
+
+  it('does not put an employee who names another state in the company state', () => {
+    expect(ptStateCodeOf({ address: { current: { state: 'Delhi' } } })).toBeUndefined();
+    expect(ptStateCodeOf({ workLocation: 'Pune', address: { current: { state: 'Delhi' } } })).toBeUndefined();
+  });
+
+  it('an unknown company state pays nothing', () => {
+    expect(ptStateCodeOf({}, 'XX')).toBeUndefined();
+    expect(ptStateCodeOf({}, '')).toBeUndefined();
   });
 });
