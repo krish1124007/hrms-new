@@ -80,4 +80,19 @@ describe('backupsApi.download', () => {
     await expect(backupsApi.download({ _id: 'b1', downloadUrl })).rejects.toThrow(/origin/i);
     expect(adapter).not.toHaveBeenCalled();
   });
+
+  // Same-origin paths that, once the base path is stripped, would leave a
+  // protocol-relative `//host/...` that axios treats as absolute.
+  it.each([
+    ['a doubled slash after the base path', '/api/v1//elsewhere.example/x'],
+    ['a backslash after the base path', '/api/v1/\\elsewhere.example/x'],
+    ['a doubled slash in an absolute same-origin URL', `${api.defaults.baseURL}//elsewhere.example/x`],
+  ])('refuses %s without sending a request', async (_label, downloadUrl) => {
+    api.defaults.adapter = adapter as unknown as AxiosAdapter;
+
+    await expect(backupsApi.download({ _id: 'b1', downloadUrl })).rejects.toThrow(
+      /refusing to download a backup/i,
+    );
+    expect(adapter).not.toHaveBeenCalled();
+  });
 });

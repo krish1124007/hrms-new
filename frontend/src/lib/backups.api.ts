@@ -36,22 +36,40 @@ export interface BackupDownload {
   filename: string;
 }
 
+/** What axios treats as absolute — and therefore sends without the `baseURL`. */
+const AXIOS_ABSOLUTE_URL = /^([a-z][a-z\d+\-.]*:)?\/\//i;
+
 /**
  * Turn a server-supplied `downloadUrl` into something the axios instance can
  * request. The instance attaches the Bearer token, so only a relative path or
  * a URL on the API's own origin is followed — anything else throws before a
  * request is made. A path under the `baseURL` path (e.g. `/api/v1/...`) is
  * made relative to it so the `/api/v1` segment is not doubled.
+ *
+ * Backslashes and empty path segments (`//`) are refused outright: the URL
+ * parser reads `\` as `/`, and once the base path is stripped,
+ * `/api/v1//host/x` would leave `//host/x`, which axios sends to `host`.
  */
 function toApiRequestUrl(downloadUrl: string): string {
+  if (downloadUrl.includes('\\')) {
+    throw new Error('Refusing to download a backup from a malformed URL');
+  }
   const base = new URL(api.defaults.baseURL ?? '/', window.location.origin);
   const target = new URL(downloadUrl, base);
   if (target.origin !== base.origin) {
     throw new Error('Refusing to download a backup from another origin');
   }
+  if (target.pathname.includes('//')) {
+    throw new Error('Refusing to download a backup from a malformed URL');
+  }
   const basePath = base.pathname.replace(/\/+$/, '');
   if (basePath && target.pathname.startsWith(`${basePath}/`)) {
-    return target.pathname.slice(basePath.length) + target.search;
+    const relative = target.pathname.slice(basePath.length) + target.search;
+    // Belt and braces: never hand axios something it would read as absolute.
+    if (AXIOS_ABSOLUTE_URL.test(relative)) {
+      throw new Error('Refusing to download a backup from a malformed URL');
+    }
+    return relative;
   }
   return target.toString();
 }
