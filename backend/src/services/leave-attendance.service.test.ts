@@ -10,6 +10,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Types } from 'mongoose';
 import {
   availableBalance,
+  chargeLeaveBalance,
+  ensureLeaveBalance,
   stampLeaveDays,
   unstampLeaveDays,
 } from './leave-attendance.service.js';
@@ -323,5 +325,64 @@ describe('availableBalance', () => {
       remaining: 0,
       pending: 0,
     });
+  });
+});
+
+describe('ensureLeaveBalance', () => {
+  const keyOf = (emp: IEmployee, type: ILeaveType, year = 2026) => ({
+    employeeId: emp._id as Types.ObjectId,
+    leaveTypeId: type._id as Types.ObjectId,
+    year,
+  });
+  const balance = (emp: IEmployee, type: ILeaveType, year = 2026) =>
+    LeaveBalance.findOne(keyOf(emp, type, year)).lean().exec();
+
+  it('creates the row with the pro-rated allocation for a mid-year joiner', async () => {
+    const emp = await makeEmployee({ joiningDate: new Date('2026-07-15') });
+    const type = await makeType(true);
+
+    await ensureLeaveBalance(keyOf(emp, type), type);
+
+    expect((await balance(emp, type))?.allocated).toBe(6);
+  });
+
+  it('allocates the full quota to someone who joined before the year', async () => {
+    const emp = await makeEmployee({ joiningDate: new Date('2025-07-15') });
+    const type = await makeType(true);
+
+    await ensureLeaveBalance(keyOf(emp, type), type);
+
+    expect((await balance(emp, type))?.allocated).toBe(12);
+  });
+
+  it('leaves an existing row alone', async () => {
+    const emp = await makeEmployee({ joiningDate: new Date('2026-07-15') });
+    const type = await makeType(true);
+    const created = await LeaveBalance.create({ ...keyOf(emp, type), allocated: 20, used: 3 });
+
+    await ensureLeaveBalance(keyOf(emp, type), type);
+
+    const after = await balance(emp, type);
+    expect(after).toMatchObject({ allocated: 20, used: 3 });
+    expect(after?.updatedAt).toEqual(created.updatedAt);
+  });
+
+  it('still creates a (zero-allocation) row for an unpaid type, which only records used', async () => {
+    const emp = await makeEmployee({ joiningDate: new Date('2026-07-15') });
+    const type = await makeType(false);
+
+    await ensureLeaveBalance(keyOf(emp, type), type);
+
+    expect(await balance(emp, type)).toMatchObject({ allocated: 0, used: 0 });
+  });
+
+  it("charging approved leave with no balance row yet uses the pro-rated figure, not the year's quota", async () => {
+    const emp = await makeEmployee({ joiningDate: new Date('2026-07-15') });
+    const type = await makeType(true);
+    const leave = await approvedLeave(emp, type, '2026-10-12', '2026-10-13', { days: 2 });
+
+    await chargeLeaveBalance(leave, type);
+
+    expect(await balance(emp, type)).toMatchObject({ allocated: 6, used: 2 });
   });
 });

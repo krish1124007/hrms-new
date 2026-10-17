@@ -25,7 +25,7 @@
  */
 import { Types } from 'mongoose';
 import { Attendance, type AttendanceStatus } from '../models/attendance.model.js';
-import type { IEmployee } from '../models/employee.model.js';
+import { Employee, type IEmployee } from '../models/employee.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
 import { LeaveRequest, type ILeaveRequest } from '../models/leave-request.model.js';
 import type { ILeaveType } from '../models/leave-type.model.js';
@@ -39,6 +39,7 @@ import {
   startOfBusinessDay,
 } from '../lib/business-day.js';
 import { AppError } from '../lib/errors.js';
+import { isDuplicateKey, proRataAllocation } from '../lib/leave-allocation.js';
 import { getWeekOffRule } from './week-off.service.js';
 
 // ---------- Leave types ----------
@@ -106,9 +107,6 @@ export async function leaveWorkingDays(start: Date, end: Date, employee: LeaveEm
 }
 
 // ---------- Stamping ----------
-
-const isDuplicateKey = (err: unknown): boolean =>
-  (err as { code?: number } | null)?.code === 11000;
 
 /**
  * Write the attendance one working day (`day`, a day label) of an approved
@@ -219,18 +217,26 @@ const field = (name: string) => ({ $ifNull: [`$${name}`, 0] });
 
 /**
  * Make sure the balance row exists, allocating the type's annual quota the
- * first time it is used — so HR need not bulk-allocate before anyone applies.
+ * first time it is used — pro-rated to when the employee joined (the same
+ * `proRataAllocation` opening the year uses) — so HR need not bulk-allocate
+ * before anyone applies. An existing row is never touched.
  */
 export async function ensureLeaveBalance(
   key: BalanceKey,
   leaveType: Pick<ILeaveType, 'daysAllowed'> | null | undefined,
 ): Promise<void> {
+  if (await LeaveBalance.exists(key)) return;
+  const employee = await Employee.findById(key.employeeId)
+    .select('joiningDate')
+    .setOptions({ withDeleted: true })
+    .lean<{ joiningDate?: Date }>()
+    .exec();
+  const daysAllowed = leaveType?.daysAllowed ?? 0;
+  const allocated = employee?.joiningDate
+    ? proRataAllocation(daysAllowed, employee.joiningDate, key.year)
+    : daysAllowed;
   try {
-    await LeaveBalance.updateOne(
-      key,
-      { $setOnInsert: { allocated: leaveType?.daysAllowed ?? 0 } },
-      { upsert: true },
-    ).exec();
+    await LeaveBalance.updateOne(key, { $setOnInsert: { allocated } }, { upsert: true }).exec();
   } catch (err) {
     // A concurrent first use created it.
     if (!isDuplicateKey(err)) throw err;

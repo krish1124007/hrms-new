@@ -19,21 +19,30 @@
  *   • Carry-forward. For types with `carryForward.enabled`, the new year's
  *     `carried` is `min(max(remaining, 0), carryForward.maxDays)`, where
  *     `remaining = allocated + carried + adjusted − used` of the year before.
+ *     Balances are allocated lazily, so an employee who never applied for a
+ *     type has no row for it: their previous-year allocation was never
+ *     materialised, but it was theirs and entirely unused, so `remaining` is
+ *     then `proRataAllocation(daysAllowed, joiningDate, year − 1)` (0 if they
+ *     joined after that year). A row that exists always wins over that figure.
  *     It is set only while `carried` is still 0, so it is applied once.
  *   • `openLeaveYear` is idempotent and safe to repeat — by the 1 Jan job, by
  *     HR from the UI, or to finish a run that failed part way.
  *
- * Depends on leave-attendance.service (the unpaid-type rules); that module
- * does not import this one.
+ * `proRataAllocation` lives in lib/leave-allocation (shared with the
+ * leave-attendance service's first-use allocation, so there is one rule).
+ * This module depends on leave-attendance.service (the unpaid-type rules);
+ * that module does not import this one.
  */
 import { Types } from 'mongoose';
 import { logger } from '../config/logger.js';
-import { startOfBusinessDay } from '../lib/business-day.js';
 import { AppError } from '../lib/errors.js';
+import { isDuplicateKey, proRataAllocation } from '../lib/leave-allocation.js';
 import { Employee } from '../models/employee.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
 import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
 import { isUnpaidLeaveType } from './leave-attendance.service.js';
+
+export { proRataAllocation };
 
 /** What allocation needs of an employee: who they are and when they joined. */
 export interface AllocatableEmployee {
@@ -52,20 +61,27 @@ export interface OpenLeaveYearCounts {
   skipped: number;
 }
 
-const isDuplicateKey = (err: unknown): boolean => (err as { code?: number } | null)?.code === 11000;
-
 /**
- * The days of `daysAllowed` an employee who joined on `joiningDate` is
- * allocated for `year` (see the module notes). 0 for a year before they joined.
+ * A run that did not finish: `failed` employees could not be processed; every
+ * other employee was. `counts` is what was written before and around the
+ * failures. Running the year again finishes it.
  */
-export function proRataAllocation(daysAllowed: number, joiningDate: Date, year: number): number {
-  const joined = startOfBusinessDay(joiningDate);
-  const joinedYear = joined.getUTCFullYear();
-  if (joinedYear < year) return daysAllowed;
-  if (joinedYear > year) return 0;
-  const monthsLeft = 12 - joined.getUTCMonth();
-  if (monthsLeft === 12) return daysAllowed;
-  return Math.round((daysAllowed * monthsLeft * 2) / 12) / 2;
+export class LeaveYearIncompleteError extends AppError {
+  public readonly year: number;
+  public readonly failed: number;
+  public readonly counts: OpenLeaveYearCounts;
+
+  constructor(year: number, failed: number, counts: OpenLeaveYearCounts) {
+    super(
+      `Opening leave year ${year} failed for ${failed} employee(s); the rest were done — run it again to finish`,
+      500,
+      'LEAVE_YEAR_INCOMPLETE',
+      { year, failed, ...counts },
+    );
+    this.year = year;
+    this.failed = failed;
+    this.counts = { ...counts };
+  }
 }
 
 /** Active, paid leave types: the ones that carry an annual allocation. */
@@ -101,17 +117,21 @@ export async function allocateLeaveType(
   }
 }
 
+/**
+ * Allocate every type for one employee, keeping `counts` current as each row
+ * is written (so a failure part way still leaves it accurate).
+ */
 async function allocateTypes(
   employee: AllocatableEmployee,
   types: readonly AllocatableType[],
   year: number,
-): Promise<number> {
-  let created = 0;
+  counts: OpenLeaveYearCounts,
+): Promise<void> {
   for (const type of types) {
     // eslint-disable-next-line no-await-in-loop
-    if (await allocateLeaveType(employee, type, year)) created += 1;
+    if (await allocateLeaveType(employee, type, year)) counts.created += 1;
+    else counts.skipped += 1;
   }
-  return created;
 }
 
 /**
@@ -120,44 +140,48 @@ async function allocateTypes(
  * number of rows created.
  */
 export async function allocateForEmployee(employee: AllocatableEmployee, year: number): Promise<number> {
-  return allocateTypes(employee, await allocatableTypes(), year);
+  const counts: OpenLeaveYearCounts = { created: 0, carried: 0, skipped: 0 };
+  await allocateTypes(employee, await allocatableTypes(), year, counts);
+  return counts.created;
 }
 
 /**
  * Carry the previous year's remainder into `year` for the given
- * carry-forward types. Returns how many balances received a carried figure.
+ * carry-forward types, adding to `counts.carried` for each balance that
+ * receives one.
  */
 async function carryForward(
-  employeeId: Types.ObjectId | string,
+  employee: AllocatableEmployee,
   types: readonly AllocatableType[],
   year: number,
-): Promise<number> {
-  if (types.length === 0) return 0;
+  counts: OpenLeaveYearCounts,
+): Promise<void> {
+  if (types.length === 0) return;
   const previous = await LeaveBalance.find({
-    employeeId,
+    employeeId: employee._id,
     leaveTypeId: { $in: types.map((type) => type._id) },
     year: year - 1,
   })
     .lean()
     .exec();
 
-  let carried = 0;
   for (const type of types) {
     const before = previous.find((balance) => String(balance.leaveTypeId) === String(type._id));
-    if (!before) continue;
-    const remaining =
-      (before.allocated ?? 0) + (before.carried ?? 0) + (before.adjusted ?? 0) - (before.used ?? 0);
+    // No row: nothing of the previous year's allocation was used (a row appears
+    // with the first application), so all of what they were due is left.
+    const remaining = before
+      ? (before.allocated ?? 0) + (before.carried ?? 0) + (before.adjusted ?? 0) - (before.used ?? 0)
+      : proRataAllocation(type.daysAllowed ?? 0, employee.joiningDate, year - 1);
     const amount = Math.min(Math.max(remaining, 0), type.carryForward?.maxDays ?? 0);
     if (!(amount > 0)) continue;
     // Only while nothing has been carried yet, so a re-run leaves it be.
     // eslint-disable-next-line no-await-in-loop
     const result = await LeaveBalance.updateOne(
-      { employeeId, leaveTypeId: type._id, year, carried: { $in: [0, null] } },
+      { employeeId: employee._id, leaveTypeId: type._id, year, carried: { $in: [0, null] } },
       { $set: { carried: amount } },
     ).exec();
-    if (result.modifiedCount > 0) carried += 1;
+    if (result.modifiedCount > 0) counts.carried += 1;
   }
-  return carried;
 }
 
 /**
@@ -174,7 +198,8 @@ export async function openLeaveYear(
 ): Promise<OpenLeaveYearCounts> {
   const types = await allocatableTypes();
   const carryTypes = types.filter((type) => type.carryForward?.enabled);
-  const filter: Record<string, unknown> = { status: 'active' };
+  // Employees on notice still work and apply; only those who have left are out.
+  const filter: Record<string, unknown> = { status: { $in: ['active', 'onNotice'] } };
   if (opts.employeeIds) filter._id = { $in: opts.employeeIds.map((id) => new Types.ObjectId(id)) };
   const employees = await Employee.find(filter)
     .select('_id joiningDate')
@@ -186,11 +211,9 @@ export async function openLeaveYear(
   for (const employee of employees) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      const created = await allocateTypes(employee, types, year);
-      counts.created += created;
-      counts.skipped += types.length - created;
+      await allocateTypes(employee, types, year, counts);
       // eslint-disable-next-line no-await-in-loop
-      counts.carried += await carryForward(employee._id, carryTypes, year);
+      await carryForward(employee, carryTypes, year, counts);
     } catch (err) {
       failed += 1;
       logger.error({ err, year, employeeId: String(employee._id) }, 'openLeaveYear: employee failed');
@@ -198,13 +221,6 @@ export async function openLeaveYear(
   }
 
   logger.info({ year, ...counts, failed }, 'openLeaveYear: complete');
-  if (failed > 0) {
-    throw new AppError(
-      `Opening leave year ${year} failed for ${failed} employee(s); the rest were done — run it again to finish`,
-      500,
-      'LEAVE_YEAR_INCOMPLETE',
-      { year, failed, ...counts },
-    );
-  }
+  if (failed > 0) throw new LeaveYearIncompleteError(year, failed, counts);
   return counts;
 }

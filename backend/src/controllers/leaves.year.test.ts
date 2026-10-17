@@ -9,6 +9,8 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createApp } from '../app.js';
+import { logger } from '../config/logger.js';
+import { audit } from '../services/audit.service.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
 import { invalidateWeekOffRule } from '../services/week-off.service.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
@@ -18,6 +20,9 @@ import type { IUser } from '../models/user.model.js';
 
 vi.mock('../services/email.service.js', () => ({
   sendMail: vi.fn(async () => true),
+}));
+vi.mock('../services/audit.service.js', () => ({
+  audit: vi.fn(async () => undefined),
 }));
 
 const NOW = new Date('2026-10-01T06:30:00.000Z');
@@ -69,9 +74,9 @@ describe('POST /leaves/balances/open-year', () => {
       .set(auth(hr.token))
       .send({ year: 2027 });
 
-    // 2 employees × (CL + EL); 7 days remain on bob's EL, the cap is 5.
+    // 2 employees × (CL + EL). Bob has 7 days left of EL (cap 5); hr never touched hers, so her whole 15 are unused (cap 5).
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: { created: 4, carried: 1, skipped: 0 } });
+    expect(res.body).toEqual({ success: true, data: { created: 4, carried: 2, skipped: 0 } });
     const carried = await LeaveBalance.findOne({ employeeId: bob.employee._id, leaveTypeId: el._id, year: 2027 }).lean();
     expect(carried).toMatchObject({ allocated: 15, carried: 5 });
   });
@@ -85,6 +90,66 @@ describe('POST /leaves/balances/open-year', () => {
     expect((await open()).body.data).toEqual({ created: 0, carried: 0, skipped: 1 });
   });
 
+  it('audits the run with its counts', async () => {
+    const hr = await actor('hr_manager');
+    await leaveType();
+
+    await request(app).post('/api/v1/leaves/balances/open-year').set(auth(hr.token)).send({ year: 2027 });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'update',
+        entity: 'LeaveBalance',
+        after: { openYear: 2027, completed: true, created: 1, carried: 0, skipped: 0 },
+      }),
+    );
+  });
+
+  it('audits a partly failed run with the progress made, and answers 500', async () => {
+    const hr = await actor('hr_manager');
+    const emp = await actor('employee');
+    await leaveType();
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const real = LeaveBalance.create.bind(LeaveBalance) as (...args: unknown[]) => Promise<unknown>;
+    const spy = vi.spyOn(LeaveBalance, 'create').mockImplementation(((doc: { employeeId: unknown }, ...rest: unknown[]) => {
+      if (String(doc.employeeId) === String(hr.employee._id)) return Promise.reject(new Error('boom'));
+      return real(doc, ...rest);
+    }) as never);
+
+    const res = await request(app).post('/api/v1/leaves/balances/open-year').set(auth(hr.token)).send({ year: 2027 });
+    spy.mockRestore();
+    logged.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(await LeaveBalance.countDocuments({ employeeId: emp.employee._id, year: 2027 })).toBe(1);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'update',
+        entity: 'LeaveBalance',
+        after: { openYear: 2027, completed: false, created: 1, carried: 0, skipped: 0, failed: 1 },
+      }),
+    );
+  });
+
+  it('audits a run that failed outright, without counts', async () => {
+    const hr = await actor('hr_manager');
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const spy = vi.spyOn(LeaveType, 'find').mockImplementation((() => {
+      throw new Error('leave types unavailable');
+    }) as never);
+
+    const res = await request(app).post('/api/v1/leaves/balances/open-year').set(auth(hr.token)).send({ year: 2027 });
+    spy.mockRestore();
+    logged.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: { openYear: 2027, completed: false, error: 'leave types unavailable' },
+      }),
+    );
+  });
+
   it('an employee cannot open a year → 403', async () => {
     const emp = await actor('employee');
     await leaveType();
@@ -96,6 +161,32 @@ describe('POST /leaves/balances/open-year', () => {
 
     expect(res.status).toBe(403);
     expect(await LeaveBalance.countDocuments({})).toBe(0);
+  });
+
+  it('caps the year at next year, so a typo cannot allocate 2072', async () => {
+    const hr = await actor('hr_manager');
+    await leaveType();
+    const open = (year: number) =>
+      request(app).post('/api/v1/leaves/balances/open-year').set(auth(hr.token)).send({ year });
+
+    // Clock: October 2026.
+    expect((await open(2028)).status).toBe(400);
+    expect((await open(2072)).status).toBe(400);
+    expect(await LeaveBalance.countDocuments({})).toBe(0);
+    expect((await open(2027)).status).toBe(200);
+    expect((await open(2026)).status).toBe(200);
+  });
+
+  it('judges "next year" in the business timezone', async () => {
+    // 01:30 IST on 1 Jan 2027 is still 31 Dec 2026 in UTC. Set before the user is
+    // made, so the access token is not already expired.
+    vi.setSystemTime(new Date('2026-12-31T20:00:00.000Z'));
+    const hr = await actor('hr_manager');
+    const open = (year: number) =>
+      request(app).post('/api/v1/leaves/balances/open-year').set(auth(hr.token)).send({ year });
+
+    expect((await open(2028)).status).toBe(200);
+    expect((await open(2029)).status).toBe(400);
   });
 
   it('rejects a year outside 2000–2100', async () => {

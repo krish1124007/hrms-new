@@ -8,7 +8,12 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { Types } from 'mongoose';
-import { allocateForEmployee, openLeaveYear, proRataAllocation } from './leave-year.service.js';
+import {
+  LeaveYearIncompleteError,
+  allocateForEmployee,
+  openLeaveYear,
+  proRataAllocation,
+} from './leave-year.service.js';
 import { logger } from '../config/logger.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
@@ -194,7 +199,8 @@ describe('openLeaveYear', () => {
 
     const counts = await openLeaveYear(2027);
 
-    expect(counts).toEqual({ created: 4, carried: 0, skipped: 0 });
+    // Neither has a 2026 balance, so each carries the cap from earned leave's unused 2026 allocation.
+    expect(counts).toEqual({ created: 4, carried: 2, skipped: 0 });
     for (const emp of [alice, bob]) {
       expect((await balanceOf(emp, cl, 2027))?.allocated).toBe(12);
       expect((await balanceOf(emp, el, 2027))?.allocated).toBe(15);
@@ -228,20 +234,60 @@ describe('openLeaveYear', () => {
     expect((await balanceOf(alice, el, 2027))?.carried).toBe(0);
   });
 
-  it('carries nothing for an employee with no previous-year balance', async () => {
-    const { el, alice } = await company();
+  describe('with no previous-year balance row (never applied, so lazily never allocated)', () => {
+    it('carries the cap out of the whole unused allocation', async () => {
+      const { el, alice } = await company();
 
-    const counts = await openLeaveYear(2027);
+      await openLeaveYear(2027);
 
-    expect(counts.carried).toBe(0);
-    expect((await balanceOf(alice, el, 2027))?.carried).toBe(0);
+      // Joined 2024: a full, untouched 15 days in 2026 → capped at 5.
+      expect(await balanceOf(alice, el, 2027)).toMatchObject({ allocated: 15, carried: 5 });
+    });
+
+    it('carries the pro-rated unused allocation for someone who joined during the previous year', async () => {
+      const { el } = await company();
+      // October 2026: 15 × 3/12 = 3.75 → 4 days allocated for 2026, all unused.
+      const joiner = await makeEmployee({ joiningDate: new Date('2026-10-01') });
+
+      await openLeaveYear(2027);
+
+      expect((await balanceOf(joiner, el, 2027))?.carried).toBe(4);
+    });
+
+    it('carries nothing for someone who joined after the previous year', async () => {
+      const { el } = await company();
+      const joiner = await makeEmployee({ joiningDate: new Date('2027-02-01') });
+
+      await openLeaveYear(2027);
+
+      expect(await balanceOf(joiner, el, 2027)).toMatchObject({ allocated: 14, carried: 0 });
+    });
+
+    it('is overruled by a previous-year row that exists, whatever it says', async () => {
+      const { el, alice, bob } = await company();
+      await seedBalance(alice, el, 2026, { allocated: 15, used: 14 }); // 1 left, not the implied 15
+      await seedBalance(bob, el, 2026, { allocated: 15, used: 15 }); // 0 left, not the implied 15
+
+      await openLeaveYear(2027);
+
+      expect((await balanceOf(alice, el, 2027))?.carried).toBe(1);
+      expect((await balanceOf(bob, el, 2027))?.carried).toBe(0);
+    });
+
+    it('does not carry for types without carry-forward', async () => {
+      const { cl, alice } = await company();
+
+      await openLeaveYear(2027);
+
+      expect((await balanceOf(alice, cl, 2027))?.carried).toBe(0);
+    });
   });
 
   it('is idempotent: a second run changes nothing', async () => {
     const { el, alice } = await company();
     await seedBalance(alice, el, 2026, { allocated: 15, used: 8 });
 
-    await openLeaveYear(2027);
+    expect(await openLeaveYear(2027)).toEqual({ created: 4, carried: 2, skipped: 0 });
     const before = await LeaveBalance.find({ year: 2027 }).sort({ employeeId: 1, leaveTypeId: 1 }).lean().exec();
 
     const second = await openLeaveYear(2027);
@@ -259,7 +305,8 @@ describe('openLeaveYear', () => {
 
     const counts = await openLeaveYear(2027);
 
-    expect(counts).toEqual({ created: 3, carried: 1, skipped: 1 });
+    // Alice carries her 3 left into the row HR made; bob has no 2026 row, so he carries the cap.
+    expect(counts).toEqual({ created: 3, carried: 2, skipped: 1 });
     expect(await balanceOf(alice, el, 2027)).toMatchObject({ allocated: 20, carried: 3 });
   });
 
@@ -284,6 +331,20 @@ describe('openLeaveYear', () => {
     expect(await balanceOf(alice, cl, 2027)).not.toBeNull();
     expect(await LeaveBalance.countDocuments({ employeeId: resigned._id })).toBe(0);
     expect(await LeaveBalance.countDocuments({ employeeId: deleted._id })).toBe(0);
+  });
+
+  it('includes employees on notice (they still work and apply), but not those who have left', async () => {
+    const { cl } = await company();
+    const onNotice = await makeEmployee({ status: 'onNotice' });
+    const left: IEmployee[] = [];
+    for (const status of ['inactive', 'terminated', 'resigned'] as const) {
+      left.push(await makeEmployee({ status }));
+    }
+
+    await openLeaveYear(2027);
+
+    expect(await balanceOf(onNotice, cl, 2027)).not.toBeNull();
+    for (const emp of left) expect(await LeaveBalance.countDocuments({ employeeId: emp._id })).toBe(0);
   });
 
   it('pro-rates an employee who joins during the year being opened', async () => {
@@ -325,5 +386,36 @@ describe('openLeaveYear', () => {
     const rerun = await openLeaveYear(2027);
     expect(rerun.created).toBe(2);
     expect(await balanceOf(alice, cl, 2027)).not.toBeNull();
+  });
+
+  it('reports the rows written before a failure, including the failed employee\'s earlier ones', async () => {
+    const { el, alice } = await company();
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const real = LeaveBalance.create.bind(LeaveBalance) as (...args: unknown[]) => Promise<unknown>;
+    // Alice's casual-leave row is written; her earned-leave row fails.
+    const spy = vi.spyOn(LeaveBalance, 'create').mockImplementation(((
+      doc: { employeeId: Types.ObjectId; leaveTypeId: Types.ObjectId },
+      ...rest: unknown[]
+    ) => {
+      if (String(doc.employeeId) === String(alice._id) && String(doc.leaveTypeId) === String(el._id)) {
+        return Promise.reject(new Error('boom'));
+      }
+      return real(doc, ...rest);
+    }) as never);
+
+    const err = await openLeaveYear(2027).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    spy.mockRestore();
+    logged.mockRestore();
+
+    expect(err).toBeInstanceOf(LeaveYearIncompleteError);
+    const incomplete = err as LeaveYearIncompleteError;
+    expect(incomplete.year).toBe(2027);
+    expect(incomplete.failed).toBe(1);
+    // alice's casual leave (1) + bob's casual and earned leave (2); bob's earned leave carries too.
+    expect(incomplete.counts).toEqual({ created: 3, carried: 1, skipped: 0 });
+    expect(incomplete.statusCode).toBe(500);
   });
 });

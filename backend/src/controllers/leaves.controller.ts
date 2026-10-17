@@ -35,7 +35,7 @@ import {
   type LeaveDecision,
 } from '../services/notification.service.js';
 import { sendMail } from '../services/email.service.js';
-import { allocateLeaveType, openLeaveYear } from '../services/leave-year.service.js';
+import { LeaveYearIncompleteError, allocateLeaveType, openLeaveYear } from '../services/leave-year.service.js';
 
 // ---------- Helpers ----------
 
@@ -339,25 +339,53 @@ export async function adjustLeaveBalance(req: Request, res: Response): Promise<v
   res.json({ success: true, data: doc });
 }
 
-export const openYearSchema = z.object({
-  year: z.coerce.number().int().min(2000).max(2100),
-});
+/**
+ * `year` is bounded to 2000–2100 and no further ahead than next year (in the
+ * business timezone), so a typo cannot allocate 2072. The upper bound is
+ * judged per request, not when the module loads.
+ */
+export const openYearSchema = z
+  .object({
+    year: z.coerce.number().int().min(2000).max(2100),
+  })
+  .superRefine(({ year }, ctx) => {
+    const latest = leaveYear(new Date()) + 1;
+    if (year > latest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['year'],
+        message: `year cannot be later than ${latest}`,
+      });
+    }
+  });
 
 /**
  * Open a leave year: create the balances still missing (pro-rated for
  * mid-year joiners) and carry the previous year's unused days forward.
  * Idempotent — nothing already set is overwritten — so HR can run it again
  * after adding an employee or leave type, or after a failed run.
+ *
+ * Audited whatever the outcome: a run that stops part way records the
+ * progress it made (and how many employees failed), one that never started
+ * records the error.
  */
 export async function openLeaveYearBalances(req: Request, res: Response): Promise<void> {
   const { year } = req.body as z.infer<typeof openYearSchema>;
-  const counts = await openLeaveYear(year);
-  void audit({
-    action: 'update',
-    entity: 'LeaveBalance',
-    after: { openYear: year, ...counts },
-  });
-  res.json({ success: true, data: counts });
+  const outcome: Record<string, unknown> = { openYear: year, completed: false };
+  try {
+    const counts = await openLeaveYear(year);
+    Object.assign(outcome, counts, { completed: true });
+    res.json({ success: true, data: counts });
+  } catch (err) {
+    if (err instanceof LeaveYearIncompleteError) {
+      Object.assign(outcome, err.counts, { failed: err.failed });
+    } else {
+      outcome.error = err instanceof Error ? err.message : String(err);
+    }
+    throw err;
+  } finally {
+    void audit({ action: 'update', entity: 'LeaveBalance', after: outcome });
+  }
 }
 
 export const resetBalanceSchema = z.object({
