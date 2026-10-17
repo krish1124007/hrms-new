@@ -6,19 +6,28 @@
  *                              marks no-shows absent, stamps approved leave
  *                              and closes forgotten check-outs. See
  *                              services/day-close.service.ts.
+ *   - `leave-year-open`      → repeatable, 00:30 on 1 January business time:
+ *                              creates the new year's leave balances
+ *                              (pro-rata for mid-year joiners) and carries
+ *                              unused days forward. See
+ *                              services/leave-year.service.ts.
  *
- * The day-close is idempotent, so a retried or duplicated run is harmless.
- * Past days the job missed are replayed by POST /attendance/close-days.
+ * Both jobs are idempotent, so a retried or duplicated run is harmless.
+ * Past days the day-close missed are replayed by POST /attendance/close-days;
+ * a year the job missed is opened by POST /leaves/balances/open-year.
  */
 import { Queue, Worker, type Job } from 'bullmq';
 import { redis } from '../config/redis.js';
 import { logger } from '../config/logger.js';
-import { BUSINESS_TZ } from '../lib/business-day.js';
+import { BUSINESS_TZ, startOfBusinessDay } from '../lib/business-day.js';
 import { closeBusinessDay } from '../services/day-close.service.js';
+import { openLeaveYear } from '../services/leave-year.service.js';
 
 const QUEUE_NAME = 'attendance';
 export const DAY_CLOSE_JOB = 'attendance-day-close';
 export const DAY_CLOSE_PATTERN = '59 23 * * *';
+export const LEAVE_YEAR_OPEN_JOB = 'leave-year-open';
+export const LEAVE_YEAR_OPEN_PATTERN = '30 0 1 1 *';
 
 export const attendanceQueue = new Queue(QUEUE_NAME, {
   connection: redis,
@@ -43,11 +52,24 @@ async function runDayClose(job: Job): Promise<unknown> {
   return counts;
 }
 
+/**
+ * Open the leave year the run was scheduled for — the year of the repeat's own
+ * fire time (00:30 on 1 January), else of now, in the business timezone.
+ */
+async function runLeaveYearOpen(job: Job): Promise<unknown> {
+  const due = job.opts?.prevMillis ? new Date(job.opts.prevMillis) : new Date();
+  const year = startOfBusinessDay(due).getUTCFullYear();
+  const counts = await openLeaveYear(year);
+  logger.info({ year, ...counts }, 'leave-year-open: complete');
+  return counts;
+}
+
 export function startAttendanceWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAME,
     async (job: Job) => {
       if (job.name === DAY_CLOSE_JOB) return runDayClose(job);
+      if (job.name === LEAVE_YEAR_OPEN_JOB) return runLeaveYearOpen(job);
       logger.warn({ name: job.name }, 'attendance: unknown job');
       return undefined;
     },
@@ -71,4 +93,11 @@ export async function ensureAttendanceSchedules(): Promise<void> {
     { repeat: { pattern: DAY_CLOSE_PATTERN, tz: BUSINESS_TZ }, jobId: DAY_CLOSE_JOB },
   );
   logger.info({ pattern: DAY_CLOSE_PATTERN, tz: BUSINESS_TZ }, 'attendance day-close schedule registered');
+
+  await attendanceQueue.add(
+    LEAVE_YEAR_OPEN_JOB,
+    {},
+    { repeat: { pattern: LEAVE_YEAR_OPEN_PATTERN, tz: BUSINESS_TZ }, jobId: LEAVE_YEAR_OPEN_JOB },
+  );
+  logger.info({ pattern: LEAVE_YEAR_OPEN_PATTERN, tz: BUSINESS_TZ }, 'leave-year-open schedule registered');
 }

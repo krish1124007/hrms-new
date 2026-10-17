@@ -48,6 +48,12 @@ router.post(
   validate(ctrl.allocateBalanceSchema),
   asyncHandler(ctrl.allocateLeaveBalances),
 );
+router.post(
+  '/balances/open-year',
+  requirePermission('leaves.update'),
+  validate(ctrl.openYearSchema),
+  asyncHandler(ctrl.openLeaveYearBalances),
+);
 router.patch(
   '/balances/:id/adjust',
   requirePermission('leaves.update'),

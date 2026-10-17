@@ -13,6 +13,9 @@ import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
 import { appBaseUrl } from '../lib/app-url.js';
 import { assertCanAssignRole } from '../lib/permission-grants.js';
+import { logger } from '../config/logger.js';
+import { leaveYear } from '../services/leave-attendance.service.js';
+import { allocateForEmployee, type AllocatableEmployee } from '../services/leave-year.service.js';
 
 const addressSchema = z
   .object({
@@ -194,6 +197,21 @@ export async function employeeStats(_req: Request, res: Response): Promise<void>
   });
 }
 
+/**
+ * Give a brand-new employee this year's leave balances, pro-rated to their
+ * joining date, so they need not wait for HR to open the year. Best effort:
+ * a failure here is logged and never fails the employee's creation (the
+ * balances are also allocated on first leave application, and by opening
+ * the year).
+ */
+async function allocateNewJoinerLeave(employee: AllocatableEmployee): Promise<void> {
+  try {
+    await allocateForEmployee(employee, leaveYear(new Date()));
+  } catch (err) {
+    logger.warn({ err, employeeId: String(employee._id) }, 'leave allocation for a new employee failed');
+  }
+}
+
 export async function createEmployee(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createEmployeeSchema>;
   const email = body.email.trim().toLowerCase();
@@ -274,6 +292,7 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { createUserAccount, roleId, password: _pw, ...rest } = body;
   const employee = await Employee.create({ ...rest, userId });
+  await allocateNewJoinerLeave(employee);
 
   void audit({ action: 'create', entity: 'Employee', entityId: String(employee._id) });
   res.status(201).json({ success: true, data: employee });
@@ -491,6 +510,7 @@ export async function importEmployees(req: Request, res: Response): Promise<void
         continue;
       }
       const e = await Employee.create({ ...validData, email });
+      await allocateNewJoinerLeave(e);
       created.push(e);
     } catch (err) {
       failed.push({ email: data.email || 'Unknown', reason: (err as Error).message });

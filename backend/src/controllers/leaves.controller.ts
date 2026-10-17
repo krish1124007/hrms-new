@@ -35,6 +35,7 @@ import {
   type LeaveDecision,
 } from '../services/notification.service.js';
 import { sendMail } from '../services/email.service.js';
+import { allocateLeaveType, openLeaveYear } from '../services/leave-year.service.js';
 
 // ---------- Helpers ----------
 
@@ -257,7 +258,7 @@ export async function listLeaveBalances(req: Request, res: Response): Promise<vo
 export async function myLeaveBalances(req: Request, res: Response): Promise<void> {
   const employee = await getCurrentEmployee();
   if (!employee) throw new NotFoundError('Employee profile not found');
-  const year = Number(req.query.year ?? new Date().getFullYear());
+  const year = Number(req.query.year ?? leaveYear(new Date()));
 
   // Get all active leave types
   const types = await LeaveType.find({ isActive: true }).lean().exec();
@@ -338,6 +339,27 @@ export async function adjustLeaveBalance(req: Request, res: Response): Promise<v
   res.json({ success: true, data: doc });
 }
 
+export const openYearSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100),
+});
+
+/**
+ * Open a leave year: create the balances still missing (pro-rated for
+ * mid-year joiners) and carry the previous year's unused days forward.
+ * Idempotent — nothing already set is overwritten — so HR can run it again
+ * after adding an employee or leave type, or after a failed run.
+ */
+export async function openLeaveYearBalances(req: Request, res: Response): Promise<void> {
+  const { year } = req.body as z.infer<typeof openYearSchema>;
+  const counts = await openLeaveYear(year);
+  void audit({
+    action: 'update',
+    entity: 'LeaveBalance',
+    after: { openYear: year, ...counts },
+  });
+  res.json({ success: true, data: counts });
+}
+
 export const resetBalanceSchema = z.object({
   year: z.coerce.number().int(),
   leaveTypeId: z.string().optional(),
@@ -351,7 +373,9 @@ export async function resetLeaveBalances(req: Request, res: Response): Promise<v
     filter.leaveTypeId = new Types.ObjectId(body.leaveTypeId);
   }
   const result = await LeaveBalance.updateMany(filter, {
-    $set: { allocated: 0, used: 0, carried: 0, adjusted: 0 },
+    // `allocated` and `adjusted` are HR's figures and stay; the year's usage
+    // and carry-forward are what is cleared.
+    $set: { used: 0, carried: 0 },
   }).exec();
   void audit({
     action: 'update',
@@ -567,17 +591,21 @@ export async function applyLeave(req: Request, res: Response): Promise<void> {
     await leaveType.save().catch(() => {});
   }
 
-  // The balance row is allocated lazily from `daysAllowed`, so HR need not
-  // bulk-allocate before employees apply.
+  // The balance row is allocated on first use, so HR need not open the year
+  // before employees apply — pro-rated to when they joined, exactly as
+  // opening the year would have. Unpaid leave has no allocation: its row just
+  // records `used`.
   const year = leaveYear(body.startDate);
   const balanceKey = { employeeId, leaveTypeId: leaveType._id as Types.ObjectId, year };
-  if (!isUnpaid && !(leaveType.daysAllowed > 0) && !(await LeaveBalance.exists(balanceKey))) {
-    throw new ValidationAppError(
-      `${leaveType.name} has no annual allocation — please contact HR to set one`,
-    );
-  }
-  await ensureLeaveBalance(balanceKey, leaveType);
-  if (!isUnpaid) {
+  if (isUnpaid) {
+    await ensureLeaveBalance(balanceKey, leaveType);
+  } else {
+    await allocateLeaveType(emp, leaveType, year);
+    if (!(await LeaveBalance.exists(balanceKey))) {
+      throw new ValidationAppError(
+        `${leaveType.name} has no annual allocation — please contact HR to set one`,
+      );
+    }
     // Days already asked for and still pending are spoken for.
     const { remaining, pending } = await availableBalance(employeeId, balanceKey.leaveTypeId, year);
     const available = remaining - pending;
