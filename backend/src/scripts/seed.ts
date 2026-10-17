@@ -10,8 +10,11 @@ import { ensureSystemRoles } from '../lib/seed-roles.js';
 async function seed(): Promise<void> {
   await connectDatabase();
 
-  const { created, refreshed } = await ensureSystemRoles();
-  logger.info(`Roles: ${created} created, ${refreshed} refreshed`);
+  const { created, refreshed, strippedRoles, strippedUsers } = await ensureSystemRoles();
+  logger.info(
+    `Roles: ${created} created, ${refreshed} refreshed; retired permissions stripped from ` +
+      `${strippedRoles} custom role(s) and ${strippedUsers} user(s)`,
+  );
 
   logger.info('Seed complete');
   await disconnectDatabase();

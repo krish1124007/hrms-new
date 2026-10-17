@@ -21,19 +21,35 @@ function routeFiles(dir: string): string[] {
   });
 }
 
-/** Every quoted string passed to any `requirePermission(...)` call under src/routes. */
-function permissionsUsedByRoutes(): Set<string> {
+/** A single-, double- or interpolation-free backtick string literal. */
+const STRING_LITERAL = /'[^'\n]*'|"[^"\n]*"|`[^`$\n]*`/g;
+
+interface RouteScan {
+  /** Every string literal passed to any `requirePermission(...)` call under src/routes. */
+  used: Set<string>;
+  /** `file: requirePermission(...)` for each call whose arguments are not purely string literals. */
+  nonLiteralCalls: string[];
+}
+
+function scanRoutes(): RouteScan {
   const used = new Set<string>();
+  const nonLiteralCalls: string[] = [];
   for (const file of routeFiles(ROUTES_DIR)) {
     const source = fs.readFileSync(file, 'utf8');
     for (const call of source.matchAll(/requirePermission\(([^)]*)\)/g)) {
-      for (const literal of call[1]!.matchAll(/['"`]([^'"`]+)['"`]/g)) {
-        used.add(literal[1]!);
+      const args = call[1]!;
+      for (const literal of args.match(STRING_LITERAL) ?? []) used.add(literal.slice(1, -1));
+      // Whatever is left once the literals and separators are removed is a constant,
+      // a call, a template with `${}`... — something this scan cannot resolve.
+      if (args.replace(STRING_LITERAL, '').replace(/[\s,]/g, '') !== '') {
+        nonLiteralCalls.push(`${path.relative(ROUTES_DIR, file)}: ${call[0].replace(/\s+/g, ' ')}`);
       }
     }
   }
-  return used;
+  return { used, nonLiteralCalls };
 }
+
+const permissionsUsedByRoutes = (): Set<string> => scanRoutes().used;
 
 /** Names the old catalogue listed although no route ever checked them. */
 const INERT_PERMISSIONS = [
@@ -53,6 +69,11 @@ const INERT_PERMISSIONS = [
 ];
 
 describe('permission catalogue', () => {
+  it('can read every requirePermission(...) call: all arguments are string literals', () => {
+    // A future `requirePermission(SOME_CONST)` would hide a permission from the scan below.
+    expect(scanRoutes().nonLiteralCalls).toEqual([]);
+  });
+
   it('contains every permission any route checks', () => {
     const used = permissionsUsedByRoutes();
     // Guards against the scan silently matching nothing.

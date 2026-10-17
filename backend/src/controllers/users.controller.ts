@@ -9,8 +9,9 @@ import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
 import {
   assertCanAssignRole,
-  assertCanGrant,
-  permissionListSchema,
+  assertCanManageUser,
+  assertCanSetPermissions,
+  storedPermissionListSchema,
 } from '../lib/permission-grants.js';
 
 export const inviteUserSchema = z.object({
@@ -25,7 +26,7 @@ export const updateUserSchema = z.object({
   lastName: z.string().min(1).optional(),
   avatar: z.string().url().optional(),
   roleId: z.string().optional(),
-  customPermissions: permissionListSchema.optional(),
+  customPermissions: storedPermissionListSchema.optional(),
 });
 
 export const updateStatusSchema = z.object({
@@ -115,12 +116,14 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
 
   // Nobody can use this endpoint to give anyone (themselves included) more
   // than they hold. Only what actually changes is checked, so editing a user
-  // who already holds more than the caller (e.g. fixing a name) still works.
+  // who already holds more than the caller (or whose stored list has retired
+  // names) still works.
   if (body.customPermissions !== undefined) {
-    const current = new Set(target.customPermissions ?? []);
-    assertCanGrant(
+    assertCanSetPermissions(
       req.user,
-      body.customPermissions.filter((permission) => !current.has(permission)),
+      'customPermissions',
+      body.customPermissions,
+      target.customPermissions ?? [],
     );
   }
   if (body.roleId !== undefined) {
@@ -147,9 +150,23 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: user });
 }
 
-export async function deleteUser(req: Request, res: Response): Promise<void> {
-  const user = await User.findById(String(req.params.id)).exec();
+/**
+ * The user a request wants to act on (password reset, status change, delete),
+ * 404 if missing and 403 unless the caller holds every permission that user
+ * holds — a lesser admin must not be able to lock out, take over or remove a
+ * more privileged account. A `*` caller is unrestricted.
+ */
+async function loadManageableUser(req: Request, opts: { withPassword?: boolean } = {}) {
+  const query = User.findById(String(req.params.id)).populate('role');
+  if (opts.withPassword) query.select('+password');
+  const user = await query.exec();
   if (!user) throw new NotFoundError('User not found');
+  assertCanManageUser(req.user, user);
+  return user;
+}
+
+export async function deleteUser(req: Request, res: Response): Promise<void> {
+  const user = await loadManageableUser(req);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (user as any).softDelete();
   void audit({ action: 'delete', entity: 'User', entityId: String(user._id) });
@@ -171,8 +188,7 @@ export async function setUserPassword(req: Request, res: Response): Promise<void
     throw new AppError(strength.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
   }
 
-  const user = await User.findById(String(req.params.id)).select('+password').exec();
-  if (!user) throw new NotFoundError('User not found');
+  const user = await loadManageableUser(req, { withPassword: true });
 
   user.password = password;
   user.passwordChangedAt = new Date();
@@ -197,6 +213,7 @@ export async function setUserPassword(req: Request, res: Response): Promise<void
 
 export async function updateUserStatus(req: Request, res: Response): Promise<void> {
   const { status } = req.body as { status: 'active' | 'inactive' };
+  await loadManageableUser(req);
   const user = await User.findByIdAndUpdate(
     String(req.params.id),
     { status },

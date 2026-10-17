@@ -70,8 +70,11 @@ async function seedAdmin(): Promise<void> {
 
   await connectDatabase();
   try {
-    const { created, refreshed } = await ensureSystemRoles();
-    console.log(`Roles: ${created} created, ${refreshed} refreshed`);
+    const { created, refreshed, strippedRoles, strippedUsers } = await ensureSystemRoles();
+    console.log(
+      `Roles: ${created} created, ${refreshed} refreshed; retired permissions stripped from ` +
+        `${strippedRoles} custom role(s) and ${strippedUsers} user(s)`,
+    );
     const adminRole = await Role.findOne({ slug: 'admin' }).orFail().exec();
 
     const existing = await User.findOne({ email: input.email })

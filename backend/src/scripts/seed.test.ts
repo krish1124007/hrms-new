@@ -11,11 +11,11 @@ import { createUser } from '../test/factories.js';
 describe('ensureSystemRoles', () => {
   it('is idempotent: five roles after one run, five after two, admin keeps the wildcard', async () => {
     const first = await ensureSystemRoles();
-    expect(first).toEqual({ created: 5, refreshed: 0 });
+    expect(first).toEqual({ created: 5, refreshed: 0, strippedRoles: 0, strippedUsers: 0 });
     expect(await Role.countDocuments()).toBe(5);
 
     const second = await ensureSystemRoles();
-    expect(second).toEqual({ created: 0, refreshed: 0 });
+    expect(second).toEqual({ created: 0, refreshed: 0, strippedRoles: 0, strippedUsers: 0 });
     expect(await Role.countDocuments()).toBe(5);
 
     const admin = await Role.findOne({ slug: 'admin' }).orFail().lean().exec();
@@ -28,7 +28,7 @@ describe('ensureSystemRoles', () => {
     await Role.updateOne({ slug: 'manager' }, { $set: { permissions: ['employees.view'] } });
 
     const result = await ensureSystemRoles();
-    expect(result).toEqual({ created: 0, refreshed: 1 });
+    expect(result).toEqual({ created: 0, refreshed: 1, strippedRoles: 0, strippedUsers: 0 });
 
     const manager = await Role.findOne({ slug: 'manager' }).orFail().lean().exec();
     const expected = DEFAULT_ROLES.find((role) => role.slug === 'manager')!.permissions;
@@ -46,5 +46,91 @@ describe('ensureSystemRoles', () => {
     const after = await snapshot();
 
     expect(after).toBe(before);
+  });
+
+  describe('retired permission names', () => {
+    const snapshotSystemRoles = async (): Promise<string> =>
+      JSON.stringify(await Role.find({ isSystem: true }).sort({ slug: 1 }).lean().exec());
+
+    it('are stripped from custom roles and user customPermissions; everything else is left alone', async () => {
+      await ensureSystemRoles();
+
+      const legacy = await Role.create({
+        name: 'Legacy',
+        slug: 'legacy',
+        permissions: ['departments.manage', 'employees.view', 'documents.view', '*'],
+      });
+      const clean = await Role.create({
+        name: 'Clean',
+        slug: 'clean',
+        permissions: ['payroll.view'],
+      });
+      const holder = await createUser({ roleSlug: 'employee' });
+      await User.updateOne(
+        { _id: holder.user._id },
+        { $set: { customPermissions: ['expense-claims.view', 'payroll.view'] } },
+      );
+      const bystander = await createUser({ roleSlug: 'employee' });
+      await User.updateOne({ _id: bystander.user._id }, { $set: { customPermissions: ['payroll.view'] } });
+      const deleted = await createUser({ roleSlug: 'employee' });
+      await User.updateOne(
+        { _id: deleted.user._id },
+        { $set: { customPermissions: ['settings.view'], isDeleted: true } },
+      );
+
+      const snapshotUser = async (id: unknown): Promise<string> =>
+        JSON.stringify(
+          await User.findById(id).setOptions({ withDeleted: true }).select('+password').lean().exec(),
+        );
+      const systemBefore = await snapshotSystemRoles();
+      const holderBefore = JSON.parse(await snapshotUser(holder.user._id));
+      const bystanderBefore = await snapshotUser(bystander.user._id);
+      const cleanBefore = JSON.stringify(await Role.findById(clean._id).lean().exec());
+
+      const result = await ensureSystemRoles();
+      expect(result).toEqual({ created: 0, refreshed: 0, strippedRoles: 1, strippedUsers: 2 });
+
+      const legacyAfter = await Role.findById(legacy._id).orFail().lean().exec();
+      expect(legacyAfter.permissions).toEqual(['employees.view', '*']);
+
+      const holderAfter = JSON.parse(await snapshotUser(holder.user._id));
+      expect(holderAfter.customPermissions).toEqual(['payroll.view']);
+      // Only customPermissions changed: the password hash and every other field are as they were.
+      expect({ ...holderAfter, customPermissions: null, updatedAt: null }).toEqual({
+        ...holderBefore,
+        customPermissions: null,
+        updatedAt: null,
+      });
+      const deletedAfter = await User.findById(deleted.user._id)
+        .setOptions({ withDeleted: true })
+        .orFail()
+        .lean()
+        .exec();
+      expect(deletedAfter.customPermissions).toEqual([]);
+
+      expect(await snapshotSystemRoles()).toBe(systemBefore);
+      expect(await snapshotUser(bystander.user._id)).toBe(bystanderBefore);
+      expect(JSON.stringify(await Role.findById(clean._id).lean().exec())).toBe(cleanBefore);
+
+      // Idempotent: nothing left to strip.
+      expect(await ensureSystemRoles()).toEqual({
+        created: 0,
+        refreshed: 0,
+        strippedRoles: 0,
+        strippedUsers: 0,
+      });
+    });
+
+    it('never touches a system role, even one holding an unknown name', async () => {
+      await ensureSystemRoles();
+      await Role.updateOne({ slug: 'manager' }, { $set: { permissions: ['not.real'] } });
+      // The system role is restored to its contract by the refresh, not by the strip.
+      const result = await ensureSystemRoles();
+      expect(result).toMatchObject({ refreshed: 1, strippedRoles: 0 });
+      const manager = await Role.findOne({ slug: 'manager' }).orFail().lean().exec();
+      expect(manager.permissions).toEqual(
+        DEFAULT_ROLES.find((role) => role.slug === 'manager')!.permissions,
+      );
+    });
   });
 });

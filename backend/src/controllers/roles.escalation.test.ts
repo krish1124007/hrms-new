@@ -17,11 +17,21 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 let app: Express;
 
 /** The default hr_manager set has no roles.* / users.*; grant them as custom permissions. */
-async function delegatedHrManager(): Promise<{ token: string }> {
+async function delegatedHrManager(): Promise<{ token: string; userId: string }> {
   const { user, token } = await createUser({ roleSlug: 'hr_manager' });
   await User.updateOne(
     { _id: user._id },
     { $set: { customPermissions: ['roles.create', 'roles.update', 'users.update', 'users.create'] } },
+  );
+  return { token, userId: String(user._id) };
+}
+
+/** An ordinary employee who has been delegated user administration (and nothing else). */
+async function lesserUserAdmin(): Promise<{ token: string }> {
+  const { user, token } = await createUser({ roleSlug: 'employee' });
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { customPermissions: ['users.update', 'users.delete'] } },
   );
   return { token };
 }
@@ -58,7 +68,7 @@ describe('POST /roles', () => {
     expect(await Role.countDocuments({ slug: 'typo-role' })).toBe(0);
   });
 
-  it('rejects the wildcard-looking and inert names that used to be accepted', async () => {
+  it('400 for names the old catalogue offered although no route checks them', async () => {
     const { token } = await delegatedHrManager();
     const res = await request(app)
       .post('/api/v1/roles')
@@ -182,7 +192,7 @@ describe('PATCH /users/:id', () => {
     expect(res.body.data.customPermissions).toEqual(['employees.view', 'payroll.process']);
   });
 
-  it('403 when assigning a role that holds the wildcard, even to oneself', async () => {
+  it('403 when assigning a role that holds the wildcard to another user', async () => {
     const { token } = await delegatedHrManager();
     const admin = await createRole('admin');
     const target = await createUser({ roleSlug: 'employee' });
@@ -193,6 +203,19 @@ describe('PATCH /users/:id', () => {
     expect(res.status).toBe(403);
 
     const after = await User.findById(target.user._id).orFail().lean().exec();
+    expect(String(after.role)).not.toBe(String(admin._id));
+  });
+
+  it('403 when assigning the admin role to oneself', async () => {
+    const { token, userId } = await delegatedHrManager();
+    const admin = await createRole('admin');
+    const res = await request(app)
+      .patch(`/api/v1/users/${userId}`)
+      .set(auth(token))
+      .send({ roleId: String(admin._id) });
+    expect(res.status).toBe(403);
+
+    const after = await User.findById(userId).orFail().lean().exec();
     expect(String(after.role)).not.toBe(String(admin._id));
   });
 
@@ -287,5 +310,218 @@ describe('other paths that assign a role', () => {
       });
     expect(res.status).toBe(403);
     expect(await User.countDocuments({ email: 'sneaky.admin@test.local' })).toBe(0);
+  });
+});
+
+describe('retired permission names already stored on a record', () => {
+  const RETIRED_ROLE = ['departments.manage', 'employees.view'];
+
+  async function legacyRole(): Promise<{ id: string }> {
+    // Written straight to Mongo: this is what production holds from before the catalogue was fixed.
+    const role = await Role.create({ name: 'Legacy', slug: 'legacy', permissions: RETIRED_ROLE });
+    return { id: String(role._id) };
+  }
+
+  it('PATCH /roles/:id: renaming a role that holds a retired name succeeds and keeps the list', async () => {
+    const token = await adminToken();
+    const { id } = await legacyRole();
+    const res = await request(app)
+      .patch(`/api/v1/roles/${id}`)
+      .set(auth(token))
+      .send({ name: 'Legacy renamed', permissions: RETIRED_ROLE });
+    expect(res.status).toBe(200);
+
+    const stored = await Role.findById(id).orFail().lean().exec();
+    expect(stored.name).toBe('Legacy renamed');
+    expect(stored.permissions).toEqual(RETIRED_ROLE);
+  });
+
+  it('PATCH /roles/:id: a rename without a permission list also succeeds', async () => {
+    const token = await adminToken();
+    const { id } = await legacyRole();
+    const res = await request(app)
+      .patch(`/api/v1/roles/${id}`)
+      .set(auth(token))
+      .send({ name: 'Legacy renamed' });
+    expect(res.status).toBe(200);
+    expect((await Role.findById(id).orFail().lean().exec()).permissions).toEqual(RETIRED_ROLE);
+  });
+
+  it('PATCH /roles/:id: dropping a retired name is allowed', async () => {
+    const token = await adminToken();
+    const { id } = await legacyRole();
+    const res = await request(app)
+      .patch(`/api/v1/roles/${id}`)
+      .set(auth(token))
+      .send({ permissions: ['employees.view'] });
+    expect(res.status).toBe(200);
+    expect((await Role.findById(id).orFail().lean().exec()).permissions).toEqual(['employees.view']);
+  });
+
+  it('PATCH /roles/:id: a newly added unknown name is still 400, and nothing is saved', async () => {
+    const token = await adminToken();
+    const { id } = await legacyRole();
+    const res = await request(app)
+      .patch(`/api/v1/roles/${id}`)
+      .set(auth(token))
+      .send({ permissions: [...RETIRED_ROLE, 'not.real'] });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(JSON.stringify(res.body)).toContain('not.real');
+    expect(JSON.stringify(res.body)).not.toContain('departments.manage');
+    expect((await Role.findById(id).orFail().lean().exec()).permissions).toEqual(RETIRED_ROLE);
+  });
+
+  it('PATCH /roles/:id: re-adding a retired name that is not on the role is rejected', async () => {
+    const token = await adminToken();
+    const { id } = await legacyRole();
+    const res = await request(app)
+      .patch(`/api/v1/roles/${id}`)
+      .set(auth(token))
+      .send({ permissions: [...RETIRED_ROLE, 'documents.view'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /roles stays strict: a retired name cannot be put on a new role', async () => {
+    const res = await request(app)
+      .post('/api/v1/roles')
+      .set(auth(await adminToken()))
+      .send({ name: 'Fresh', permissions: ['departments.manage'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('PATCH /users/:id: re-sending stored custom permissions that include a retired name succeeds', async () => {
+    const token = await adminToken();
+    const target = await createUser({ roleSlug: 'employee' });
+    const stored = ['expense-claims.view', 'payroll.view'];
+    await User.updateOne({ _id: target.user._id }, { $set: { customPermissions: stored } });
+
+    const res = await request(app)
+      .patch(`/api/v1/users/${target.user._id}`)
+      .set(auth(token))
+      .send({ firstName: 'Renamed', customPermissions: stored });
+    expect(res.status).toBe(200);
+
+    const after = await User.findById(target.user._id).orFail().lean().exec();
+    expect(after.firstName).toBe('Renamed');
+    expect(after.customPermissions).toEqual(stored);
+  });
+
+  it('PATCH /users/:id: a newly added unknown custom permission is still 400', async () => {
+    const token = await adminToken();
+    const target = await createUser({ roleSlug: 'employee' });
+    const stored = ['expense-claims.view'];
+    await User.updateOne({ _id: target.user._id }, { $set: { customPermissions: stored } });
+
+    const res = await request(app)
+      .patch(`/api/v1/users/${target.user._id}`)
+      .set(auth(token))
+      .send({ customPermissions: [...stored, 'not.real'] });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('not.real');
+    const after = await User.findById(target.user._id).orFail().lean().exec();
+    expect(after.customPermissions).toEqual(stored);
+  });
+});
+
+describe('a user who holds more than the caller is protected from them', () => {
+  const STRONG_PASSWORD = 'Rotat3d!Secret#99';
+
+  it('403 (naming what is missing) on password reset, status change and delete of an admin', async () => {
+    const { token } = await lesserUserAdmin();
+    const admin = await createUser({ roleSlug: 'admin' });
+    const before = await User.findById(admin.user._id).select('+password').orFail().lean().exec();
+
+    const reset = await request(app)
+      .patch(`/api/v1/users/${admin.user._id}/password`)
+      .set(auth(token))
+      .send({ password: STRONG_PASSWORD });
+    expect(reset.status).toBe(403);
+    expect(reset.body.error.details.missingPermissions).toContain('*');
+
+    const status = await request(app)
+      .patch(`/api/v1/users/${admin.user._id}/status`)
+      .set(auth(token))
+      .send({ status: 'inactive' });
+    expect(status.status).toBe(403);
+
+    const del = await request(app).delete(`/api/v1/users/${admin.user._id}`).set(auth(token));
+    expect(del.status).toBe(403);
+
+    const after = await User.findById(admin.user._id).select('+password').orFail().lean().exec();
+    expect(after.password).toBe(before.password);
+    expect(after.status).toBe('active');
+    expect(after.isDeleted).toBe(false);
+    expect(after.sessionVersion).toBe(before.sessionVersion);
+  });
+
+  it('403 when the target holds a custom permission the caller lacks', async () => {
+    const { token } = await lesserUserAdmin();
+    const target = await createUser({ roleSlug: 'employee' });
+    await User.updateOne({ _id: target.user._id }, { $set: { customPermissions: ['payroll.process'] } });
+
+    const status = await request(app)
+      .patch(`/api/v1/users/${target.user._id}/status`)
+      .set(auth(token))
+      .send({ status: 'inactive' });
+    expect(status.status).toBe(403);
+    expect(status.body.error.details.missingPermissions).toEqual(['payroll.process']);
+  });
+
+  it('200 on password reset, status change and delete of an ordinary employee', async () => {
+    const { token } = await lesserUserAdmin();
+    const target = await createUser({ roleSlug: 'employee' });
+
+    const reset = await request(app)
+      .patch(`/api/v1/users/${target.user._id}/password`)
+      .set(auth(token))
+      .send({ password: STRONG_PASSWORD });
+    expect(reset.status).toBe(200);
+
+    const status = await request(app)
+      .patch(`/api/v1/users/${target.user._id}/status`)
+      .set(auth(token))
+      .send({ status: 'inactive' });
+    expect(status.status).toBe(200);
+    expect(status.body.data.status).toBe('inactive');
+
+    const del = await request(app).delete(`/api/v1/users/${target.user._id}`).set(auth(token));
+    expect(del.status).toBe(200);
+  });
+
+  it('200 for a caller who holds everything the target holds (hr_manager over an hr_executive)', async () => {
+    const { token } = await delegatedHrManager();
+    const target = await createUser({ roleSlug: 'hr_executive' });
+    const res = await request(app)
+      .patch(`/api/v1/users/${target.user._id}/status`)
+      .set(auth(token))
+      .send({ status: 'inactive' });
+    expect(res.status).toBe(200);
+  });
+
+  it('404 (not 403) for a user that does not exist', async () => {
+    const { token } = await lesserUserAdmin();
+    const res = await request(app)
+      .delete('/api/v1/users/0123456789abcdef01234567')
+      .set(auth(token));
+    expect(res.status).toBe(404);
+  });
+
+  it('a * caller can reset, deactivate and delete another admin', async () => {
+    const token = await adminToken();
+    const other = await createUser({ roleSlug: 'admin' });
+
+    const reset = await request(app)
+      .patch(`/api/v1/users/${other.user._id}/password`)
+      .set(auth(token))
+      .send({ password: STRONG_PASSWORD });
+    expect(reset.status).toBe(200);
+    const status = await request(app)
+      .patch(`/api/v1/users/${other.user._id}/status`)
+      .set(auth(token))
+      .send({ status: 'inactive' });
+    expect(status.status).toBe(200);
+    const del = await request(app).delete(`/api/v1/users/${other.user._id}`).set(auth(token));
+    expect(del.status).toBe(200);
   });
 });

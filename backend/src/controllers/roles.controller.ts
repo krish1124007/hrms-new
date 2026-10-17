@@ -6,7 +6,12 @@ import { audit } from '../services/audit.service.js';
 import { slugify } from '../lib/slugify.js';
 import { cached, invalidate } from '../lib/cache.js';
 import { PERMISSIONS_BY_MODULE } from '../config/permissions.js';
-import { assertCanGrant, permissionListSchema } from '../lib/permission-grants.js';
+import {
+  assertCanGrant,
+  assertCanSetPermissions,
+  permissionListSchema,
+  storedPermissionListSchema,
+} from '../lib/permission-grants.js';
 
 export const createRoleSchema = z.object({
   name: z.string().min(2).max(64),
@@ -17,7 +22,7 @@ export const createRoleSchema = z.object({
 export const updateRoleSchema = z.object({
   name: z.string().min(2).max(64).optional(),
   description: z.string().optional(),
-  permissions: permissionListSchema.optional(),
+  permissions: storedPermissionListSchema.optional(),
 });
 
 export async function listRoles(_req: Request, res: Response): Promise<void> {
@@ -66,14 +71,11 @@ export async function updateRole(req: Request, res: Response): Promise<void> {
 
   const body = req.body as z.infer<typeof updateRoleSchema>;
   if (body.permissions !== undefined) {
-    // Only what is being *added* needs the caller's blessing: re-saving a role
-    // that already carries a permission the caller lacks must not be blocked,
-    // but nobody may widen a role (their own included) beyond what they hold.
-    const current = new Set(role.permissions);
-    assertCanGrant(
-      req.user,
-      body.permissions.filter((permission) => !current.has(permission)),
-    );
+    // Only what is being *added* is validated and needs the caller's blessing:
+    // a role may already hold retired names or permissions the caller lacks
+    // (the UI sends the whole list back), but nobody may widen a role — their
+    // own included — beyond what they hold.
+    assertCanSetPermissions(req.user, 'permissions', body.permissions, role.permissions);
   }
   if (body.name !== undefined) {
     role.name = body.name;

@@ -1,40 +1,62 @@
 /**
  * Rules for *handing out* permissions — the privilege-escalation guards used
  * wherever a request can change what somebody may do (role editing, user
- * editing, inviting users, onboarding employees with a login).
+ * editing, inviting users, onboarding employees with a login) or act on a
+ * more privileged account (password reset, deactivation, deletion).
  *
- *  1. Only catalogued permission names (or the `*` wildcard) are accepted, so
- *     a typo or a stale UI name can never produce a role that silently 403s.
+ *  1. Only catalogued permission names (or the `*` wildcard) can be *added*,
+ *     so a typo or a stale UI name can never produce a role that silently
+ *     403s. Names a record already stores are never re-validated: roles and
+ *     users created before the catalogue was fixed may hold retired names, and
+ *     the UI sends the whole list back on every edit.
  *  2. A caller without `*` can never grant a permission they do not hold
  *     themselves — directly, or by assigning a role that carries it. That
  *     also keeps `*` itself admin-only.
+ *  3. A caller without `*` cannot act on a user who holds a permission the
+ *     caller lacks.
  */
 import { z } from 'zod';
 import { ALL_PERMISSIONS } from '../config/permissions.js';
-import { ForbiddenError } from './errors.js';
+import { ForbiddenError, ValidationAppError } from './errors.js';
 import { hasPermission } from './access.js';
 
 type Caller = Express.Request['user'];
 
+const dedupe = (permissions: string[]): string[] => [...new Set(permissions)];
+
+/** Names that are neither catalogued nor the `*` wildcard (which {@link assertCanGrant} polices). */
+function unknownPermissions(permissions: readonly string[]): string[] {
+  return dedupe([...permissions]).filter(
+    (permission) => permission !== '*' && !ALL_PERMISSIONS.has(permission),
+  );
+}
+
+const unknownMessage = (unknown: readonly string[]): string =>
+  `Unknown permissions: ${unknown.join(', ')}`;
+
 /**
- * A list of permission names: every entry must be in the catalogue (the `*`
- * wildcard passes here — {@link assertCanGrant} decides who may hand it out).
- * Unknown entries are reported together. Duplicates are dropped.
+ * A list of permission names for a record that does not exist yet (create /
+ * invite): every entry must be in the catalogue. The `*` wildcard passes here
+ * — {@link assertCanGrant} decides who may hand it out. Unknown entries are
+ * reported together. Duplicates are dropped.
  */
 export const permissionListSchema = z
   .array(z.string())
   .superRefine((permissions, ctx) => {
-    const unknown = [...new Set(permissions)].filter(
-      (permission) => permission !== '*' && !ALL_PERMISSIONS.has(permission),
-    );
+    const unknown = unknownPermissions(permissions);
     if (unknown.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Unknown permissions: ${unknown.join(', ')}`,
-      });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: unknownMessage(unknown) });
     }
   })
-  .transform((permissions) => [...new Set(permissions)]);
+  .transform(dedupe);
+
+/**
+ * A list of permission names for a record that already stores some (update):
+ * shape only. The names being added are checked against the catalogue by
+ * {@link assertCanSetPermissions}, which needs the stored list to tell what is
+ * added. Duplicates are dropped.
+ */
+export const storedPermissionListSchema = z.array(z.string()).transform(dedupe);
 
 /**
  * 403 unless the caller already holds every permission in `granted`. A `*`
@@ -42,7 +64,7 @@ export const permissionListSchema = z
  * `details.missingPermissions` names exactly what the caller lacks.
  */
 export function assertCanGrant(caller: Caller, granted: readonly string[]): void {
-  const missing = [...new Set(granted)].filter((permission) => !hasPermission(caller, permission));
+  const missing = dedupe([...granted]).filter((permission) => !hasPermission(caller, permission));
   if (missing.length === 0) return;
   throw new ForbiddenError(
     missing.includes('*')
@@ -52,7 +74,49 @@ export function assertCanGrant(caller: Caller, granted: readonly string[]): void
   );
 }
 
+/**
+ * Update-time check for a permission list (`field` names it in the error).
+ * Only what is being *added* relative to `current` is looked at: an added name
+ * must be catalogued (400 `VALIDATION_ERROR`) and grantable by the caller
+ * (403). Names already stored — retired or held beyond the caller — pass
+ * through, and dropping names is always allowed.
+ */
+export function assertCanSetPermissions(
+  caller: Caller,
+  field: string,
+  next: readonly string[],
+  current: readonly string[],
+): void {
+  const stored = new Set(current);
+  const added = dedupe([...next]).filter((permission) => !stored.has(permission));
+  const unknown = unknownPermissions(added);
+  if (unknown.length > 0) {
+    throw new ValidationAppError('Validation failed', [
+      { field, message: unknownMessage(unknown), code: 'custom' },
+    ]);
+  }
+  assertCanGrant(caller, added);
+}
+
 /** Assigning a role grants everything on it, so the caller must be able to grant all of it. */
 export function assertCanAssignRole(caller: Caller, role: { permissions: readonly string[] }): void {
   assertCanGrant(caller, role.permissions);
+}
+
+/**
+ * 403 unless the caller holds every permission `target` holds (role +
+ * custom). `target.role` must be populated. A `*` caller is unrestricted; a
+ * user holding `*` can only be acted on by a `*` caller.
+ */
+export function assertCanManageUser(
+  caller: Caller,
+  target: { role?: unknown; customPermissions?: string[] },
+): void {
+  const role = target.role as { permissions?: string[] } | null | undefined;
+  const held = dedupe([...(role?.permissions ?? []), ...(target.customPermissions ?? [])]);
+  const missing = held.filter((permission) => !hasPermission(caller, permission));
+  if (missing.length === 0) return;
+  throw new ForbiddenError('You cannot modify a user who holds permissions you do not have', {
+    missingPermissions: missing,
+  });
 }
