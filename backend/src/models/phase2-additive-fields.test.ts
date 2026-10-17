@@ -11,6 +11,7 @@ import { AttendanceConfig } from './attendance-config.model.js';
 import { Employee } from './employee.model.js';
 import { PayrollRecord } from './payroll-record.model.js';
 import { PayrollCycle } from './payroll-cycle.model.js';
+import { Holiday } from './holiday.model.js';
 import { updateConfigSchema } from '../controllers/attendance.controller.js';
 import { createEmployeeSchema, updateEmployeeSchema } from '../controllers/employees.controller.js';
 
@@ -253,5 +254,38 @@ describe('PayrollCycle lock/pay audit fields', () => {
     expect(String(found!.lockedBy)).toBe(String(lockedBy));
     expect(String(found!.paidBy)).toBe(String(paidBy));
     expect(found!.lockedAt).toEqual(lockedAt);
+  });
+});
+
+describe('Holiday unique (date, name) index', () => {
+  const date = new Date(2026, 9, 20);
+
+  it('is partial on live rows: a soft-deleted holiday can be added again, a live duplicate cannot', async () => {
+    await Holiday.syncIndexes();
+
+    const first = await Holiday.create({ name: 'Diwali', date, type: 'public' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (first as any).softDelete();
+
+    // Same name + date as a soft-deleted row: allowed.
+    const second = await Holiday.create({ name: 'Diwali', date, type: 'public' });
+    expect(second._id).toBeDefined();
+
+    // Same name + date as a live row: duplicate key.
+    await expect(Holiday.create({ name: 'Diwali', date, type: 'public' })).rejects.toMatchObject({
+      code: 11000,
+    });
+
+    // A different name on the same date is unaffected.
+    await expect(Holiday.create({ name: 'Govardhan Puja', date, type: 'public' })).resolves.toBeDefined();
+  });
+
+  it('is defined as a partial unique index on isDeleted:false', async () => {
+    await Holiday.syncIndexes();
+    const indexes = await Holiday.collection.indexes();
+    const idx = indexes.find((i) => i.key && i.key.date === 1 && i.key.name === 1);
+    expect(idx).toBeDefined();
+    expect(idx!.unique).toBe(true);
+    expect(idx!.partialFilterExpression).toEqual({ isDeleted: false });
   });
 });

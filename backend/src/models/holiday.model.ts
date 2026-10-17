@@ -32,9 +32,15 @@ holidaySchema.plugin(softDeletePlugin);
 holidaySchema.plugin(paginatePlugin);
 
 holidaySchema.index({ date: 1 });
-// One holiday per (date, name). autoIndex is off in production, so this has to
-// be created by hand there — see the deploy checklist.
-holidaySchema.index({ date: 1, name: 1 }, { unique: true });
+// One *live* holiday per (date, name). Partial on `isDeleted: false` (the
+// soft-delete plugin's flag, default false) so a holiday HR deleted by mistake
+// can be added again instead of colliding with an invisible row. Legacy rows
+// that lack the field simply aren't indexed. autoIndex is off in production,
+// so this has to be created by hand there — see the deploy checklist.
+holidaySchema.index(
+  { date: 1, name: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } },
+);
 
 export const Holiday = model<IHoliday, PaginateModel<IHoliday> & Model<IHoliday>>(
   'Holiday',
