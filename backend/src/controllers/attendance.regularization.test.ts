@@ -424,9 +424,10 @@ describe('approving a regularization', () => {
     expect(row!.source).toBe('regularization');
   });
 
-  it('a reason-only request cannot invent punches: only the regularization and isRegularized change', async () => {
+  it('a reason-only request on an auto-absent day: approving marks it present, with no punches and 0 hours', async () => {
     const who = await person();
     const hr = await approver();
+    await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent', source: 'auto_absent' });
     const id = await requestDay(who, {});
 
     const res = await decide(hr, id, 'approved');
@@ -434,12 +435,55 @@ describe('approving a regularization', () => {
     expect(res.status).toBe(200);
     const row = await rowOf(who, YESTERDAY);
     expect(row!.regularization!.status).toBe('approved');
+    expect(row!.status).toBe('present');
     expect(row!.isRegularized).toBe(true);
-    expect(row!.checkIn).toBeUndefined();
-    expect(row!.checkOut).toBeUndefined();
-    expect(row!.status).toBe('absent');
+    expect(row!.source).toBe('regularization');
+    expect(row!.checkIn?.time).toBeUndefined();
+    expect(row!.checkOut?.time).toBeUndefined();
     expect(row!.totalWorkingHours).toBe(0);
-    expect(row!.source).toBe('punch');
+    expect(row!.lateBy).toBe(0);
+    expect(row!.overtimeHours).toBe(0);
+  });
+
+  it('a reason-only approval on a day with punches keeps them and the hours, and marks the day present', async () => {
+    const who = await person();
+    const hr = await approver();
+    await Attendance.create({
+      employeeId: who.emp._id,
+      date: label(YESTERDAY),
+      status: 'half_day',
+      checkIn: { time: ist(YESTERDAY, '09:30'), method: 'qr' },
+      checkOut: { time: ist(YESTERDAY, '13:00'), method: 'qr' },
+      totalWorkingHours: 3.5,
+    });
+    const id = await requestDay(who, {});
+
+    await decide(hr, id, 'approved');
+
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.status).toBe('present');
+    expect(row!.source).toBe('regularization');
+    expect(row!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '09:30').toISOString());
+    expect(row!.checkIn!.method).toBe('qr');
+    expect(row!.totalWorkingHours).toBe(3.5);
+  });
+
+  it('a reason-only approval is still refused on a leave-stamped day', async () => {
+    const who = await person();
+    const hr = await approver();
+    const id = await requestDay(who, {});
+    await Attendance.updateOne(
+      { _id: id },
+      { $set: { leaveRequestId: new Types.ObjectId(), isPaidLeave: true, status: 'on_leave', source: 'leave' } },
+    );
+
+    const res = await decide(hr, id, 'approved');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('LEAVE_DAY');
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.status).toBe('on_leave');
+    expect(row!.regularization!.status).toBe('pending');
   });
 
   it('refuses to put a check-in after the check-out already on the row', async () => {
@@ -505,6 +549,24 @@ describe('rejecting a regularization', () => {
     expect(row!.regularization!.status).toBe('rejected');
     expect(String(row!.regularization!.approvedBy)).toBe(String(hr.user._id));
     expect(row!.regularization!.approvedAt).toBeInstanceOf(Date);
+  });
+
+  it('a reason-only request on an auto-absent day stays absent when rejected', async () => {
+    const who = await person();
+    const hr = await approver();
+    await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent', source: 'auto_absent' });
+    const id = await requestDay(who, {});
+
+    const res = await decide(hr, id, 'rejected');
+
+    expect(res.status).toBe(200);
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.regularization!.status).toBe('rejected');
+    expect(row!.status).toBe('absent');
+    expect(row!.isRegularized).toBe(false);
+    expect(row!.source).toBe('auto_absent');
+    expect(row!.checkIn?.time).toBeUndefined();
+    expect(row!.totalWorkingHours).toBe(0);
   });
 });
 

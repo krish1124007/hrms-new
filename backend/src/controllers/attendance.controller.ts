@@ -1104,9 +1104,13 @@ export async function decideRegularization(req: Request, res: Response): Promise
     // punch would: an `absent` auto row becomes present / late / half day.
     const cfg = await AttendanceConfig.findOne({}).exec();
     applyShiftRules(att, await resolveShift(owner), cfg);
+  } else if (status === 'approved') {
+    // Reason-only request: there are no times to write or judge, so the
+    // approver is vouching for the day. Punches and hours stay as they are
+    // (none, on an auto-absent row) and `applyShiftRules` is not run.
+    att.status = 'present';
+    att.source = 'regularization';
   }
-  // A reason-only request carries no times to write — approving it can only
-  // record the decision.
   if (status === 'approved') att.isRegularized = true;
 
   const userId = getUserId();
