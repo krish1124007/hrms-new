@@ -11,23 +11,23 @@ export declare const listAuditLogsQuerySchema: z.ZodObject<{
     from: z.ZodOptional<z.ZodString>;
     to: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    to?: string | undefined;
+    limit: number;
     search?: string | undefined;
+    action?: "create" | "failure" | "update" | "delete" | "login" | "logout" | "export" | "import" | undefined;
     userId?: string | undefined;
     from?: string | undefined;
-    action?: "create" | "delete" | "update" | "login" | "logout" | "export" | "import" | "failure" | undefined;
+    to?: string | undefined;
     entity?: string | undefined;
     entityId?: string | undefined;
 }, {
-    limit?: number | undefined;
-    to?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
+    action?: "create" | "failure" | "update" | "delete" | "login" | "logout" | "export" | "import" | undefined;
     userId?: string | undefined;
     from?: string | undefined;
-    action?: "create" | "delete" | "update" | "login" | "logout" | "export" | "import" | "failure" | undefined;
+    to?: string | undefined;
     entity?: string | undefined;
     entityId?: string | undefined;
 }>;

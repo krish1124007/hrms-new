@@ -1,12 +1,16 @@
 import type { Request, Response } from 'express';
-export declare function register(req: Request, res: Response): Promise<void>;
 export declare function login(req: Request, res: Response): Promise<void>;
 export declare function refreshToken(req: Request, res: Response): Promise<void>;
 export declare function logout(req: Request, res: Response): Promise<void>;
 export declare function logoutAll(req: Request, res: Response): Promise<void>;
 export declare function forgotPassword(req: Request, res: Response): Promise<void>;
 export declare function resetPassword(req: Request, res: Response): Promise<void>;
-export declare function verifyEmail(req: Request, res: Response): Promise<void>;
+/**
+ * Activates an invited account: the e-mailed token proves the recipient owns
+ * the address, the body supplies the password they chose. Returns the same
+ * payload as `login`, so the SPA can drop the user straight into the app.
+ */
+export declare function acceptInvite(req: Request, res: Response): Promise<void>;
 export declare function me(req: Request, res: Response): Promise<void>;
 /**
  * Update the currently logged-in user's own profile (name + avatar).

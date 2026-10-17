@@ -5,6 +5,8 @@ import { type Transporter } from 'nodemailer';
  *   1. `RESEND_API_KEY` set → Resend HTTP API (modern SaaS default)
  *   2. `SMTP_HOST` set      → nodemailer SMTP (legacy/self-hosted)
  *   3. nothing set          → dev-mode: log the mail to stdout, return OK
+ *                             (production: log an error, return false —
+ *                             never report a mail as sent that was not)
  *
  * This means `sendMail()` never throws in dev (so BullMQ dunning jobs don't
  * retry endlessly) and is production-ready the moment a key is provided.
@@ -30,8 +32,9 @@ type MailTransport = {
 /**
  * Send an email via the configured transport.
  *
- * Returns true on success / dev-noop, false if delivery failed (errors are
- * logged but never thrown — callers are typically fire-and-forget).
+ * Returns true on success / dev-noop, false if delivery failed or production
+ * has no transport at all (errors are logged but never thrown — callers are
+ * typically fire-and-forget).
  */
 export declare function sendMail(input: SendMailInput): Promise<boolean>;
 /**

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { logger } from '../config/logger.js';
 /**
  * Idempotency middleware — prevents duplicate processing when a client
@@ -40,7 +40,7 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
         const scope = `${req.method}:${req.path}`;
         const redisKey = `idem:${scope}:${key}`;
         try {
-            const cached = await redis.get(redisKey);
+            const cached = await redisApp.get(redisKey);
             if (cached) {
                 const cachedObj = JSON.parse(cached);
                 if (cachedObj.bodyHash !== bodyHash) {
@@ -72,7 +72,7 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
             const status = res.statusCode;
             // Only cache successful responses — 4xx/5xx should be retryable
             if (status >= 200 && status < 300) {
-                void redis.set(redisKey, JSON.stringify({ bodyHash, status, body }), 'EX', ttlSeconds).catch((err) => logger.warn({ err, key }, 'Failed to cache idempotent response'));
+                void redisApp.set(redisKey, JSON.stringify({ bodyHash, status, body }), 'EX', ttlSeconds).catch((err) => logger.warn({ err, key }, 'Failed to cache idempotent response'));
             }
             return originalJson(body);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

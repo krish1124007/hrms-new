@@ -33,15 +33,15 @@ export declare const updateTimeEntrySchema: z.ZodObject<{
     date?: Date | undefined;
     description?: string | undefined;
     userId?: string | undefined;
-    hours?: number | undefined;
     taskId?: string | undefined;
+    hours?: number | undefined;
     isBillable?: boolean | undefined;
 }, {
     date?: Date | undefined;
     description?: string | undefined;
     userId?: string | undefined;
-    hours?: number | undefined;
     taskId?: string | undefined;
+    hours?: number | undefined;
     isBillable?: boolean | undefined;
 }>;
 export declare function listTimeEntries(req: Request, res: Response): Promise<void>;

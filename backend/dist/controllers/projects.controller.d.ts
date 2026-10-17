@@ -5,10 +5,10 @@ export declare const memberSchema: z.ZodObject<{
     role: z.ZodDefault<z.ZodEnum<["manager", "member", "viewer"]>>;
 }, "strip", z.ZodTypeAny, {
     userId: string;
-    role: "member" | "manager" | "viewer";
+    role: "manager" | "member" | "viewer";
 }, {
     userId: string;
-    role?: "member" | "manager" | "viewer" | undefined;
+    role?: "manager" | "member" | "viewer" | undefined;
 }>;
 export declare const createProjectSchema: z.ZodObject<{
     name: z.ZodString;
@@ -27,10 +27,10 @@ export declare const createProjectSchema: z.ZodObject<{
         role: z.ZodDefault<z.ZodEnum<["manager", "member", "viewer"]>>;
     }, "strip", z.ZodTypeAny, {
         userId: string;
-        role: "member" | "manager" | "viewer";
+        role: "manager" | "member" | "viewer";
     }, {
         userId: string;
-        role?: "member" | "manager" | "viewer" | undefined;
+        role?: "manager" | "member" | "viewer" | undefined;
     }>, "many">>;
     progress: z.ZodOptional<z.ZodNumber>;
     color: z.ZodOptional<z.ZodString>;
@@ -38,41 +38,41 @@ export declare const createProjectSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     code: string;
     name: string;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
-    category?: string | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    estimatedHours?: number | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
     client?: string | undefined;
+    color?: string | undefined;
+    progress?: number | undefined;
+    estimatedHours?: number | undefined;
     budget?: number | undefined;
     members?: {
         userId: string;
-        role: "member" | "manager" | "viewer";
+        role: "manager" | "member" | "viewer";
     }[] | undefined;
-    progress?: number | undefined;
 }, {
     code: string;
     name: string;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
-    category?: string | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    estimatedHours?: number | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
     client?: string | undefined;
+    color?: string | undefined;
+    progress?: number | undefined;
+    estimatedHours?: number | undefined;
     budget?: number | undefined;
     members?: {
         userId: string;
-        role?: "member" | "manager" | "viewer" | undefined;
+        role?: "manager" | "member" | "viewer" | undefined;
     }[] | undefined;
-    progress?: number | undefined;
 }>;
 export declare const updateProjectSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -91,52 +91,52 @@ export declare const updateProjectSchema: z.ZodObject<{
         role: z.ZodDefault<z.ZodEnum<["manager", "member", "viewer"]>>;
     }, "strip", z.ZodTypeAny, {
         userId: string;
-        role: "member" | "manager" | "viewer";
+        role: "manager" | "member" | "viewer";
     }, {
         userId: string;
-        role?: "member" | "manager" | "viewer" | undefined;
+        role?: "manager" | "member" | "viewer" | undefined;
     }>, "many">>>;
     progress: z.ZodOptional<z.ZodOptional<z.ZodNumber>>;
     color: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     tags: z.ZodOptional<z.ZodOptional<z.ZodArray<z.ZodString, "many">>>;
 }, "strip", z.ZodTypeAny, {
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     code?: string | undefined;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
     name?: string | undefined;
-    category?: string | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    estimatedHours?: number | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
     client?: string | undefined;
+    color?: string | undefined;
+    progress?: number | undefined;
+    estimatedHours?: number | undefined;
     budget?: number | undefined;
     members?: {
         userId: string;
-        role: "member" | "manager" | "viewer";
+        role: "manager" | "member" | "viewer";
     }[] | undefined;
-    progress?: number | undefined;
 }, {
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     code?: string | undefined;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
     name?: string | undefined;
-    category?: string | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    estimatedHours?: number | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
     client?: string | undefined;
+    color?: string | undefined;
+    progress?: number | undefined;
+    estimatedHours?: number | undefined;
     budget?: number | undefined;
     members?: {
         userId: string;
-        role?: "member" | "manager" | "viewer" | undefined;
+        role?: "manager" | "member" | "viewer" | undefined;
     }[] | undefined;
-    progress?: number | undefined;
 }>;
 export declare const listQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -147,21 +147,21 @@ export declare const listQuerySchema: z.ZodObject<{
     search: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     sort?: string | undefined;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
     search?: string | undefined;
-    member?: string | undefined;
     client?: string | undefined;
+    member?: string | undefined;
 }, {
-    limit?: number | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "not_started" | "on_hold" | undefined;
     sort?: string | undefined;
-    status?: "cancelled" | "in_progress" | "completed" | "not_started" | "on_hold" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
-    member?: string | undefined;
     client?: string | undefined;
+    member?: string | undefined;
 }>;
 export declare function listProjects(req: Request, res: Response): Promise<void>;
 export declare function createProject(req: Request, res: Response): Promise<void>;

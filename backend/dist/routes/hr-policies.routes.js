@@ -2,9 +2,11 @@ import { Router } from 'express';
 import multer, { MulterError } from 'multer';
 import * as ctrl from '../controllers/hr-policies.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { rejectRawUploadRefs } from '../middleware/presign-response.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
+import { uploadFileFilter } from '../lib/upload-policy.js';
 import { ValidationAppError } from '../lib/errors.js';
 const router = Router();
 router.use(authMiddleware);
@@ -12,6 +14,7 @@ router.use(authMiddleware);
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: uploadFileFilter,
 });
 /**
  * Multer's own failures (size cap hit, missing boundary, wrong field name)
@@ -43,7 +46,7 @@ router.post('/:id/restore', requirePermission('policies.manage'), asyncHandler(c
 router.get('/:id/acknowledgements', requirePermission('policies.view'), asyncHandler(ctrl.listAcknowledgements));
 router.post('/:id/acknowledge', requirePermission('policies.view'), validate(ctrl.acknowledgeSchema), asyncHandler(ctrl.acknowledge));
 /* ── Attachments ── */
-router.post('/:id/attachments', requirePermission('policies.manage'), uploadAttachmentFile, asyncHandler(ctrl.uploadAttachment));
+router.post('/:id/attachments', requirePermission('policies.manage'), uploadAttachmentFile, rejectRawUploadRefs, asyncHandler(ctrl.uploadAttachment));
 router.delete('/:id/attachments/:attachmentId', requirePermission('policies.manage'), asyncHandler(ctrl.deleteAttachment));
 export default router;
 //# sourceMappingURL=hr-policies.routes.js.map

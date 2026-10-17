@@ -50,12 +50,17 @@ async function sendViaResend(input) {
 /**
  * Send an email via the configured transport.
  *
- * Returns true on success / dev-noop, false if delivery failed (errors are
- * logged but never thrown — callers are typically fire-and-forget).
+ * Returns true on success / dev-noop, false if delivery failed or production
+ * has no transport at all (errors are logged but never thrown — callers are
+ * typically fire-and-forget).
  */
 export async function sendMail(input) {
     try {
         if (transport.kind === 'dev') {
+            if (env.NODE_ENV === 'production') {
+                logger.error({ to: input.to, subject: input.subject }, 'No mail transport configured — email NOT sent');
+                return false;
+            }
             logger.info({ to: input.to, subject: input.subject, tags: input.tags }, '[email:dev] would send mail (no transport configured)');
             return true;
         }
@@ -95,8 +100,13 @@ export async function sendMail(input) {
  */
 export async function verifyTransport() {
     try {
-        if (transport.kind === 'dev')
-            return { ok: true, kind: 'dev' };
+        if (transport.kind === 'dev') {
+            // The logging transport is a fine stand-in while developing; in
+            // production it is a misconfiguration, never "ok".
+            return env.NODE_ENV === 'production'
+                ? { ok: false, kind: 'dev', error: 'No mail transport configured (SMTP_HOST or RESEND_API_KEY)' }
+                : { ok: true, kind: 'dev' };
+        }
         if (transport.kind === 'resend') {
             // Resend has no verify endpoint; treat as ok if key present.
             return { ok: true, kind: 'resend' };

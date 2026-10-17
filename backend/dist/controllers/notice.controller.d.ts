@@ -14,42 +14,42 @@ export declare const createNoticeSchema: z.ZodObject<{
         size: z.ZodDefault<z.ZodNumber>;
         mimeType: z.ZodDefault<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
-        url: string;
         name: string;
         size: number;
+        url: string;
         mimeType: string;
     }, {
-        url: string;
         name: string;
+        url: string;
         size?: number | undefined;
         mimeType?: string | undefined;
     }>, "many">>;
 }, "strip", z.ZodTypeAny, {
-    isPinned: boolean;
-    departments: string[];
+    title: string;
+    content: string;
     attachments: {
-        url: string;
         name: string;
         size: number;
+        url: string;
         mimeType: string;
     }[];
-    title: string;
+    isPinned: boolean;
     priority: "urgent" | "normal" | "important";
-    content: string;
+    departments: string[];
     expiresAt?: Date | undefined;
 }, {
     title: string;
     content: string;
-    isPinned?: boolean | undefined;
-    expiresAt?: Date | undefined;
-    departments?: string[] | undefined;
     attachments?: {
-        url: string;
         name: string;
+        url: string;
         size?: number | undefined;
         mimeType?: string | undefined;
     }[] | undefined;
+    expiresAt?: Date | undefined;
+    isPinned?: boolean | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
+    departments?: string[] | undefined;
 }>;
 export declare const updateNoticeSchema: z.ZodObject<{
     title: z.ZodOptional<z.ZodString>;
@@ -64,42 +64,42 @@ export declare const updateNoticeSchema: z.ZodObject<{
         size: z.ZodDefault<z.ZodNumber>;
         mimeType: z.ZodDefault<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
-        url: string;
         name: string;
         size: number;
+        url: string;
         mimeType: string;
     }, {
-        url: string;
         name: string;
+        url: string;
         size?: number | undefined;
         mimeType?: string | undefined;
     }>, "many">>>;
 }, "strip", z.ZodTypeAny, {
-    isPinned?: boolean | undefined;
-    expiresAt?: Date | undefined;
-    departments?: string[] | undefined;
+    title?: string | undefined;
+    content?: string | undefined;
     attachments?: {
-        url: string;
         name: string;
         size: number;
+        url: string;
         mimeType: string;
     }[] | undefined;
-    title?: string | undefined;
-    priority?: "urgent" | "normal" | "important" | undefined;
-    content?: string | undefined;
-}, {
-    isPinned?: boolean | undefined;
     expiresAt?: Date | undefined;
+    isPinned?: boolean | undefined;
+    priority?: "urgent" | "normal" | "important" | undefined;
     departments?: string[] | undefined;
+}, {
+    title?: string | undefined;
+    content?: string | undefined;
     attachments?: {
-        url: string;
         name: string;
+        url: string;
         size?: number | undefined;
         mimeType?: string | undefined;
     }[] | undefined;
-    title?: string | undefined;
+    expiresAt?: Date | undefined;
+    isPinned?: boolean | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
-    content?: string | undefined;
+    departments?: string[] | undefined;
 }>;
 export declare const listQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -107,13 +107,13 @@ export declare const listQuerySchema: z.ZodObject<{
     search: z.ZodOptional<z.ZodString>;
     priority: z.ZodOptional<z.ZodEnum<["normal", "important", "urgent"]>>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     search?: string | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
 }>;

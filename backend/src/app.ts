@@ -97,7 +97,15 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     );
     next();
   });
-  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  app.use(
+    cors({
+      origin: env.CORS_ORIGIN,
+      credentials: true,
+      // The web app reads the backup filename from Content-Disposition on a
+      // cross-origin download; browsers hide it unless it is exposed.
+      exposedHeaders: ['Content-Disposition'],
+    }),
+  );
   app.use(compression());
   app.use(compressionTelemetry); // emit X-Compression-Ratio for monitoring
 

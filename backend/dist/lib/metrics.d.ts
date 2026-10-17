@@ -14,8 +14,8 @@ import { Registry, Histogram, Counter, Gauge } from 'prom-client';
  *   nodejs_gc_duration_seconds, nodejs_eventloop_lag_seconds, etc.
  */
 export declare const registry: Registry<"text/plain; version=0.0.4; charset=utf-8">;
-export declare const httpRequestDuration: Histogram<"route" | "method" | "status_class">;
-export declare const httpRequestsTotal: Counter<"route" | "method" | "status_code">;
+export declare const httpRequestDuration: Histogram<"method" | "route" | "status_class">;
+export declare const httpRequestsTotal: Counter<"method" | "route" | "status_code">;
 export declare const loginAttempts: Counter<"outcome">;
 export declare const activeSessions: Gauge<string>;
 export declare const tenantCount: Gauge<"status">;

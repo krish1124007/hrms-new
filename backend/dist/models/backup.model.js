@@ -17,6 +17,7 @@ const backupSchema = new Schema({
         default: 'manual',
     },
     size: { type: Number },
+    fileName: { type: String },
     fileUrl: { type: String },
     startedAt: { type: Date, default: Date.now },
     completedAt: { type: Date },

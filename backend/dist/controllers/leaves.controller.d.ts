@@ -28,37 +28,37 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     color: z.ZodDefault<z.ZodString>;
     isActive: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    paidLeave: boolean;
-    name: string;
     code: string;
+    name: string;
+    isActive: boolean;
     daysAllowed: number;
     carryForward: {
         enabled: boolean;
         maxDays: number;
     };
     encashable: boolean;
+    paidLeave: boolean;
     applicableGender: "male" | "female" | "all";
     probationAllowed: boolean;
     halfDayAllowed: boolean;
     attachmentRequired: boolean;
     color: string;
-    isActive: boolean;
 }, {
-    name: string;
     code: string;
+    name: string;
     daysAllowed: number;
-    paidLeave?: boolean | undefined;
+    isActive?: boolean | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
         maxDays?: number | undefined;
     } | undefined;
     encashable?: boolean | undefined;
+    paidLeave?: boolean | undefined;
     applicableGender?: "male" | "female" | "all" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
     color?: string | undefined;
-    isActive?: boolean | undefined;
 }>;
 export declare const updateLeaveTypeSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -83,50 +83,50 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     color: z.ZodOptional<z.ZodDefault<z.ZodString>>;
     isActive: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
-    paidLeave?: boolean | undefined;
-    name?: string | undefined;
     code?: string | undefined;
+    name?: string | undefined;
+    isActive?: boolean | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled: boolean;
         maxDays: number;
     } | undefined;
     encashable?: boolean | undefined;
+    paidLeave?: boolean | undefined;
     applicableGender?: "male" | "female" | "all" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
     color?: string | undefined;
-    isActive?: boolean | undefined;
 }, {
-    paidLeave?: boolean | undefined;
-    name?: string | undefined;
     code?: string | undefined;
+    name?: string | undefined;
+    isActive?: boolean | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
         maxDays?: number | undefined;
     } | undefined;
     encashable?: boolean | undefined;
+    paidLeave?: boolean | undefined;
     applicableGender?: "male" | "female" | "all" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
     color?: string | undefined;
-    isActive?: boolean | undefined;
 }>;
 export declare const leaveTypeQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
     limit: z.ZodDefault<z.ZodNumber>;
     isActive: z.ZodOptional<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     isActive?: boolean | undefined;
 }, {
+    page?: number | undefined;
     limit?: number | undefined;
     isActive?: boolean | undefined;
-    page?: number | undefined;
 }>;
 export declare function listLeaveTypes(req: Request, res: Response): Promise<void>;
 export declare function createLeaveType(req: Request, res: Response): Promise<void>;
@@ -140,17 +140,17 @@ export declare const balanceQuerySchema: z.ZodObject<{
     leaveTypeId: z.ZodOptional<z.ZodString>;
     year: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
+    year?: number | undefined;
     employeeId?: string | undefined;
     leaveTypeId?: string | undefined;
-    year?: number | undefined;
 }, {
-    limit?: number | undefined;
-    employeeId?: string | undefined;
     page?: number | undefined;
-    leaveTypeId?: string | undefined;
+    limit?: number | undefined;
     year?: number | undefined;
+    employeeId?: string | undefined;
+    leaveTypeId?: string | undefined;
 }>;
 export declare const allocateBalanceSchema: z.ZodObject<{
     employeeIds: z.ZodArray<z.ZodString, "many">;
@@ -158,14 +158,14 @@ export declare const allocateBalanceSchema: z.ZodObject<{
     year: z.ZodNumber;
     allocated: z.ZodNumber;
 }, "strip", z.ZodTypeAny, {
-    leaveTypeId: string;
-    year: number;
     employeeIds: string[];
+    year: number;
+    leaveTypeId: string;
     allocated: number;
 }, {
-    leaveTypeId: string;
-    year: number;
     employeeIds: string[];
+    year: number;
+    leaveTypeId: string;
     allocated: number;
 }>;
 export declare const adjustBalanceSchema: z.ZodObject<{
@@ -212,29 +212,29 @@ export declare const createLeaveRequestSchema: z.ZodObject<{
         fileUrl: string;
     }>, "many">>;
 }, "strip", z.ZodTypeAny, {
-    leaveTypeId: string;
-    reason: string;
     startDate: Date;
     endDate: Date;
-    isHalfDay: boolean;
+    reason: string;
+    leaveTypeId: string;
     attachments: {
         name: string;
         fileUrl: string;
     }[];
+    isHalfDay: boolean;
     employeeId?: string | undefined;
     halfDayType?: "first_half" | "second_half" | undefined;
 }, {
-    leaveTypeId: string;
-    reason: string;
     startDate: Date;
     endDate: Date;
+    reason: string;
+    leaveTypeId: string;
     employeeId?: string | undefined;
-    isHalfDay?: boolean | undefined;
-    halfDayType?: "first_half" | "second_half" | undefined;
     attachments?: {
         name: string;
         fileUrl: string;
     }[] | undefined;
+    isHalfDay?: boolean | undefined;
+    halfDayType?: "first_half" | "second_half" | undefined;
 }>;
 export declare const leaveRequestQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -246,20 +246,20 @@ export declare const leaveRequestQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    employeeId?: string | undefined;
+    limit: number;
     status?: "pending" | "approved" | "rejected" | "cancelled" | undefined;
     sort?: string | undefined;
+    employeeId?: string | undefined;
     leaveTypeId?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;
 }, {
-    limit?: number | undefined;
-    employeeId?: string | undefined;
     status?: "pending" | "approved" | "rejected" | "cancelled" | undefined;
     sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
+    employeeId?: string | undefined;
     leaveTypeId?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;

@@ -80,6 +80,6 @@ export declare const historyQuerySchema: z.ZodObject<{
     date?: Date | undefined;
 }>;
 export declare function ingestBatch(req: Request, res: Response): Promise<void>;
-export declare function liveTracking(_req: Request, res: Response): Promise<void>;
+export declare function liveTracking(req: Request, res: Response): Promise<void>;
 export declare function trackingHistory(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=field-tracking.controller.d.ts.map

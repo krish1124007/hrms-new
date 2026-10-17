@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { describe, it, expect } from 'vitest';
 import { createApp } from '../app.js';
+import { env } from '../config/env.js';
 import { registry } from '../lib/metrics.js';
 
 describe('createApp', () => {
@@ -35,5 +36,17 @@ describe('createApp', () => {
     const exposition = await registry.metrics();
     expect(exposition).toContain('route="/api/v1/metrics-control"');
     for (const probe of probes) expect(exposition).not.toContain(`route="${probe}"`);
+  });
+
+  it('exposes Content-Disposition to the configured web origin (backup download filename)', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/v1/health').set('Origin', env.CORS_ORIGIN);
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe(env.CORS_ORIGIN);
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    const exposed = String(res.headers['access-control-expose-headers'] ?? '')
+      .split(',')
+      .map((header) => header.trim().toLowerCase());
+    expect(exposed).toContain('content-disposition');
   });
 });

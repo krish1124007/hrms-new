@@ -9,9 +9,17 @@ import { audit } from '../services/audit.service.js';
 /**
  * Failures that say nothing about a real problem — an expired access token is
  * routine (the client refreshes and retries), and logging every one would bury
- * the failures worth reading.
+ * the failures worth reading. File-link failures come from an anonymous route
+ * (and carry the link's signature in the URL), so auditing them would also let
+ * anyone drive unbounded audit-log writes.
  */
-const NOISY_CODES = new Set(['INVALID_TOKEN', 'TOKEN_EXPIRED', 'UNAUTHORIZED']);
+const NOISY_CODES = new Set([
+    'INVALID_TOKEN',
+    'TOKEN_EXPIRED',
+    'UNAUTHORIZED',
+    'INVALID_FILE_SIGNATURE',
+    'INVALID_FILE_REFERENCE',
+]);
 export function errorMiddleware(err, req, res, 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 _next) {
@@ -119,7 +127,7 @@ _next) {
     // which errors employees are hitting, when, and on what — instead of a
     // support message saying "it showed an error". Fire-and-forget: writing the
     // trail must never turn a 400 into a 500.
-    if (statusCode !== 401 || !NOISY_CODES.has(payload.error.code)) {
+    if (!NOISY_CODES.has(payload.error.code)) {
         void audit({
             action: 'failure',
             entity: 'Request',

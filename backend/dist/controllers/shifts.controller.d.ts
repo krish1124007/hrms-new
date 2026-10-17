@@ -16,6 +16,7 @@ export declare const createShiftSchema: z.ZodObject<{
     name: string;
     startTime: string;
     endTime: string;
+    color: string;
     graceMinutes: number;
     halfDayHours: number;
     fullDayHours: number;
@@ -23,11 +24,11 @@ export declare const createShiftSchema: z.ZodObject<{
     isNightShift: boolean;
     breakDuration: number;
     isDefault: boolean;
-    color: string;
 }, {
     name: string;
     startTime: string;
     endTime: string;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -35,7 +36,6 @@ export declare const createShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const updateShiftSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -53,6 +53,7 @@ export declare const updateShiftSchema: z.ZodObject<{
     name?: string | undefined;
     startTime?: string | undefined;
     endTime?: string | undefined;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -60,11 +61,11 @@ export declare const updateShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }, {
     name?: string | undefined;
     startTime?: string | undefined;
     endTime?: string | undefined;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -72,7 +73,6 @@ export declare const updateShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const assignShiftSchema: z.ZodObject<{
     employeeIds: z.ZodArray<z.ZodString, "many">;
@@ -86,12 +86,12 @@ export declare const listQuerySchema: z.ZodObject<{
     limit: z.ZodDefault<z.ZodNumber>;
     search: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     search?: string | undefined;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
 }>;
 export declare function listShifts(req: Request, res: Response): Promise<void>;
@@ -105,12 +105,12 @@ export declare const rosterQuerySchema: z.ZodObject<{
     to: z.ZodString;
     departmentId: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    to: string;
     from: string;
+    to: string;
     departmentId?: string | undefined;
 }, {
-    to: string;
     from: string;
+    to: string;
     departmentId?: string | undefined;
 }>;
 /** GET /api/v1/shifts/my-roster?from=YYYY-MM-DD&to=YYYY-MM-DD */

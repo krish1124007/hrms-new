@@ -44,7 +44,14 @@ Open `http://localhost:5173` and log in.
 
 ## Deploy
 
-The two folders are independent — deploy each wherever you want.
+**Production server (`hrms.ddipl.org`: nginx + pm2 + local MongoDB/Redis):** follow
+[`docs/deploy-checklist.md`](docs/deploy-checklist.md). `backend/dist` and `frontend/dist` are
+committed, so the server deploys with `git pull` and builds nothing. Rebuild them before a release
+with `cd backend && npm run clean && npm run build` and `cd frontend && npm run clean && npm run build`,
+then commit them. Note that in production the API refuses to start without a mail transport
+(`SMTP_HOST` or `RESEND_API_KEY`) unless `ALLOW_NO_MAIL=true`.
+
+Anywhere else: the two folders are independent — deploy each wherever you want.
 
 ### Backend → any Node host
 
@@ -56,7 +63,8 @@ start:  npm start
 ```
 
 Environment variables: copy from `backend/.env.example` and fill in real values.
-Set `CORS_ORIGIN` to the public URL of your deployed frontend.
+Set `CORS_ORIGIN` to the public URL of your deployed frontend. Set `HOST=127.0.0.1` when a reverse
+proxy on the same machine fronts the API (the default is `0.0.0.0`, all interfaces).
 
 You also need a managed MongoDB (e.g. MongoDB Atlas) and optionally a managed Redis.
 

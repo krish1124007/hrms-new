@@ -18,6 +18,6 @@ export declare class NotFoundError extends AppError {
     constructor(message?: string);
 }
 export declare class ConflictError extends AppError {
-    constructor(message?: string);
+    constructor(message?: string, code?: string, details?: any);
 }
 //# sourceMappingURL=errors.d.ts.map

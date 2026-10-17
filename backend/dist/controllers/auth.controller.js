@@ -1,27 +1,15 @@
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'node:crypto';
 import { User } from '../models/user.model.js';
-import { Role, DEFAULT_ROLES } from '../models/role.model.js';
 import { Session } from '../models/session.model.js';
 import { env } from '../config/env.js';
 import { setContext, runWithContext } from '../lib/async-context.js';
-import { AppError, ConflictError, NotFoundError, UnauthorizedError, ForbiddenError, } from '../lib/errors.js';
+import { AppError, NotFoundError, UnauthorizedError, ForbiddenError, } from '../lib/errors.js';
+import { appBaseUrl } from '../lib/app-url.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { revokeToken, revokeAllUserTokens } from '../lib/token-blacklist.js';
-import { withTransaction } from '../lib/transaction.js';
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-async function ensureDefaultRoles() {
-    const bySlug = new Map();
-    for (const r of DEFAULT_ROLES) {
-        let role = await Role.findOne({ slug: r.slug }).exec();
-        if (!role) {
-            role = await Role.create({ ...r });
-        }
-        bySlug.set(role.slug, role._id);
-    }
-    return bySlug;
-}
 async function persistSession(user, accessToken, refreshToken, req) {
     await Session.create({
         userId: user._id,
@@ -34,107 +22,31 @@ async function persistSession(user, accessToken, refreshToken, req) {
         isActive: true,
     });
 }
-export async function register(req, res) {
-    const body = req.body;
-    if (env.NODE_ENV === 'production') {
-        if (body.acceptTerms !== true || body.acceptPrivacy !== true) {
-            throw new AppError('You must accept the Terms of Service and Privacy Policy to continue', 400, 'CONSENT_REQUIRED');
-        }
-    }
-    const { validateNewPassword } = await import('../lib/password-security.js');
-    const pwCheck = await validateNewPassword(body.password);
-    if (!pwCheck.ok) {
-        throw new AppError(pwCheck.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
-    }
-    const { user, verificationToken, accessToken, refreshToken } = await withTransaction(async (session) => {
-        const roles = await ensureDefaultRoles();
-        const adminRoleId = roles.get('admin') ?? roles.values().next().value;
-        if (!adminRoleId)
-            throw new AppError('Failed to seed roles', 500);
-        const existingQuery = User.findOne({ email: body.email.toLowerCase() });
-        if (session)
-            existingQuery.session(session);
-        const existing = await existingQuery.exec();
-        if (existing)
-            throw new ConflictError('Email already registered');
-        const verToken = randomBytes(32).toString('hex');
-        const [createdUser] = await User.create([
-            {
-                email: body.email,
-                password: body.password,
-                firstName: body.firstName,
-                lastName: body.lastName,
-                role: adminRoleId,
-                status: 'active',
-                emailVerified: false,
-                emailVerificationToken: verToken,
-                consents: {
-                    termsOfService: body.acceptTerms === true,
-                    privacyPolicy: body.acceptPrivacy === true,
-                    marketing: body.marketingOptIn ?? false,
-                    analytics: false,
-                    recordedAt: new Date(),
-                    ip: req.ip,
-                    userAgent: req.header('user-agent'),
-                    documentVersions: {
-                        ...(body.termsVersion ? { termsOfService: body.termsVersion } : {}),
-                        ...(body.privacyVersion ? { privacyPolicy: body.privacyVersion } : {}),
-                    },
-                },
-            },
-        ], { session });
-        setContext({ userId: String(createdUser._id) });
-        const accessTok = createdUser.generateAccessToken();
-        const refreshTok = createdUser.generateRefreshToken();
-        await persistSession(createdUser, accessTok, refreshTok, req);
-        return {
-            user: createdUser,
-            verificationToken: verToken,
-            accessToken: accessTok,
-            refreshToken: refreshTok,
-        };
-    });
-    void sendMail({
-        to: user.email,
-        subject: 'Welcome — verify your email',
-        html: `<p>Hi ${user.firstName},</p><p>Please verify your email by clicking the link below:</p><p><a href="${env.CORS_ORIGIN}/verify-email/${verificationToken}">Verify email</a></p>`,
-    });
-    void audit({ action: 'create', entity: 'User', entityId: String(user._id) });
-    res.status(201).json({
-        success: true,
-        data: {
-            user: {
-                _id: user._id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-            },
-            accessToken,
-            refreshToken,
-        },
-    });
-}
 export async function login(req, res) {
     const body = req.body;
     const emailLower = body.email.toLowerCase();
+    const ip = req.ip ?? 'unknown';
     const { isAccountLocked, trackLoginFailure, clearLoginFailures, lockAccount, getLockTTL, } = await import('../middleware/rate-limit.middleware.js');
-    if (await isAccountLocked(emailLower)) {
-        const ttl = await getLockTTL(emailLower);
+    if (await isAccountLocked(emailLower, ip)) {
+        const ttl = await getLockTTL(emailLower, ip);
         throw new UnauthorizedError(`Account locked due to too many failed attempts. Try again in ${Math.ceil(ttl / 60)} minutes.`);
     }
     const user = await User.findOne({ email: emailLower })
         .select('+password')
         .populate('role')
         .exec();
+    // Failures are tracked and locked per email+ip for unknown emails exactly as
+    // for real ones, so neither the message nor the lockout timing reveals whether
+    // an account exists. Spamming someone else's address only locks the attacker's
+    // own IP; key growth is bounded by the per-IP authRateLimit.
     const recordFailure = async (reason) => {
-        const failures = await trackLoginFailure(emailLower);
+        const failures = await trackLoginFailure(emailLower, ip);
+        const { loginAttempts } = await import('../lib/metrics.js');
         if (failures >= 5) {
-            await lockAccount(emailLower, 15);
-            const { loginAttempts } = await import('../lib/metrics.js');
+            await lockAccount(emailLower, ip, 15);
             loginAttempts.labels('locked').inc();
         }
         else {
-            const { loginAttempts } = await import('../lib/metrics.js');
             loginAttempts.labels(reason).inc();
         }
         throw new UnauthorizedError('Invalid credentials');
@@ -147,7 +59,7 @@ export async function login(req, res) {
         await recordFailure('bad_password');
     if (validUser.status !== 'active')
         throw new ForbiddenError(`User is ${validUser.status}`);
-    await clearLoginFailures(emailLower);
+    await clearLoginFailures(emailLower, ip);
     const { loginAttempts } = await import('../lib/metrics.js');
     loginAttempts.labels('success').inc();
     validUser.lastLogin = new Date();
@@ -261,7 +173,7 @@ export async function forgotPassword(req, res) {
         void sendMail({
             to: user.email,
             subject: 'Reset your password',
-            html: `<p>Click the link below to reset your password (valid for 1 hour):</p><p><a href="${env.CORS_ORIGIN}/reset-password/${token}">Reset password</a></p>`,
+            html: `<p>Click the link below to reset your password (valid for 1 hour):</p><p><a href="${appBaseUrl()}/reset-password?token=${token}">Reset password</a></p>`,
         });
     }
     res.json({ success: true, message: 'If an account exists, a reset email has been sent' });
@@ -277,7 +189,7 @@ export async function resetPassword(req, res) {
         passwordResetToken: token,
         passwordResetExpires: { $gt: new Date() },
     })
-        .select('+passwordHistory +password')
+        .select('+passwordHistory +password +passwordResetToken +passwordResetExpires')
         .exec();
     if (!user)
         throw new UnauthorizedError('Invalid or expired reset token');
@@ -307,15 +219,59 @@ export async function resetPassword(req, res) {
         message: 'Password reset successful. All existing sessions have been revoked.',
     });
 }
-export async function verifyEmail(req, res) {
-    const { token } = req.params;
-    const user = await User.findOne({ emailVerificationToken: token }).exec();
+/**
+ * Activates an invited account: the e-mailed token proves the recipient owns
+ * the address, the body supplies the password they chose. Returns the same
+ * payload as `login`, so the SPA can drop the user straight into the app.
+ */
+export async function acceptInvite(req, res) {
+    const { token, password } = req.body;
+    const invalid = () => new AppError('Invitation link is invalid or has already been used', 400, 'INVALID_INVITE');
+    // Only an account still waiting for activation can be claimed this way: a
+    // leftover verification token on an active user must never reset a password.
+    const user = await User.findOne({ emailVerificationToken: token, status: 'invited' })
+        .select('+emailVerificationToken +password')
+        .exec();
     if (!user)
-        throw new NotFoundError('Invalid verification token');
+        throw invalid();
+    const { validateNewPassword } = await import('../lib/password-security.js');
+    const pwCheck = await validateNewPassword(password);
+    if (!pwCheck.ok) {
+        throw new AppError(pwCheck.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
+    }
+    user.password = password;
+    user.status = 'active';
     user.emailVerified = true;
     user.emailVerificationToken = undefined;
+    user.passwordChangedAt = new Date();
+    user.lastLogin = new Date();
+    user.sessionVersion = (user.sessionVersion ?? 0) + 1;
     await user.save();
-    res.json({ success: true, message: 'Email verified' });
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+    await persistSession(user, accessToken, refreshToken, req);
+    setContext({ userId: String(user._id) });
+    void audit({
+        action: 'update',
+        entity: 'User',
+        entityId: String(user._id),
+        metadata: { event: 'invite.accepted', sessionVersion: user.sessionVersion },
+    });
+    await user.populate('role');
+    res.json({
+        success: true,
+        data: {
+            user: {
+                _id: user._id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+            },
+            accessToken,
+            refreshToken,
+        },
+    });
 }
 export async function me(req, res) {
     if (!req.user)

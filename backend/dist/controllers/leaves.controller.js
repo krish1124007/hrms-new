@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from '../models/index.js';
 import { NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
+import { assertNotSelfApproval, assertOwnOrPermission, currentEmployeeId, hasPermission, } from '../lib/access.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
@@ -25,6 +26,13 @@ async function getCurrentEmployee() {
     if (!userId)
         return null;
     return Employee.findOne({ userId: new Types.ObjectId(userId) }).exec();
+}
+const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
+const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
+/** Approvers and HR see every employee's leave; everyone else only their own. */
+const SEE_ALL_LEAVES = ['leaves.approve', 'leaves.update'];
+function canSeeAllLeaves(req) {
+    return SEE_ALL_LEAVES.some((perm) => hasPermission(req.user, perm));
 }
 /**
  * Compute working days between startDate..endDate inclusive, excluding
@@ -131,7 +139,7 @@ export async function deleteLeaveType(req, res) {
 export const balanceQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(200).default(50),
-    employeeId: z.string().optional(),
+    employeeId: objectId.optional(),
     leaveTypeId: z.string().optional(),
     year: z.coerce.number().int().optional(),
 });
@@ -150,8 +158,14 @@ export async function listLeaveBalances(req, res) {
     const q = req.query;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filter = {};
-    if (q.employeeId)
-        filter.employeeId = new Types.ObjectId(q.employeeId);
+    if (canSeeAllLeaves(req)) {
+        if (q.employeeId)
+            filter.employeeId = new Types.ObjectId(q.employeeId);
+    }
+    else {
+        // `null` (no employee record) matches nothing — employeeId is required.
+        filter.employeeId = await currentEmployeeId(req);
+    }
     if (q.leaveTypeId)
         filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
     if (q.year)
@@ -266,7 +280,7 @@ export async function resetLeaveBalances(req, res) {
 }
 // ---------- Leave Request ----------
 export const createLeaveRequestSchema = z.object({
-    employeeId: z.string().optional(), // optional — defaults to current employee
+    employeeId: objectId.optional(), // optional — defaults to current employee
     leaveTypeId: z.string(),
     startDate: z.coerce.date(),
     endDate: z.coerce.date(),
@@ -284,7 +298,7 @@ export const leaveRequestQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
     status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(),
-    employeeId: z.string().optional(),
+    employeeId: objectId.optional(),
     leaveTypeId: z.string().optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
@@ -300,8 +314,14 @@ export async function listLeaveRequests(req, res) {
     const filter = {};
     if (q.status)
         filter.status = q.status;
-    if (q.employeeId)
-        filter.employeeId = new Types.ObjectId(q.employeeId);
+    if (canSeeAllLeaves(req)) {
+        if (q.employeeId)
+            filter.employeeId = new Types.ObjectId(q.employeeId);
+    }
+    else {
+        // `null` (no employee record) matches nothing — employeeId is required.
+        filter.employeeId = await currentEmployeeId(req);
+    }
     if (q.leaveTypeId)
         filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
     if (q.from || q.to) {
@@ -380,16 +400,20 @@ export async function leaveCalendar(req, res) {
 }
 export async function applyLeave(req, res) {
     const body = req.body;
-    // Resolve employee
+    // Resolve employee — the caller's own, unless a `leaves.update` holder
+    // (HR) is applying on someone else's behalf.
+    const me = await currentEmployeeId(req);
     let employeeId;
-    if (body.employeeId) {
+    if (body.employeeId && !(me && me.equals(body.employeeId))) {
+        if (!hasPermission(req.user, 'leaves.update')) {
+            throw new ForbiddenError('You can only apply for your own leave');
+        }
         employeeId = new Types.ObjectId(body.employeeId);
     }
     else {
-        const me = await getCurrentEmployee();
         if (!me)
             throw new NotFoundError('Employee profile not found');
-        employeeId = me._id;
+        employeeId = me;
     }
     // Validate dates
     if (body.endDate < body.startDate) {
@@ -481,12 +505,14 @@ export async function getLeaveRequest(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
+    await assertOwnOrPermission(req, doc.employeeId, SEE_ALL_LEAVES);
     res.json({ success: true, data: doc });
 }
 export async function approveLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
+    await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot approve a ${doc.status} request`);
     }
@@ -507,6 +533,7 @@ export async function rejectLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
+    await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a ${doc.status} request`);
     }
@@ -524,18 +551,7 @@ export async function cancelLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
-    const me = await getCurrentEmployee();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const user = req.user;
-    const userPerms = new Set([
-        ...(user?.role?.permissions ?? []),
-        ...(user?.customPermissions ?? []),
-    ]);
-    const hasUpdatePermission = userPerms.has('*') || userPerms.has('leaves.update');
-    const isOwner = me && String(doc.employeeId) === String(me._id);
-    if (!hasUpdatePermission && !isOwner) {
-        throw new ForbiddenError('You do not have permission to cancel this leave request');
-    }
+    await assertOwnOrPermission(req, doc.employeeId, 'leaves.update');
     if (doc.status === 'cancelled' || doc.status === 'rejected') {
         throw new ValidationAppError(`Cannot cancel a ${doc.status} request`);
     }

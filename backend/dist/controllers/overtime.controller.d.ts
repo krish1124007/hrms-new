@@ -38,21 +38,21 @@ export declare const listQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "pending" | "approved" | "rejected" | "cancelled" | undefined;
+    sort?: string | undefined;
+    from?: Date | undefined;
     to?: Date | undefined;
     employee?: string | undefined;
-    from?: Date | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "pending" | "approved" | "rejected" | "cancelled" | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
-    employee?: string | undefined;
+    limit?: number | undefined;
     from?: Date | undefined;
+    to?: Date | undefined;
+    employee?: string | undefined;
 }>;
 export declare const approveSchema: z.ZodObject<{
     notes: z.ZodOptional<z.ZodString>;

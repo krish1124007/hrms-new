@@ -1,9 +1,9 @@
 /**
  * Local filesystem storage — replaces S3/MinIO for self-hosted deployments.
  *
- * Files are written under `UPLOAD_DIR` (default `./uploads/`) and served by
- * Express at `/uploads/<key>`. Returns the publicly-reachable URL the client
- * can fetch.
+ * Files are written under `UPLOAD_DIR` (default `./uploads/`). `saveFile`
+ * returns the stored reference `/uploads/<key>`; it is not served as-is — API
+ * responses turn it into a short-lived signed /api/v1/files/<key> link.
  */
 import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -20,14 +20,16 @@ if (!existsSync(UPLOAD_DIR)) {
 function safePath(key) {
     const normalised = path.normalize(key).replace(/^[/\\]+/, '');
     const abs = path.resolve(UPLOAD_DIR, normalised);
-    if (!abs.startsWith(UPLOAD_DIR)) {
+    // Compare against the root *with* a trailing separator, so a sibling such
+    // as `<UPLOAD_DIR>-old/` cannot pass as being inside it.
+    if (abs !== UPLOAD_DIR && !abs.startsWith(UPLOAD_DIR + path.sep)) {
         throw new Error(`Refusing path traversal: ${key}`);
     }
     return abs;
 }
 /**
- * Save a buffer to local disk under `key`. Returns the public URL the
- * frontend can use to retrieve it (relative to API origin).
+ * Save a buffer to local disk under `key`. Returns the stored reference
+ * `/uploads/<key>` (signed on the way out by presignResponse).
  */
 export async function saveFile(key, body, _contentType) {
     const abs = safePath(key);
@@ -55,7 +57,7 @@ export async function deleteFile(key) {
 export function pathFor(key) {
     return safePath(key);
 }
-/** The configured upload root — used by Express static-serve. */
+/** The configured upload root. */
 export function uploadRoot() {
     return UPLOAD_DIR;
 }

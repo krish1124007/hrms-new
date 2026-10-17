@@ -16,12 +16,12 @@ import { z } from 'zod';
  */
 export declare const searchQuerySchema: z.ZodObject<{
     q: z.ZodString;
-    entities: z.ZodEffects<z.ZodOptional<z.ZodString>, ("documents" | "employees" | "customers" | "leads" | "deals" | "products" | "tickets")[], string | undefined>;
+    entities: z.ZodEffects<z.ZodOptional<z.ZodString>, ("employees" | "documents" | "customers" | "leads" | "deals" | "products" | "tickets")[], string | undefined>;
     limit: z.ZodDefault<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     limit: number;
     q: string;
-    entities: ("documents" | "employees" | "customers" | "leads" | "deals" | "products" | "tickets")[];
+    entities: ("employees" | "documents" | "customers" | "leads" | "deals" | "products" | "tickets")[];
 }, {
     q: string;
     limit?: number | undefined;

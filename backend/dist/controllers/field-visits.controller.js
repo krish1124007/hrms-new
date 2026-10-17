@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { Visit } from '../models/visit.model.js';
 import { Client } from '../models/client.model.js';
-import { Employee } from '../models/employee.model.js';
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+/** Field managers see and edit every rep's visits; reps only their own. */
+const MANAGE = 'field-sales.manage';
 const checkpointSchema = z.object({
     time: z.coerce.date().optional(),
     location: z
@@ -68,12 +69,12 @@ export const listQuerySchema = z.object({
     to: z.coerce.date().optional(),
     sort: z.string().optional(),
 });
-async function resolveEmployeeIdFromContext() {
-    const userId = getUserId();
-    if (!userId)
-        return null;
-    const emp = await Employee.findOne({ userId }).select('_id').exec();
-    return emp ? String(emp._id) : null;
+/** 404 if the visit does not exist; 403 unless it is the caller's or they manage. */
+async function assertVisitAccess(req, id) {
+    const visit = await Visit.findById(id).select('employeeId').lean().exec();
+    if (!visit)
+        throw new NotFoundError('Visit not found');
+    await assertOwnOrPermission(req, visit.employeeId, MANAGE);
 }
 export async function listVisits(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +83,9 @@ export async function listVisits(req, res) {
     const filter = {};
     if (q.employeeId)
         filter.employeeId = q.employeeId;
+    // Reps only ever see their own (`null` — no employee record — matches nothing).
+    if (!hasPermission(req.user, MANAGE))
+        filter.employeeId = await currentEmployeeId(req);
     if (q.clientId)
         filter.clientId = q.clientId;
     if (q.status)
@@ -106,14 +110,16 @@ export async function listVisits(req, res) {
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
-export async function todayVisits(_req, res) {
-    const empId = await resolveEmployeeIdFromContext();
+export async function todayVisits(req, res) {
+    const empId = await currentEmployeeId(req);
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const end = new Date();
     end.setHours(23, 59, 59, 999);
     const filter = { createdAt: { $gte: start, $lte: end } };
-    if (empId)
+    // A manager without an employee record still sees everyone's day; anyone
+    // else is pinned to their own (or nothing, if they have no record).
+    if (empId || !hasPermission(req.user, MANAGE))
         filter.employeeId = empId;
     const docs = await Visit.find(filter)
         .populate('clientId', 'name category address location')
@@ -128,22 +134,25 @@ export async function getVisit(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Visit not found');
+    await assertOwnOrPermission(req, doc.employeeId, MANAGE);
     res.json({ success: true, data: doc });
 }
 export async function createVisit(req, res) {
     const body = req.body;
-    let employeeId = body.employeeId;
+    // Only a manager may log a visit against another rep.
+    let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
     if (!employeeId) {
-        const resolved = await resolveEmployeeIdFromContext();
-        if (!resolved)
+        const own = await currentEmployeeId(req);
+        if (!own)
             throw new ValidationAppError('employeeId required');
-        employeeId = resolved;
+        employeeId = String(own);
     }
     const doc = await Visit.create({ ...body, employeeId });
     void audit({ action: 'create', entity: 'Visit', entityId: String(doc._id) });
     res.status(201).json({ success: true, data: doc });
 }
 export async function updateVisit(req, res) {
+    await assertVisitAccess(req, String(req.params.id));
     const doc = await Visit.findByIdAndUpdate(String(req.params.id), req.body, {
         new: true,
     }).exec();
@@ -161,7 +170,7 @@ export async function deleteVisit(req, res) {
 }
 export async function checkIn(req, res) {
     const body = req.body;
-    const empId = await resolveEmployeeIdFromContext();
+    const empId = await currentEmployeeId(req);
     if (!empId)
         throw new ValidationAppError('Employee profile not found');
     const checkInPoint = {
@@ -185,6 +194,7 @@ export async function checkOut(req, res) {
     const visit = await Visit.findById(String(req.params.id)).exec();
     if (!visit)
         throw new NotFoundError('Visit not found');
+    await assertOwnOrPermission(req, visit.employeeId, MANAGE);
     if (!visit.checkIn?.time) {
         throw new ValidationAppError('Visit has no check-in');
     }
@@ -206,6 +216,7 @@ export async function checkOut(req, res) {
 }
 export async function visitTimeline(req, res) {
     const employeeId = String(req.params.employeeId);
+    await assertOwnOrPermission(req, employeeId, MANAGE);
     const date = req.query.date ? new Date(String(req.query.date)) : new Date();
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);

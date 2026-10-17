@@ -1,15 +1,15 @@
-import { Types } from 'mongoose';
 import { z } from 'zod';
 import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
 import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
 export const createSchema = z.object({
-    // Optional — defaults to the caller's employee record. HR / managers can
-    // create requests on behalf of others.
+    // Optional — defaults to the caller's employee record. Only holders of
+    // `overtime.view` (HR / managers) may file on behalf of someone else; for
+    // everyone else it is ignored.
     employee: objectId.optional(),
     date: z.coerce.date(),
     hours: z.coerce.number().positive().max(24),
@@ -35,12 +35,6 @@ export const approveSchema = z.object({
 export const rejectSchema = z.object({
     reason: z.string().min(1, 'Rejection reason is required').max(1000),
 });
-async function resolveCallerEmployee() {
-    const userId = getUserId();
-    if (!userId)
-        return null;
-    return Employee.findOne({ userId: new Types.ObjectId(userId) }).exec();
-}
 /** GET /api/v1/overtime */
 export async function list(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,15 +65,15 @@ export async function list(req, res) {
 }
 /** GET /api/v1/overtime/me */
 export async function listMine(req, res) {
-    const employee = await resolveCallerEmployee();
-    if (!employee) {
+    const employeeId = await currentEmployeeId(req);
+    if (!employeeId) {
         res.json({ success: true, data: [], pagination: { page: 1, limit: 0, total: 0, pages: 1 } });
         return;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = { employee: employee._id };
+    const filter = { employee: employeeId };
     if (q.status)
         filter.status = q.status;
     const result = await OvertimeRequest.paginate(filter, {
@@ -126,21 +120,21 @@ export async function create(req, res) {
     if (!req.user)
         throw new UnauthorizedError();
     const body = req.body;
-    // Resolve which employee the request is for. If not provided, default to
-    // the caller's own employee record.
+    // Resolve which employee the request is for: the caller's own record,
+    // unless an `overtime.view` holder names someone else.
     let employeeId;
-    if (body.employee) {
+    if (body.employee && hasPermission(req.user, 'overtime.view')) {
         const emp = await Employee.findById(body.employee).select('_id').exec();
         if (!emp)
             throw new NotFoundError('Employee not found');
         employeeId = emp._id;
     }
     else {
-        const own = await resolveCallerEmployee();
+        const own = await currentEmployeeId(req);
         if (!own) {
-            throw new ValidationAppError('Cannot determine employee — pass employee id or link the user to an employee record');
+            throw new ValidationAppError('Cannot determine employee — link the user to an employee record');
         }
-        employeeId = own._id;
+        employeeId = own;
     }
     const otReq = await OvertimeRequest.create({
         employee: employeeId,
@@ -161,6 +155,7 @@ export async function get(req, res) {
         .exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
+    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
     res.json({ success: true, data: otReq });
 }
 /** PATCH /api/v1/overtime/:id */
@@ -169,6 +164,7 @@ export async function update(req, res) {
     const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
+    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
     if (otReq.status !== 'pending') {
         throw new ValidationAppError('Only pending requests can be edited');
     }
@@ -187,6 +183,7 @@ export async function remove(req, res) {
     const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
+    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
     if (otReq.status === 'approved' && otReq.payrollRecordId) {
         throw new ValidationAppError('Cannot withdraw — this request is already in a payroll cycle');
     }

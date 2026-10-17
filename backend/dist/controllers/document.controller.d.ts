@@ -8,16 +8,16 @@ export declare const updateDocumentSchema: z.ZodObject<{
     accessLevel: z.ZodOptional<z.ZodEnum<["private", "department", "all"]>>;
 }, "strip", z.ZodTypeAny, {
     name?: string | undefined;
-    category?: string | undefined;
-    accessLevel?: "department" | "all" | "private" | undefined;
-    folder?: string | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    folder?: string | undefined;
+    accessLevel?: "department" | "private" | "all" | undefined;
 }, {
     name?: string | undefined;
-    category?: string | undefined;
-    accessLevel?: "department" | "all" | "private" | undefined;
-    folder?: string | undefined;
     tags?: string[] | undefined;
+    category?: string | undefined;
+    folder?: string | undefined;
+    accessLevel?: "department" | "private" | "all" | undefined;
 }>;
 export declare const listDocumentsQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -25,13 +25,13 @@ export declare const listDocumentsQuerySchema: z.ZodObject<{
     folder: z.ZodOptional<z.ZodString>;
     search: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     search?: string | undefined;
     folder?: string | undefined;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
     folder?: string | undefined;
 }>;

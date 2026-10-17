@@ -7,33 +7,33 @@ export declare const inviteUserSchema: z.ZodObject<{
     roleId: z.ZodString;
 }, "strip", z.ZodTypeAny, {
     email: string;
+    roleId: string;
     firstName: string;
     lastName: string;
-    roleId: string;
 }, {
     email: string;
+    roleId: string;
     firstName: string;
     lastName: string;
-    roleId: string;
 }>;
 export declare const updateUserSchema: z.ZodObject<{
     firstName: z.ZodOptional<z.ZodString>;
     lastName: z.ZodOptional<z.ZodString>;
     avatar: z.ZodOptional<z.ZodString>;
     roleId: z.ZodOptional<z.ZodString>;
-    customPermissions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    customPermissions: z.ZodOptional<z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], string[]>>;
 }, "strip", z.ZodTypeAny, {
+    roleId?: string | undefined;
     firstName?: string | undefined;
     lastName?: string | undefined;
     avatar?: string | undefined;
     customPermissions?: string[] | undefined;
-    roleId?: string | undefined;
 }, {
+    roleId?: string | undefined;
     firstName?: string | undefined;
     lastName?: string | undefined;
     avatar?: string | undefined;
     customPermissions?: string[] | undefined;
-    roleId?: string | undefined;
 }>;
 export declare const updateStatusSchema: z.ZodObject<{
     status: z.ZodEnum<["active", "inactive"]>;
@@ -56,16 +56,16 @@ export declare const listQuerySchema: z.ZodObject<{
     status: z.ZodOptional<z.ZodEnum<["active", "inactive", "invited"]>>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "active" | "inactive" | "invited" | undefined;
+    sort?: string | undefined;
     search?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "active" | "inactive" | "invited" | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
 }>;
 export declare function listUsers(req: Request, res: Response): Promise<void>;

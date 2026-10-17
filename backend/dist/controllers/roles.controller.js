@@ -1,18 +1,21 @@
 import { z } from 'zod';
 import { Role } from '../models/role.model.js';
+import { User } from '../models/user.model.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { slugify } from '../lib/slugify.js';
 import { cached, invalidate } from '../lib/cache.js';
+import { PERMISSIONS_BY_MODULE } from '../config/permissions.js';
+import { assertCanGrant, assertCanManageRole, assertCanSetPermissions, permissionListSchema, storedPermissionListSchema, } from '../lib/permission-grants.js';
 export const createRoleSchema = z.object({
     name: z.string().min(2).max(64),
     description: z.string().optional(),
-    permissions: z.array(z.string()).default([]),
+    permissions: permissionListSchema.default([]),
 });
 export const updateRoleSchema = z.object({
     name: z.string().min(2).max(64).optional(),
     description: z.string().optional(),
-    permissions: z.array(z.string()).optional(),
+    permissions: storedPermissionListSchema.optional(),
 });
 export async function listRoles(_req, res) {
     const key = 'roles:list';
@@ -24,6 +27,9 @@ async function invalidateRolesCache() {
 }
 export async function createRole(req, res) {
     const body = req.body;
+    // Names were validated against the catalogue by the schema; `*` and anything
+    // else the caller does not hold themselves is for a `*` holder to grant.
+    assertCanGrant(req.user, body.permissions);
     const slug = slugify(body.name);
     const existing = await Role.findOne({ slug }).exec();
     if (existing)
@@ -51,7 +57,14 @@ export async function updateRole(req, res) {
         throw new NotFoundError('Role not found');
     if (role.isSystem)
         throw new ForbiddenError('System roles cannot be modified');
+    assertCanManageRole(req.user, role);
     const body = req.body;
+    if (body.permissions !== undefined) {
+        // Only what is being *added* is validated and needs the caller's blessing:
+        // a role may already store retired names (the UI sends the whole list back).
+        // Nobody may widen a role — their own included — beyond what they hold.
+        assertCanSetPermissions(req.user, 'permissions', body.permissions, role.permissions);
+    }
     if (body.name !== undefined) {
         role.name = body.name;
         role.slug = slugify(body.name);
@@ -71,36 +84,17 @@ export async function deleteRole(req, res) {
         throw new NotFoundError('Role not found');
     if (role.isSystem)
         throw new ForbiddenError('System roles cannot be deleted');
+    assertCanManageRole(req.user, role);
+    // Soft-deleted users keep their role reference and can be restored, so they count too.
+    const assigned = await User.countDocuments({ role: role._id }).setOptions({ withDeleted: true }).exec();
+    if (assigned > 0) {
+        throw new ConflictError(`This role is still assigned to ${assigned} user${assigned === 1 ? '' : 's'}. Reassign them first.`, 'ROLE_IN_USE', { userCount: assigned });
+    }
     await role.deleteOne();
     void audit({ action: 'delete', entity: 'Role', entityId: String(role._id) });
     await invalidateRolesCache();
     res.json({ success: true, message: 'Role deleted' });
 }
-export const PERMISSIONS_BY_MODULE = {
-    users: ['users.view', 'users.create', 'users.update', 'users.delete'],
-    roles: ['roles.view', 'roles.create', 'roles.update', 'roles.delete'],
-    employees: ['employees.view', 'employees.create', 'employees.update', 'employees.delete', 'employees.export'],
-    departments: ['departments.view', 'departments.manage'],
-    designations: ['designations.view', 'designations.manage'],
-    shifts: ['shifts.view', 'shifts.manage'],
-    holidays: ['holidays.view', 'holidays.create', 'holidays.update', 'holidays.delete'],
-    attendance: ['attendance.view', 'attendance.manage', 'attendance.config'],
-    leaves: ['leaves.view', 'leaves.approve', 'leaves.config', 'leaves.update'],
-    payroll: ['payroll.view', 'payroll.process', 'payroll.config'],
-    'expense-claims': ['expense-claims.view', 'expense-claims.approve', 'expense-claims.update'],
-    overtime: ['overtime.view', 'overtime.approve'],
-    assets: ['assets.view', 'assets.manage'],
-    loans: ['loans.view', 'loans.manage', 'loans.approve'],
-    disciplinary: ['disciplinary.view', 'disciplinary.manage'],
-    policies: ['policies.view', 'policies.manage'],
-    notices: ['notices.view', 'notices.manage'],
-    documents: ['documents.view', 'documents.manage'],
-    field: ['field-sales.view', 'field-sales.manage'],
-    projects: ['projects.view', 'projects.manage'],
-    audit: ['audit.view'],
-    backups: ['backups.view', 'backups.manage'],
-    settings: ['settings.view', 'settings.manage'],
-};
 export async function listPermissions(_req, res) {
     res.json({ success: true, data: PERMISSIONS_BY_MODULE });
 }

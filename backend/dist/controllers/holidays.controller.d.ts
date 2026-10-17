@@ -8,16 +8,16 @@ export declare const createHolidaySchema: z.ZodObject<{
     isRecurring: z.ZodDefault<z.ZodBoolean>;
     description: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    type: "public" | "optional" | "restricted";
-    name: string;
+    type: "optional" | "public" | "restricted";
     date: Date;
+    name: string;
     departments: string[];
     isRecurring: boolean;
     description?: string | undefined;
 }, {
-    name: string;
     date: Date;
-    type?: "public" | "optional" | "restricted" | undefined;
+    name: string;
+    type?: "optional" | "public" | "restricted" | undefined;
     description?: string | undefined;
     departments?: string[] | undefined;
     isRecurring?: boolean | undefined;
@@ -30,16 +30,16 @@ export declare const updateHolidaySchema: z.ZodObject<{
     isRecurring: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
     description: z.ZodOptional<z.ZodOptional<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
-    type?: "public" | "optional" | "restricted" | undefined;
-    name?: string | undefined;
+    type?: "optional" | "public" | "restricted" | undefined;
     date?: Date | undefined;
+    name?: string | undefined;
     description?: string | undefined;
     departments?: string[] | undefined;
     isRecurring?: boolean | undefined;
 }, {
-    type?: "public" | "optional" | "restricted" | undefined;
-    name?: string | undefined;
+    type?: "optional" | "public" | "restricted" | undefined;
     date?: Date | undefined;
+    name?: string | undefined;
     description?: string | undefined;
     departments?: string[] | undefined;
     isRecurring?: boolean | undefined;
@@ -50,25 +50,25 @@ export declare const importCalendarSchema: z.ZodObject<{
         date: z.ZodDate;
         type: z.ZodDefault<z.ZodEnum<["public", "optional", "restricted"]>>;
     }, "strip", z.ZodTypeAny, {
-        type: "public" | "optional" | "restricted";
-        name: string;
+        type: "optional" | "public" | "restricted";
         date: Date;
+        name: string;
     }, {
-        name: string;
         date: Date;
-        type?: "public" | "optional" | "restricted" | undefined;
+        name: string;
+        type?: "optional" | "public" | "restricted" | undefined;
     }>, "many">;
 }, "strip", z.ZodTypeAny, {
     holidays: {
-        type: "public" | "optional" | "restricted";
-        name: string;
+        type: "optional" | "public" | "restricted";
         date: Date;
+        name: string;
     }[];
 }, {
     holidays: {
-        name: string;
         date: Date;
-        type?: "public" | "optional" | "restricted" | undefined;
+        name: string;
+        type?: "optional" | "public" | "restricted" | undefined;
     }[];
 }>;
 export declare const listQuerySchema: z.ZodObject<{
@@ -77,14 +77,14 @@ export declare const listQuerySchema: z.ZodObject<{
     year: z.ZodOptional<z.ZodNumber>;
     type: z.ZodOptional<z.ZodEnum<["public", "optional", "restricted"]>>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    type?: "public" | "optional" | "restricted" | undefined;
+    limit: number;
+    type?: "optional" | "public" | "restricted" | undefined;
     year?: number | undefined;
 }, {
-    limit?: number | undefined;
-    type?: "public" | "optional" | "restricted" | undefined;
+    type?: "optional" | "public" | "restricted" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     year?: number | undefined;
 }>;
 export declare function listHolidays(req: Request, res: Response): Promise<void>;

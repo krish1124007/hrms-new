@@ -4,6 +4,12 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
+  /**
+   * Interface the HTTP server binds to. The default (all interfaces) keeps
+   * local development and containers working; set HOST=127.0.0.1 behind nginx
+   * on the same machine so the API is reachable only through the proxy.
+   */
+  HOST: z.string().default('0.0.0.0'),
 
   MONGODB_URI: z.string().url().default('mongodb://localhost:27017/hrms'),
 

@@ -52,12 +52,6 @@ export declare const createClientSchema: z.ZodObject<{
     name: string;
     category: "A" | "B" | "C";
     email?: string | undefined;
-    location?: {
-        type: "Point";
-        coordinates: [number, number];
-    } | undefined;
-    assignedTo?: string | undefined;
-    phone?: string | undefined;
     address?: {
         line1?: string | undefined;
         line2?: string | undefined;
@@ -66,21 +60,20 @@ export declare const createClientSchema: z.ZodObject<{
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
+    phone?: string | undefined;
+    location?: {
+        type: "Point";
+        coordinates: [number, number];
+    } | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
+    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }, {
     name: string;
     status?: "active" | "inactive" | undefined;
     email?: string | undefined;
-    category?: "A" | "B" | "C" | undefined;
-    location?: {
-        lat: number;
-        lng: number;
-    } | undefined;
-    assignedTo?: string | undefined;
-    phone?: string | undefined;
     address?: {
         line1?: string | undefined;
         line2?: string | undefined;
@@ -89,8 +82,15 @@ export declare const createClientSchema: z.ZodObject<{
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
+    category?: "A" | "B" | "C" | undefined;
+    phone?: string | undefined;
+    location?: {
+        lat: number;
+        lng: number;
+    } | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
+    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }>;
@@ -143,38 +143,31 @@ export declare const updateClientSchema: z.ZodObject<{
     customFields: z.ZodOptional<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>>;
 }, "strip", z.ZodTypeAny, {
     status?: "active" | "inactive" | undefined;
-    name?: string | undefined;
     email?: string | undefined;
+    name?: string | undefined;
+    address?: {
+        line1?: string | undefined;
+        line2?: string | undefined;
+        city?: string | undefined;
+        state?: string | undefined;
+        pincode?: string | undefined;
+    } | undefined;
+    tags?: string[] | undefined;
     category?: "A" | "B" | "C" | undefined;
+    phone?: string | undefined;
     location?: {
         type: "Point";
         coordinates: [number, number];
     } | undefined;
-    assignedTo?: string | undefined;
-    phone?: string | undefined;
-    address?: {
-        line1?: string | undefined;
-        line2?: string | undefined;
-        city?: string | undefined;
-        state?: string | undefined;
-        pincode?: string | undefined;
-    } | undefined;
-    tags?: string[] | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
+    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }, {
     status?: "active" | "inactive" | undefined;
-    name?: string | undefined;
     email?: string | undefined;
-    category?: "A" | "B" | "C" | undefined;
-    location?: {
-        lat: number;
-        lng: number;
-    } | undefined;
-    assignedTo?: string | undefined;
-    phone?: string | undefined;
+    name?: string | undefined;
     address?: {
         line1?: string | undefined;
         line2?: string | undefined;
@@ -183,8 +176,15 @@ export declare const updateClientSchema: z.ZodObject<{
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
+    category?: "A" | "B" | "C" | undefined;
+    phone?: string | undefined;
+    location?: {
+        lat: number;
+        lng: number;
+    } | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
+    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }>;
@@ -198,21 +198,21 @@ export declare const listQuerySchema: z.ZodObject<{
     search: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "active" | "inactive" | undefined;
-    category?: "A" | "B" | "C" | undefined;
+    sort?: string | undefined;
     search?: string | undefined;
+    category?: "A" | "B" | "C" | undefined;
     assignedTo?: string | undefined;
     territory?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "active" | "inactive" | undefined;
-    category?: "A" | "B" | "C" | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
+    category?: "A" | "B" | "C" | undefined;
     assignedTo?: string | undefined;
     territory?: string | undefined;
 }>;
@@ -223,9 +223,9 @@ export declare const nearbyQuerySchema: z.ZodObject<{
     limit: z.ZodDefault<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     limit: number;
+    radius: number;
     lat: number;
     lng: number;
-    radius: number;
 }, {
     lat: number;
     lng: number;
@@ -300,12 +300,6 @@ export declare const importSchema: z.ZodObject<{
         name: string;
         category: "A" | "B" | "C";
         email?: string | undefined;
-        location?: {
-            type: "Point";
-            coordinates: [number, number];
-        } | undefined;
-        assignedTo?: string | undefined;
-        phone?: string | undefined;
         address?: {
             line1?: string | undefined;
             line2?: string | undefined;
@@ -314,21 +308,20 @@ export declare const importSchema: z.ZodObject<{
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
+        phone?: string | undefined;
+        location?: {
+            type: "Point";
+            coordinates: [number, number];
+        } | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
+        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }, {
         name: string;
         status?: "active" | "inactive" | undefined;
         email?: string | undefined;
-        category?: "A" | "B" | "C" | undefined;
-        location?: {
-            lat: number;
-            lng: number;
-        } | undefined;
-        assignedTo?: string | undefined;
-        phone?: string | undefined;
         address?: {
             line1?: string | undefined;
             line2?: string | undefined;
@@ -337,8 +330,15 @@ export declare const importSchema: z.ZodObject<{
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
+        category?: "A" | "B" | "C" | undefined;
+        phone?: string | undefined;
+        location?: {
+            lat: number;
+            lng: number;
+        } | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
+        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }>, "many">;
@@ -348,12 +348,6 @@ export declare const importSchema: z.ZodObject<{
         name: string;
         category: "A" | "B" | "C";
         email?: string | undefined;
-        location?: {
-            type: "Point";
-            coordinates: [number, number];
-        } | undefined;
-        assignedTo?: string | undefined;
-        phone?: string | undefined;
         address?: {
             line1?: string | undefined;
             line2?: string | undefined;
@@ -362,8 +356,14 @@ export declare const importSchema: z.ZodObject<{
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
+        phone?: string | undefined;
+        location?: {
+            type: "Point";
+            coordinates: [number, number];
+        } | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
+        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }[];
@@ -372,13 +372,6 @@ export declare const importSchema: z.ZodObject<{
         name: string;
         status?: "active" | "inactive" | undefined;
         email?: string | undefined;
-        category?: "A" | "B" | "C" | undefined;
-        location?: {
-            lat: number;
-            lng: number;
-        } | undefined;
-        assignedTo?: string | undefined;
-        phone?: string | undefined;
         address?: {
             line1?: string | undefined;
             line2?: string | undefined;
@@ -387,8 +380,15 @@ export declare const importSchema: z.ZodObject<{
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
+        category?: "A" | "B" | "C" | undefined;
+        phone?: string | undefined;
+        location?: {
+            lat: number;
+            lng: number;
+        } | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
+        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }[];

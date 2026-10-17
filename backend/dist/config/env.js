@@ -3,6 +3,12 @@ import { z } from 'zod';
 const envSchema = z.object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().positive().default(4000),
+    /**
+     * Interface the HTTP server binds to. The default (all interfaces) keeps
+     * local development and containers working; set HOST=127.0.0.1 behind nginx
+     * on the same machine so the API is reachable only through the proxy.
+     */
+    HOST: z.string().default('0.0.0.0'),
     MONGODB_URI: z.string().url().default('mongodb://localhost:27017/hrms'),
     REDIS_URL: z.string().default('redis://localhost:6379'),
     JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
@@ -10,11 +16,31 @@ const envSchema = z.object({
     JWT_ACCESS_TTL: z.string().default('15m'),
     JWT_REFRESH_TTL: z.string().default('30d'),
     /**
-     * Local upload directory. Generated/uploaded files (payslip PDFs, backup
-     * tarballs, document attachments) are written here and served at /uploads/*
-     * by Express.
+     * Local upload directory. Generated/uploaded files (payslip PDFs, document
+     * attachments) are written here. Nothing in it is served publicly: the API
+     * hands out short-lived signed links to /api/v1/files/*.
      */
     UPLOAD_DIR: z.string().default('./uploads'),
+    /**
+     * Database backup tarballs. Must be outside UPLOAD_DIR: backups are never
+     * signed into file links, only streamed by GET /api/v1/backups/:id/download
+     * (permission `backups.manage`). Created on demand.
+     */
+    BACKUP_DIR: z.string().default('./backups'),
+    /**
+     * The only database a backup may be restored into (a throwaway scratch DB,
+     * never prod). Must name a database other than MONGODB_URI's. Unset: the
+     * restore endpoint answers 400 RESTORE_TARGET_NOT_CONFIGURED.
+     */
+    BACKUP_SCRATCH_MONGO_URI: z.string().url().optional(),
+    /**
+     * Public origin that signed file links are built on. Defaults to CORS_ORIGIN
+     * in production (nginx proxies /api/v1 on the web origin) and to the API's
+     * own http://localhost:PORT elsewhere.
+     */
+    PUBLIC_BASE_URL: z.string().url().optional(),
+    /** Lifetime of a signed file link, in seconds. */
+    FILE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
     MEILISEARCH_HOST: z.string().url().default('http://localhost:7700'),
     MEILISEARCH_API_KEY: z.string().default('masterKey'),
     RESEND_API_KEY: z.string().optional(),
@@ -23,6 +49,12 @@ const envSchema = z.object({
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
     SMTP_FROM: z.string().default('no-reply@example.com'),
+    /**
+     * Production refuses to boot without a mail transport (RESEND_API_KEY or
+     * SMTP_HOST) because invitations and password resets could never be
+     * delivered. Set to "true" to boot anyway, with e-mail disabled.
+     */
+    ALLOW_NO_MAIL: z.enum(['true', 'false']).default('false'),
     COMPANY_NAME: z.string().default('Company'),
     COMPANY_EMAIL: z.string().optional(),
     COMPANY_STATE_CODE: z.string().default('MH'),
@@ -30,6 +62,20 @@ const envSchema = z.object({
     GST_RATE_PERCENT: z.coerce.number().default(18),
     CORS_ORIGIN: z.string().default('http://localhost:5173'),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    /**
+     * Serve Swagger UI (/api/docs) and the OpenAPI JSON (/api/docs.json) in
+     * production. Always on outside production. Off by default: the spec is a
+     * complete inventory of the API surface.
+     */
+    ENABLE_API_DOCS: z.enum(['true', 'false']).default('false'),
+    /**
+     * Shared secret for /api/metrics. Requests from a non-loopback address must
+     * send it as `X-Metrics-Token`; loopback callers need nothing. Unset: only
+     * loopback may scrape.
+     */
+    METRICS_TOKEN: z.preprocess(
+    // A blank `METRICS_TOKEN=` line in .env means "not configured".
+    (value) => (value === '' ? undefined : value), z.string().min(16, 'METRICS_TOKEN must be at least 16 characters').optional()),
     ENCRYPTION_KEY: z
         .string()
         .min(32, 'ENCRYPTION_KEY must be at least 32 characters')

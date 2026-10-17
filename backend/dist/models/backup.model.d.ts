@@ -8,6 +8,13 @@ export interface IBackup extends Document {
     status: BackupStatus;
     trigger: BackupTrigger;
     size?: number;
+    /** Tarball basename inside BACKUP_DIR (see lib/backups.ts). */
+    fileName?: string;
+    /**
+     * Legacy rows only: `/uploads/backups/<name>.tar.gz` from when backups lived
+     * in the upload root. `npm run backups:relocate` converts them to fileName.
+     * Never sent to clients.
+     */
     fileUrl?: string;
     startedAt: Date;
     completedAt?: Date;

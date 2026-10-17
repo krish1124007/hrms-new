@@ -12,27 +12,27 @@ export declare const componentSchema: z.ZodObject<{
     order: z.ZodDefault<z.ZodNumber>;
     isActive: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    type: "earning" | "deduction" | "employer_contribution";
     code: string;
+    type: "earning" | "deduction" | "employer_contribution";
     name: string;
-    isActive: boolean;
-    order: number;
     calculationType: "fixed" | "percentage_of_basic" | "percentage_of_gross";
+    isActive: boolean;
     defaultValue: number;
     isTaxable: boolean;
     isStatutory: boolean;
+    order: number;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
 }, {
-    type: "earning" | "deduction" | "employer_contribution";
     code: string;
+    type: "earning" | "deduction" | "employer_contribution";
     name: string;
-    isActive?: boolean | undefined;
-    order?: number | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
+    isActive?: boolean | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
+    order?: number | undefined;
 }>;
 export declare const updateComponentSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -46,40 +46,40 @@ export declare const updateComponentSchema: z.ZodObject<{
     order: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
     isActive: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
-    type?: "earning" | "deduction" | "employer_contribution" | undefined;
     code?: string | undefined;
+    type?: "earning" | "deduction" | "employer_contribution" | undefined;
     name?: string | undefined;
-    isActive?: boolean | undefined;
-    order?: number | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
+    isActive?: boolean | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
+    order?: number | undefined;
 }, {
-    type?: "earning" | "deduction" | "employer_contribution" | undefined;
     code?: string | undefined;
+    type?: "earning" | "deduction" | "employer_contribution" | undefined;
     name?: string | undefined;
-    isActive?: boolean | undefined;
-    order?: number | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
+    isActive?: boolean | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
+    order?: number | undefined;
 }>;
 export declare const componentQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
     limit: z.ZodDefault<z.ZodNumber>;
     type: z.ZodOptional<z.ZodEnum<["earning", "deduction", "employer_contribution"]>>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     type?: "earning" | "deduction" | "employer_contribution" | undefined;
 }, {
-    limit?: number | undefined;
     type?: "earning" | "deduction" | "employer_contribution" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
 }>;
 export declare function listComponents(req: Request, res: Response): Promise<void>;
 export declare function createComponent(req: Request, res: Response): Promise<void>;
@@ -175,11 +175,11 @@ export declare const createCycleSchema: z.ZodObject<{
     month: z.ZodNumber;
     year: z.ZodNumber;
 }, "strip", z.ZodTypeAny, {
-    month: number;
     year: number;
+    month: number;
 }, {
-    month: number;
     year: number;
+    month: number;
 }>;
 export declare const cycleQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -187,14 +187,14 @@ export declare const cycleQuerySchema: z.ZodObject<{
     year: z.ZodOptional<z.ZodNumber>;
     status: z.ZodOptional<z.ZodEnum<["draft", "processing", "processed", "paid", "locked"]>>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    status?: "draft" | "processing" | "processed" | "locked" | "paid" | undefined;
+    limit: number;
+    status?: "locked" | "draft" | "processing" | "processed" | "paid" | undefined;
     year?: number | undefined;
 }, {
-    limit?: number | undefined;
-    status?: "draft" | "processing" | "processed" | "locked" | "paid" | undefined;
+    status?: "locked" | "draft" | "processing" | "processed" | "paid" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     year?: number | undefined;
 }>;
 export declare function listCycles(req: Request, res: Response): Promise<void>;
@@ -243,13 +243,13 @@ export declare const updateRecordSchema: z.ZodObject<{
         name: string;
         amount: number;
     }[] | undefined;
-    paidLeaveBalance?: number | undefined;
-    overtimeAmount?: number | undefined;
-    advance?: number | undefined;
-    lateDeduction?: number | undefined;
     arrears?: number | undefined;
     reimbursements?: number | undefined;
     loanDeduction?: number | undefined;
+    overtimeAmount?: number | undefined;
+    advance?: number | undefined;
+    lateDeduction?: number | undefined;
+    paidLeaveBalance?: number | undefined;
 }, {
     expense?: number | undefined;
     overtimeHours?: number | undefined;
@@ -261,13 +261,13 @@ export declare const updateRecordSchema: z.ZodObject<{
         name: string;
         amount: number;
     }[] | undefined;
-    paidLeaveBalance?: number | undefined;
-    overtimeAmount?: number | undefined;
-    advance?: number | undefined;
-    lateDeduction?: number | undefined;
     arrears?: number | undefined;
     reimbursements?: number | undefined;
     loanDeduction?: number | undefined;
+    overtimeAmount?: number | undefined;
+    advance?: number | undefined;
+    lateDeduction?: number | undefined;
+    paidLeaveBalance?: number | undefined;
 }>;
 export declare function updateRecord(req: Request, res: Response): Promise<void>;
 export declare function generatePayslips(req: Request, res: Response): Promise<void>;
@@ -289,11 +289,11 @@ export declare const monthlyReportQuery: z.ZodObject<{
     year: z.ZodNumber;
     month: z.ZodNumber;
 }, "strip", z.ZodTypeAny, {
-    month: number;
     year: number;
+    month: number;
 }, {
-    month: number;
     year: number;
+    month: number;
 }>;
 export declare function monthlyReport(req: Request, res: Response): Promise<void>;
 export declare const yearlyReportQuery: z.ZodObject<{

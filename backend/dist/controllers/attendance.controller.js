@@ -17,6 +17,7 @@ import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.serv
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { currentEmployeeId, hasPermission } from '../lib/access.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
 // ============================================================================
@@ -716,19 +717,21 @@ export async function myShift(_req, res) {
 export const monthlyQuerySchema = z.object({
     year: z.coerce.number().int(),
     month: z.coerce.number().int().min(1).max(12),
-    employeeId: z.string().optional(),
+    employeeId: z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid employeeId').optional(),
 });
 export async function monthlyAttendance(req, res) {
     const q = req.query;
+    // `?employeeId=` is for HR looking at someone's month; everyone else always
+    // gets their own, whatever they pass.
     let employeeId;
-    if (q.employeeId) {
+    if (q.employeeId && hasPermission(req.user, 'attendance.view')) {
         employeeId = new Types.ObjectId(q.employeeId);
     }
     else {
-        const emp = await getCurrentEmployee();
-        if (!emp)
+        const own = await currentEmployeeId(req);
+        if (!own)
             throw new ForbiddenError('No employee profile found for current user');
-        employeeId = emp.id;
+        employeeId = own;
     }
     const from = new Date(q.year, q.month - 1, 1);
     const to = new Date(q.year, q.month, 0, 23, 59, 59);

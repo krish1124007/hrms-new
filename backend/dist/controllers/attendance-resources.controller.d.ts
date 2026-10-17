@@ -18,13 +18,13 @@ export declare const createSiteSchema: z.ZodObject<{
     isActive: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     name: string;
+    radius: number;
+    isActive: boolean;
     location: {
         lat: number;
         lng: number;
     };
-    radius: number;
     assignedEmployees: string[];
-    isActive: boolean;
     address?: string | undefined;
 }, {
     name: string;
@@ -32,10 +32,10 @@ export declare const createSiteSchema: z.ZodObject<{
         lat: number;
         lng: number;
     };
-    address?: string | undefined;
     radius?: number | undefined;
-    assignedEmployees?: string[] | undefined;
+    address?: string | undefined;
     isActive?: boolean | undefined;
+    assignedEmployees?: string[] | undefined;
 }>;
 export declare const updateSiteSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -55,36 +55,36 @@ export declare const updateSiteSchema: z.ZodObject<{
     isActive: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
     name?: string | undefined;
+    radius?: number | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     location?: {
         lat: number;
         lng: number;
     } | undefined;
-    address?: string | undefined;
-    radius?: number | undefined;
     assignedEmployees?: string[] | undefined;
-    isActive?: boolean | undefined;
 }, {
     name?: string | undefined;
+    radius?: number | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     location?: {
         lat: number;
         lng: number;
     } | undefined;
-    address?: string | undefined;
-    radius?: number | undefined;
     assignedEmployees?: string[] | undefined;
-    isActive?: boolean | undefined;
 }>;
 export declare const listSchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
     limit: z.ZodDefault<z.ZodNumber>;
     search: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     search?: string | undefined;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
 }>;
 export declare function listSites(req: Request, res: Response): Promise<void>;
@@ -130,11 +130,11 @@ export declare const createGeofenceSchema: z.ZodEffects<z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     type: "circle" | "polygon";
     name: string;
-    isActive: boolean;
     coordinates: {
         lat: number;
         lng: number;
     }[];
+    isActive: boolean;
     autoCheckIn: boolean;
     autoCheckOut: boolean;
     radius?: number | undefined;
@@ -146,25 +146,25 @@ export declare const createGeofenceSchema: z.ZodEffects<z.ZodObject<{
     type: "circle" | "polygon";
     name: string;
     radius?: number | undefined;
+    coordinates?: {
+        lat: number;
+        lng: number;
+    }[] | undefined;
     isActive?: boolean | undefined;
     center?: {
         lat: number;
         lng: number;
     } | undefined;
-    coordinates?: {
-        lat: number;
-        lng: number;
-    }[] | undefined;
     autoCheckIn?: boolean | undefined;
     autoCheckOut?: boolean | undefined;
 }>, {
     type: "circle" | "polygon";
     name: string;
-    isActive: boolean;
     coordinates: {
         lat: number;
         lng: number;
     }[];
+    isActive: boolean;
     autoCheckIn: boolean;
     autoCheckOut: boolean;
     radius?: number | undefined;
@@ -176,15 +176,15 @@ export declare const createGeofenceSchema: z.ZodEffects<z.ZodObject<{
     type: "circle" | "polygon";
     name: string;
     radius?: number | undefined;
+    coordinates?: {
+        lat: number;
+        lng: number;
+    }[] | undefined;
     isActive?: boolean | undefined;
     center?: {
         lat: number;
         lng: number;
     } | undefined;
-    coordinates?: {
-        lat: number;
-        lng: number;
-    }[] | undefined;
     autoCheckIn?: boolean | undefined;
     autoCheckOut?: boolean | undefined;
 }>;
@@ -219,30 +219,30 @@ export declare const updateGeofenceSchema: z.ZodObject<{
     type?: "circle" | "polygon" | undefined;
     name?: string | undefined;
     radius?: number | undefined;
+    coordinates?: {
+        lat: number;
+        lng: number;
+    }[] | undefined;
     isActive?: boolean | undefined;
     center?: {
         lat: number;
         lng: number;
     } | undefined;
-    coordinates?: {
-        lat: number;
-        lng: number;
-    }[] | undefined;
     autoCheckIn?: boolean | undefined;
     autoCheckOut?: boolean | undefined;
 }, {
     type?: "circle" | "polygon" | undefined;
     name?: string | undefined;
     radius?: number | undefined;
+    coordinates?: {
+        lat: number;
+        lng: number;
+    }[] | undefined;
     isActive?: boolean | undefined;
     center?: {
         lat: number;
         lng: number;
     } | undefined;
-    coordinates?: {
-        lat: number;
-        lng: number;
-    }[] | undefined;
     autoCheckIn?: boolean | undefined;
     autoCheckOut?: boolean | undefined;
 }>;
@@ -276,8 +276,8 @@ export declare const createAllowedIPSchema: z.ZodEffects<z.ZodObject<{
     locationId: z.ZodOptional<z.ZodString>;
     isActive: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    isActive: boolean;
     label: string;
+    isActive: boolean;
     locationId?: string | undefined;
     ipAddress?: string | undefined;
     ipRangeStart?: string | undefined;
@@ -290,8 +290,8 @@ export declare const createAllowedIPSchema: z.ZodEffects<z.ZodObject<{
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }>, {
-    isActive: boolean;
     label: string;
+    isActive: boolean;
     locationId?: string | undefined;
     ipAddress?: string | undefined;
     ipRangeStart?: string | undefined;
@@ -312,16 +312,16 @@ export declare const updateAllowedIPSchema: z.ZodObject<{
     locationId: z.ZodOptional<z.ZodString>;
     isActive: z.ZodOptional<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
+    label?: string | undefined;
     isActive?: boolean | undefined;
     locationId?: string | undefined;
-    label?: string | undefined;
     ipAddress?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }, {
+    label?: string | undefined;
     isActive?: boolean | undefined;
     locationId?: string | undefined;
-    label?: string | undefined;
     ipAddress?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;

@@ -15,16 +15,16 @@ export declare const createEventSchema: z.ZodObject<{
     title: string;
     isAllDay: boolean;
     attendees: string[];
-    location?: string | undefined;
     description?: string | undefined;
     color?: string | undefined;
+    location?: string | undefined;
 }, {
     startDate: Date;
     endDate: Date;
     title: string;
-    location?: string | undefined;
     description?: string | undefined;
     color?: string | undefined;
+    location?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }>;
@@ -38,21 +38,21 @@ export declare const updateEventSchema: z.ZodObject<{
     color: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     attendees: z.ZodOptional<z.ZodDefault<z.ZodArray<z.ZodString, "many">>>;
 }, "strip", z.ZodTypeAny, {
-    location?: string | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
     title?: string | undefined;
+    color?: string | undefined;
+    location?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }, {
-    location?: string | undefined;
     description?: string | undefined;
-    color?: string | undefined;
     startDate?: Date | undefined;
     endDate?: Date | undefined;
     title?: string | undefined;
+    color?: string | undefined;
+    location?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }>;
@@ -60,11 +60,11 @@ export declare const listEventsQuerySchema: z.ZodObject<{
     start: z.ZodOptional<z.ZodDate>;
     end: z.ZodOptional<z.ZodDate>;
 }, "strip", z.ZodTypeAny, {
-    end?: Date | undefined;
     start?: Date | undefined;
+    end?: Date | undefined;
 }, {
-    end?: Date | undefined;
     start?: Date | undefined;
+    end?: Date | undefined;
 }>;
 export declare function listEvents(req: Request, res: Response): Promise<void>;
 export declare function createEvent(req: Request, res: Response): Promise<void>;

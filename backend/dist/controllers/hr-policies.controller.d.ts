@@ -13,22 +13,22 @@ export declare const createSchema: z.ZodObject<{
     mandatory: z.ZodDefault<z.ZodBoolean>;
     tags: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
-    category: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it";
     title: string;
     tags: string[];
+    category: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it";
     mandatory: boolean;
+    content?: string | undefined;
     policyCode?: string | undefined;
     summary?: string | undefined;
-    content?: string | undefined;
     effectiveDate?: Date | undefined;
     reviewDueDate?: Date | undefined;
 }, {
     title: string;
-    category?: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it" | undefined;
+    content?: string | undefined;
     tags?: string[] | undefined;
+    category?: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     policyCode?: string | undefined;
     summary?: string | undefined;
-    content?: string | undefined;
     effectiveDate?: Date | undefined;
     reviewDueDate?: Date | undefined;
     mandatory?: boolean | undefined;
@@ -46,23 +46,23 @@ export declare const updateSchema: z.ZodObject<{
 } & {
     changeNotes: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    category?: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it" | undefined;
     title?: string | undefined;
+    content?: string | undefined;
     tags?: string[] | undefined;
+    category?: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     policyCode?: string | undefined;
     summary?: string | undefined;
-    content?: string | undefined;
     effectiveDate?: Date | undefined;
     reviewDueDate?: Date | undefined;
     mandatory?: boolean | undefined;
     changeNotes?: string | undefined;
 }, {
-    category?: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it" | undefined;
     title?: string | undefined;
+    content?: string | undefined;
     tags?: string[] | undefined;
+    category?: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     policyCode?: string | undefined;
     summary?: string | undefined;
-    content?: string | undefined;
     effectiveDate?: Date | undefined;
     reviewDueDate?: Date | undefined;
     mandatory?: boolean | undefined;
@@ -78,21 +78,21 @@ export declare const listQuerySchema: z.ZodObject<{
     tag: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "draft" | "published" | "archived" | undefined;
-    category?: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it" | undefined;
+    sort?: string | undefined;
     search?: string | undefined;
+    category?: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     mandatory?: "true" | "false" | undefined;
     tag?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "draft" | "published" | "archived" | undefined;
-    category?: "security" | "other" | "attendance" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "expenses" | "harassment" | "grievance" | "it" | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
+    category?: "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "security" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     mandatory?: "true" | "false" | undefined;
     tag?: string | undefined;
 }>;
@@ -107,14 +107,14 @@ export declare const publishSchema: z.ZodObject<{
     changeNotes?: string | undefined;
 }>;
 export declare const acknowledgeSchema: z.ZodObject<{
-    employee: z.ZodString;
+    employee: z.ZodOptional<z.ZodString>;
     comment: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    employee: string;
     comment?: string | undefined;
+    employee?: string | undefined;
 }, {
-    employee: string;
     comment?: string | undefined;
+    employee?: string | undefined;
 }>;
 /** GET /api/v1/hr-policies */
 export declare function list(req: Request, res: Response): Promise<void>;

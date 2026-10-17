@@ -30,15 +30,15 @@ export declare const updateDepartmentSchema: z.ZodObject<{
     parentDepartment: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     status: z.ZodOptional<z.ZodOptional<z.ZodEnum<["active", "inactive"]>>>;
 }, "strip", z.ZodTypeAny, {
-    code?: string | undefined;
     status?: "active" | "inactive" | undefined;
+    code?: string | undefined;
     name?: string | undefined;
     description?: string | undefined;
     head?: string | undefined;
     parentDepartment?: string | undefined;
 }, {
-    code?: string | undefined;
     status?: "active" | "inactive" | undefined;
+    code?: string | undefined;
     name?: string | undefined;
     description?: string | undefined;
     head?: string | undefined;
@@ -51,16 +51,16 @@ export declare const listQuerySchema: z.ZodObject<{
     status: z.ZodOptional<z.ZodEnum<["active", "inactive"]>>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "active" | "inactive" | undefined;
+    sort?: string | undefined;
     search?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "active" | "inactive" | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
 }>;
 export declare function listDepartments(req: Request, res: Response): Promise<void>;

@@ -46,8 +46,8 @@ export declare const updateConfigSchema: z.ZodObject<{
             day: z.ZodNumber;
             weeks: z.ZodDefault<z.ZodArray<z.ZodNumber, "many">>;
         }, "strip", z.ZodTypeAny, {
-            day: number;
             weeks: number[];
+            day: number;
         }, {
             day: number;
             weeks?: number[] | undefined;
@@ -55,8 +55,8 @@ export declare const updateConfigSchema: z.ZodObject<{
     }, "strip", z.ZodTypeAny, {
         fullDaysOff?: number[] | undefined;
         partialDaysOff?: {
-            day: number;
             weeks: number[];
+            day: number;
         }[] | undefined;
     }, {
         fullDaysOff?: number[] | undefined;
@@ -84,8 +84,8 @@ export declare const updateConfigSchema: z.ZodObject<{
     weekOff?: {
         fullDaysOff?: number[] | undefined;
         partialDaysOff?: {
-            day: number;
             weeks: number[];
+            day: number;
         }[] | undefined;
     } | undefined;
 }, {
@@ -155,6 +155,7 @@ export declare const checkInSchema: z.ZodObject<{
     note: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    siteId?: string | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
@@ -168,7 +169,6 @@ export declare const checkInSchema: z.ZodObject<{
         appVersion?: string | undefined;
     } | undefined;
     qrCode?: string | undefined;
-    siteId?: string | undefined;
     geofenceId?: string | undefined;
     deviceId?: string | undefined;
     faceConfidence?: number | undefined;
@@ -176,6 +176,7 @@ export declare const checkInSchema: z.ZodObject<{
     note?: string | undefined;
 }, {
     method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    siteId?: string | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
@@ -189,7 +190,6 @@ export declare const checkInSchema: z.ZodObject<{
         appVersion?: string | undefined;
     } | undefined;
     qrCode?: string | undefined;
-    siteId?: string | undefined;
     geofenceId?: string | undefined;
     deviceId?: string | undefined;
     faceConfidence?: number | undefined;
@@ -238,6 +238,7 @@ export declare const checkOutSchema: z.ZodObject<{
     method: z.ZodDefault<z.ZodEnum<["face", "qr", "dynamic_qr", "ip", "site", "geofence", "device", "manual"]>>;
 }, "strip", z.ZodTypeAny, {
     method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    siteId?: string | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
@@ -251,20 +252,20 @@ export declare const checkOutSchema: z.ZodObject<{
         appVersion?: string | undefined;
     } | undefined;
     qrCode?: string | undefined;
-    siteId?: string | undefined;
     geofenceId?: string | undefined;
     deviceId?: string | undefined;
     faceConfidence?: number | undefined;
     liveness?: boolean | undefined;
     note?: string | undefined;
 }, {
+    siteId?: string | undefined;
+    method?: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site" | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
         accuracy?: number | undefined;
     } | undefined;
-    method?: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site" | undefined;
     photo?: string | undefined;
     deviceInfo?: {
         model?: string | undefined;
@@ -272,7 +273,6 @@ export declare const checkOutSchema: z.ZodObject<{
         appVersion?: string | undefined;
     } | undefined;
     qrCode?: string | undefined;
-    siteId?: string | undefined;
     geofenceId?: string | undefined;
     deviceId?: string | undefined;
     faceConfidence?: number | undefined;
@@ -282,9 +282,9 @@ export declare const checkOutSchema: z.ZodObject<{
 export declare const breakStartSchema: z.ZodObject<{
     type: z.ZodDefault<z.ZodEnum<["tea", "lunch", "personal", "other"]>>;
 }, "strip", z.ZodTypeAny, {
-    type: "other" | "tea" | "lunch" | "personal";
+    type: "lunch" | "tea" | "personal" | "other";
 }, {
-    type?: "other" | "tea" | "lunch" | "personal" | undefined;
+    type?: "lunch" | "tea" | "personal" | "other" | undefined;
 }>;
 export declare const breakEndSchema: z.ZodObject<{}, "strip", z.ZodTypeAny, {}, {}>;
 export declare function checkIn(req: Request, res: Response): Promise<void>;
@@ -302,25 +302,25 @@ export declare const listRecordsSchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     month: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     status?: "present" | "absent" | "holiday" | "half_day" | "late" | "on_leave" | "weekend" | undefined;
-    departmentId?: string | undefined;
-    to?: Date | undefined;
     search?: string | undefined;
+    departmentId?: string | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     month?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
 }, {
-    limit?: number | undefined;
     status?: "present" | "absent" | "holiday" | "half_day" | "late" | "on_leave" | "weekend" | undefined;
-    departmentId?: string | undefined;
-    to?: Date | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
+    departmentId?: string | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     month?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
 }>;
 export declare function listRecords(req: Request, res: Response): Promise<void>;
 export declare function myAttendance(req: Request, res: Response): Promise<void>;
@@ -331,12 +331,12 @@ export declare const monthlyQuerySchema: z.ZodObject<{
     month: z.ZodNumber;
     employeeId: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    month: number;
     year: number;
+    month: number;
     employeeId?: string | undefined;
 }, {
-    month: number;
     year: number;
+    month: number;
     employeeId?: string | undefined;
 }>;
 export declare function monthlyAttendance(req: Request, res: Response): Promise<void>;
@@ -396,12 +396,12 @@ export declare const reportQuerySchema: z.ZodObject<{
     to: z.ZodDate;
     departmentId: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    to: Date;
     from: Date;
+    to: Date;
     departmentId?: string | undefined;
 }, {
-    to: Date;
     from: Date;
+    to: Date;
     departmentId?: string | undefined;
 }>;
 export declare function dashboardStats(req: Request, res: Response): Promise<void>;

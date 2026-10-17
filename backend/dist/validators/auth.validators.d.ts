@@ -1,36 +1,4 @@
 import { z } from 'zod';
-export declare const registerSchema: z.ZodObject<{
-    firstName: z.ZodString;
-    lastName: z.ZodString;
-    email: z.ZodString;
-    password: z.ZodString;
-    acceptTerms: z.ZodOptional<z.ZodBoolean>;
-    acceptPrivacy: z.ZodOptional<z.ZodBoolean>;
-    marketingOptIn: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
-    termsVersion: z.ZodOptional<z.ZodString>;
-    privacyVersion: z.ZodOptional<z.ZodString>;
-}, "strip", z.ZodTypeAny, {
-    email: string;
-    password: string;
-    firstName: string;
-    lastName: string;
-    marketingOptIn: boolean;
-    acceptTerms?: boolean | undefined;
-    acceptPrivacy?: boolean | undefined;
-    termsVersion?: string | undefined;
-    privacyVersion?: string | undefined;
-}, {
-    email: string;
-    password: string;
-    firstName: string;
-    lastName: string;
-    acceptTerms?: boolean | undefined;
-    acceptPrivacy?: boolean | undefined;
-    marketingOptIn?: boolean | undefined;
-    termsVersion?: string | undefined;
-    privacyVersion?: string | undefined;
-}>;
-export type RegisterInput = z.infer<typeof registerSchema>;
 export declare const loginSchema: z.ZodObject<{
     email: z.ZodString;
     password: z.ZodString;
@@ -60,12 +28,23 @@ export declare const resetPasswordSchema: z.ZodObject<{
     token: z.ZodString;
     password: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    password: string;
     token: string;
+    password: string;
 }, {
-    password: string;
     token: string;
+    password: string;
 }>;
+export declare const acceptInviteSchema: z.ZodObject<{
+    token: z.ZodString;
+    password: z.ZodString;
+}, "strip", z.ZodTypeAny, {
+    token: string;
+    password: string;
+}, {
+    token: string;
+    password: string;
+}>;
+export type AcceptInviteInput = z.infer<typeof acceptInviteSchema>;
 export declare const changeMyPasswordSchema: z.ZodObject<{
     currentPassword: z.ZodString;
     newPassword: z.ZodString;

@@ -78,10 +78,10 @@ async function bootstrap(): Promise<void> {
   const { setIO } = await import('./sockets/io-registry.js');
   setIO(io);
 
-  httpServer.listen(env.PORT, () => {
-    logger.info(`API listening on http://localhost:${env.PORT}`);
+  httpServer.listen(env.PORT, env.HOST, () => {
+    logger.info({ host: env.HOST, port: env.PORT }, `API listening on http://${env.HOST}:${env.PORT}`);
     if (docsEnabledByDefault()) {
-      logger.info(`Swagger UI: http://localhost:${env.PORT}/api/docs`);
+      logger.info(`Swagger UI: http://${env.HOST}:${env.PORT}/api/docs`);
     }
   });
 

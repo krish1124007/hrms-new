@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { registry } from '../lib/metrics.js';
 const router = Router();
 /**
@@ -16,7 +16,12 @@ const router = Router();
  * Liveness + readiness being separate avoids the classic k8s pitfall
  * where a transient Redis hiccup restarts every pod simultaneously.
  */
-router.get('/health', (_req, res) => {
+/**
+ * Liveness handler. Exported so `createApp()` can expose exactly this one
+ * probe at `/api/v1/health` without also publishing `/readyz` or `/metrics`
+ * under the versioned prefix.
+ */
+export function healthHandler(_req, res) {
     const mem = process.memoryUsage();
     res.status(200).json({
         success: true,
@@ -32,12 +37,13 @@ router.get('/health', (_req, res) => {
             version: process.env.npm_package_version || '1.0.0',
         },
     });
-});
+}
+router.get('/health', healthHandler);
 router.get('/readyz', async (_req, res) => {
     const dbState = mongoose.connection.readyState; // 1 = connected
     let redisOk = false;
     try {
-        await redis.ping();
+        await redisApp.ping();
         redisOk = true;
     }
     catch {

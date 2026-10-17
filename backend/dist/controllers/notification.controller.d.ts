@@ -12,12 +12,12 @@ export declare const listQuerySchema: z.ZodObject<{
     limit: z.ZodDefault<z.ZodNumber>;
     unreadOnly: z.ZodEffects<z.ZodOptional<z.ZodEnum<["true", "false"]>>, boolean, "true" | "false" | undefined>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     unreadOnly: boolean;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     unreadOnly?: "true" | "false" | undefined;
 }>;
 export declare function listNotifications(req: Request, res: Response): Promise<void>;

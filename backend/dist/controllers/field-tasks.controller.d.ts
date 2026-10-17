@@ -22,31 +22,31 @@ export declare const createTaskSchema: z.ZodObject<{
     status: z.ZodDefault<z.ZodEnum<["new", "accepted", "in_progress", "completed", "cancelled"]>>;
     dueDate: z.ZodOptional<z.ZodDate>;
 }, "strip", z.ZodTypeAny, {
-    status: "cancelled" | "new" | "in_progress" | "completed" | "accepted";
-    assignedTo: string;
+    status: "cancelled" | "completed" | "new" | "accepted" | "in_progress";
     title: string;
     priority: "low" | "medium" | "high" | "urgent";
-    location?: {
-        address?: string | undefined;
-        lat?: number | undefined;
-        lng?: number | undefined;
-    } | undefined;
-    description?: string | undefined;
-    clientId?: string | undefined;
-    dueDate?: Date | undefined;
-}, {
     assignedTo: string;
-    title: string;
-    status?: "cancelled" | "new" | "in_progress" | "completed" | "accepted" | undefined;
+    description?: string | undefined;
+    dueDate?: Date | undefined;
+    clientId?: string | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
     } | undefined;
+}, {
+    title: string;
+    assignedTo: string;
+    status?: "cancelled" | "completed" | "new" | "accepted" | "in_progress" | undefined;
     description?: string | undefined;
+    dueDate?: Date | undefined;
     clientId?: string | undefined;
     priority?: "low" | "medium" | "high" | "urgent" | undefined;
-    dueDate?: Date | undefined;
+    location?: {
+        address?: string | undefined;
+        lat?: number | undefined;
+        lng?: number | undefined;
+    } | undefined;
 }>;
 export declare const updateTaskSchema: z.ZodObject<{
     title: z.ZodOptional<z.ZodString>;
@@ -70,31 +70,31 @@ export declare const updateTaskSchema: z.ZodObject<{
     status: z.ZodOptional<z.ZodDefault<z.ZodEnum<["new", "accepted", "in_progress", "completed", "cancelled"]>>>;
     dueDate: z.ZodOptional<z.ZodOptional<z.ZodDate>>;
 }, "strip", z.ZodTypeAny, {
-    status?: "cancelled" | "new" | "in_progress" | "completed" | "accepted" | undefined;
+    status?: "cancelled" | "completed" | "new" | "accepted" | "in_progress" | undefined;
+    description?: string | undefined;
+    title?: string | undefined;
+    dueDate?: Date | undefined;
+    clientId?: string | undefined;
+    priority?: "low" | "medium" | "high" | "urgent" | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
     } | undefined;
     assignedTo?: string | undefined;
-    description?: string | undefined;
-    title?: string | undefined;
-    clientId?: string | undefined;
-    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-    dueDate?: Date | undefined;
 }, {
-    status?: "cancelled" | "new" | "in_progress" | "completed" | "accepted" | undefined;
+    status?: "cancelled" | "completed" | "new" | "accepted" | "in_progress" | undefined;
+    description?: string | undefined;
+    title?: string | undefined;
+    dueDate?: Date | undefined;
+    clientId?: string | undefined;
+    priority?: "low" | "medium" | "high" | "urgent" | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
     } | undefined;
     assignedTo?: string | undefined;
-    description?: string | undefined;
-    title?: string | undefined;
-    clientId?: string | undefined;
-    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-    dueDate?: Date | undefined;
 }>;
 export declare const completeSchema: z.ZodObject<{
     completionPhotos: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
@@ -114,23 +114,23 @@ export declare const listQuerySchema: z.ZodObject<{
     priority: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: string | undefined;
-    assignedTo?: string | undefined;
+    sort?: string | undefined;
     priority?: string | undefined;
+    assignedTo?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: string | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
-    assignedTo?: string | undefined;
+    limit?: number | undefined;
     priority?: string | undefined;
+    assignedTo?: string | undefined;
 }>;
 export declare function listTasks(req: Request, res: Response): Promise<void>;
-export declare function myTasks(_req: Request, res: Response): Promise<void>;
-export declare function teamTasks(_req: Request, res: Response): Promise<void>;
+export declare function myTasks(req: Request, res: Response): Promise<void>;
+export declare function teamTasks(req: Request, res: Response): Promise<void>;
 export declare function getTask(req: Request, res: Response): Promise<void>;
 export declare function createTask(req: Request, res: Response): Promise<void>;
 export declare function updateTask(req: Request, res: Response): Promise<void>;

@@ -89,23 +89,6 @@ export const swaggerPaths = {
     /* ================================================================
      * AUTH
      * ================================================================ */
-    '/auth/register': {
-        post: {
-            tags: ['Auth'],
-            summary: 'Register a new tenant & admin user',
-            description: 'Creates a new tenant organisation and the first admin user. Returns JWT tokens.',
-            security: [],
-            requestBody: {
-                required: true,
-                content: { 'application/json': { schema: ref('RegisterRequest') } },
-            },
-            responses: {
-                ...res201('Registration successful', ref('AuthTokens')),
-                ...{ 400: errResponses[400] },
-                ...{ 500: errResponses[500] },
-            },
-        },
-    },
     '/auth/login': {
         post: {
             tags: ['Auth'],
@@ -204,13 +187,28 @@ export const swaggerPaths = {
             responses: { ...res200('Password reset successful'), ...{ 400: errResponses[400] } },
         },
     },
-    '/auth/verify-email/{token}': {
-        get: {
+    '/auth/accept-invite': {
+        post: {
             tags: ['Auth'],
-            summary: 'Verify email address',
+            summary: 'Activate an invited account',
+            description: 'Exchanges the token from the invitation e-mail (link: /accept-invite?token=...) and a chosen password for an active account. Returns the same payload as login. A used or unknown token answers 400 INVALID_INVITE; a rejected password 400 WEAK_PASSWORD.',
             security: [],
-            parameters: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' }, description: 'Email verification token' }],
-            responses: { ...res200('Email verified'), ...{ 400: errResponses[400] } },
+            requestBody: {
+                required: true,
+                content: {
+                    'application/json': {
+                        schema: {
+                            type: 'object',
+                            required: ['token', 'password'],
+                            properties: {
+                                token: { type: 'string', minLength: 10 },
+                                password: { type: 'string', minLength: 8, maxLength: 128 },
+                            },
+                        },
+                    },
+                },
+            },
+            responses: { ...res200('Account activated; user and tokens returned'), ...{ 400: errResponses[400] } },
         },
     },
     '/auth/me': {
@@ -1626,6 +1624,7 @@ export const swaggerPaths = {
     '/backups/{id}': {
         delete: { tags: ['Backups'], summary: 'Delete backup', parameters: [idParam()], responses: { ...res200('Deleted') } },
     },
-    '/backups/{id}/restore': { post: { tags: ['Backups'], summary: 'Restore from backup', parameters: [idParam()], responses: { ...res200('Restore initiated') } } },
+    '/backups/{id}/restore': { post: { tags: ['Backups'], summary: 'Restore into the scratch database (BACKUP_SCRATCH_MONGO_URI)', parameters: [idParam()], responses: { ...res200('Restore initiated') } } },
+    '/backups/{id}/download': { get: { tags: ['Backups'], summary: 'Download backup tarball (backups.manage)', parameters: [idParam()], responses: { 200: { description: 'Backup tarball', content: { 'application/gzip': { schema: { type: 'string', format: 'binary' } } } } } } },
 };
 //# sourceMappingURL=swagger-paths.js.map

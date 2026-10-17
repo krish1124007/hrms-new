@@ -17,16 +17,16 @@ export declare const createLoanSchema: z.ZodObject<{
     principalAmount: number;
     interestRate: number;
     tenureMonths: number;
-    notes?: string | undefined;
     reason?: string | undefined;
+    notes?: string | undefined;
     startMonth?: Date | undefined;
 }, {
     employee: string;
     principalAmount: number;
     tenureMonths: number;
     type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
-    notes?: string | undefined;
     reason?: string | undefined;
+    notes?: string | undefined;
     interestRate?: number | undefined;
     startMonth?: Date | undefined;
 }>;
@@ -40,16 +40,16 @@ export declare const updateLoanSchema: z.ZodObject<{
     notes: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
-    notes?: string | undefined;
     reason?: string | undefined;
+    notes?: string | undefined;
     principalAmount?: number | undefined;
     interestRate?: number | undefined;
     tenureMonths?: number | undefined;
     startMonth?: Date | undefined;
 }, {
     type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
-    notes?: string | undefined;
     reason?: string | undefined;
+    notes?: string | undefined;
     principalAmount?: number | undefined;
     interestRate?: number | undefined;
     tenureMonths?: number | undefined;
@@ -64,19 +64,19 @@ export declare const listQuerySchema: z.ZodObject<{
     employee: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
+    limit: number;
+    status?: "active" | "pending" | "approved" | "rejected" | "cancelled" | "closed" | "disbursed" | undefined;
     sort?: string | undefined;
-    status?: "active" | "pending" | "approved" | "rejected" | "cancelled" | "disbursed" | "closed" | undefined;
+    type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
     search?: string | undefined;
     employee?: string | undefined;
 }, {
-    limit?: number | undefined;
-    type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
+    status?: "active" | "pending" | "approved" | "rejected" | "cancelled" | "closed" | "disbursed" | undefined;
     sort?: string | undefined;
-    status?: "active" | "pending" | "approved" | "rejected" | "cancelled" | "disbursed" | "closed" | undefined;
+    type?: "other" | "salary_advance" | "personal_loan" | "emergency" | "education" | "medical" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
     employee?: string | undefined;
 }>;

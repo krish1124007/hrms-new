@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { ProductOrder } from '../models/product-order.model.js';
 import { Client } from '../models/client.model.js';
-import { Employee } from '../models/employee.model.js';
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+/** Field managers see and edit every rep's orders; reps only their own. */
+const MANAGE = 'field-sales.manage';
 const orderItemSchema = z.object({
     productId: z.string().optional(),
     name: z.string().min(1),
@@ -47,12 +48,12 @@ export const listQuerySchema = z.object({
     to: z.coerce.date().optional(),
     sort: z.string().optional(),
 });
-async function resolveEmployeeId() {
-    const userId = getUserId();
-    if (!userId)
-        return null;
-    const emp = await Employee.findOne({ userId }).select('_id').exec();
-    return emp ? String(emp._id) : null;
+/** 404 if the order does not exist; 403 unless it is the caller's or they manage. */
+async function assertOrderAccess(req, id) {
+    const order = await ProductOrder.findById(id).select('employeeId').lean().exec();
+    if (!order)
+        throw new NotFoundError('Order not found');
+    await assertOwnOrPermission(req, order.employeeId, MANAGE);
 }
 async function nextOrderNumber() {
     const now = new Date();
@@ -77,6 +78,9 @@ export async function listOrders(req, res) {
     const filter = {};
     if (q.employeeId)
         filter.employeeId = q.employeeId;
+    // Reps only ever see their own (`null` — no employee record — matches nothing).
+    if (!hasPermission(req.user, MANAGE))
+        filter.employeeId = await currentEmployeeId(req);
     if (q.clientId)
         filter.clientId = q.clientId;
     if (q.status)
@@ -101,8 +105,8 @@ export async function listOrders(req, res) {
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
-export async function myOrders(_req, res) {
-    const empId = await resolveEmployeeId();
+export async function myOrders(req, res) {
+    const empId = await currentEmployeeId(req);
     if (!empId)
         throw new ValidationAppError('Employee profile not found');
     const docs = await ProductOrder.find({ employeeId: empId })
@@ -118,16 +122,18 @@ export async function getOrder(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Order not found');
+    await assertOwnOrPermission(req, doc.employeeId, MANAGE);
     res.json({ success: true, data: doc });
 }
 export async function createOrder(req, res) {
     const body = req.body;
-    let employeeId = body.employeeId;
+    // Only a manager may book an order against another rep.
+    let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
     if (!employeeId) {
-        const resolved = await resolveEmployeeId();
-        if (!resolved)
+        const own = await currentEmployeeId(req);
+        if (!own)
             throw new ValidationAppError('employeeId required');
-        employeeId = resolved;
+        employeeId = String(own);
     }
     const subtotal = body.items.reduce((s, i) => s + i.total, 0);
     const totalAmount = subtotal + (body.taxAmount ?? 0);
@@ -146,7 +152,11 @@ export async function createOrder(req, res) {
 }
 export async function updateOrder(req, res) {
     const body = req.body;
+    await assertOrderAccess(req, String(req.params.id));
     const update = { ...body };
+    // A rep can't hand their order to someone else.
+    if (!hasPermission(req.user, MANAGE))
+        delete update.employeeId;
     if (body.items) {
         const subtotal = body.items.reduce((s, i) => s + i.total, 0);
         update.subtotal = subtotal;
@@ -169,6 +179,7 @@ export async function deleteOrder(req, res) {
 }
 export async function updateOrderStatus(req, res) {
     const body = req.body;
+    await assertOrderAccess(req, String(req.params.id));
     const doc = await ProductOrder.findByIdAndUpdate(String(req.params.id), { status: body.status }, { new: true }).exec();
     if (!doc)
         throw new NotFoundError('Order not found');
@@ -179,13 +190,17 @@ export async function orderReports(req, res) {
     const q = req.query;
     const from = q.from ? new Date(q.from) : new Date(new Date().setDate(1));
     const to = q.to ? new Date(q.to) : new Date();
+    const match = { createdAt: { $gte: from, $lte: to } };
+    // A rep's report covers their own orders only.
+    if (!hasPermission(req.user, MANAGE))
+        match.employeeId = await currentEmployeeId(req);
     const [byStatus, totals] = await Promise.all([
         ProductOrder.aggregate([
-            { $match: { createdAt: { $gte: from, $lte: to } } },
+            { $match: match },
             { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
         ]),
         ProductOrder.aggregate([
-            { $match: { createdAt: { $gte: from, $lte: to } } },
+            { $match: match },
             {
                 $group: {
                     _id: null,

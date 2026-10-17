@@ -15,9 +15,9 @@ export declare const createSchema: z.ZodObject<{
     confidential: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     type: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination";
-    employee: string;
     description: string;
     title: string;
+    employee: string;
     severity: "low" | "medium" | "high" | "critical";
     confidential: boolean;
     incidentDate?: Date | undefined;
@@ -26,9 +26,9 @@ export declare const createSchema: z.ZodObject<{
     pipGoals?: string | undefined;
 }, {
     type: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination";
-    employee: string;
     description: string;
     title: string;
+    employee: string;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
     incidentDate?: Date | undefined;
     pipStartDate?: Date | undefined;
@@ -49,9 +49,9 @@ export declare const updateSchema: z.ZodObject<{
     confidential: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
     type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
-    employee?: string | undefined;
     description?: string | undefined;
     title?: string | undefined;
+    employee?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
     incidentDate?: Date | undefined;
     pipStartDate?: Date | undefined;
@@ -60,9 +60,9 @@ export declare const updateSchema: z.ZodObject<{
     confidential?: boolean | undefined;
 }, {
     type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
-    employee?: string | undefined;
     description?: string | undefined;
     title?: string | undefined;
+    employee?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
     incidentDate?: Date | undefined;
     pipStartDate?: Date | undefined;
@@ -80,20 +80,20 @@ export declare const listQuerySchema: z.ZodObject<{
     employee: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
-    sort?: string | undefined;
+    limit: number;
     status?: "cancelled" | "in_progress" | "failed" | "open" | "acknowledged" | "escalated" | "resolved" | undefined;
+    sort?: string | undefined;
+    type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
     search?: string | undefined;
     employee?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
 }, {
-    limit?: number | undefined;
-    type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
-    sort?: string | undefined;
     status?: "cancelled" | "in_progress" | "failed" | "open" | "acknowledged" | "escalated" | "resolved" | undefined;
+    sort?: string | undefined;
+    type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
     employee?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
@@ -109,11 +109,11 @@ export declare const resolveSchema: z.ZodObject<{
     outcome: z.ZodEnum<["resolved", "failed"]>;
     notes: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    notes: string;
     outcome: "failed" | "resolved";
+    notes: string;
 }, {
-    notes: string;
     outcome: "failed" | "resolved";
+    notes: string;
 }>;
 export declare const escalateSchema: z.ZodObject<{
     escalatedTo: z.ZodString;
@@ -143,11 +143,11 @@ export declare const addAttachmentSchema: z.ZodObject<{
     name: z.ZodString;
     url: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    url: string;
     name: string;
+    url: string;
 }, {
-    url: string;
     name: string;
+    url: string;
 }>;
 /** GET /api/v1/disciplinary */
 export declare function list(req: Request, res: Response): Promise<void>;

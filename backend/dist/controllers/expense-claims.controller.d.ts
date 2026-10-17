@@ -30,15 +30,15 @@ export declare const updateCategorySchema: z.ZodObject<{
     requiresReceipt: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
     isActive: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
-    limit?: number | undefined;
     code?: string | undefined;
+    limit?: number | undefined;
     name?: string | undefined;
     description?: string | undefined;
     isActive?: boolean | undefined;
     requiresReceipt?: boolean | undefined;
 }, {
-    limit?: number | undefined;
     code?: string | undefined;
+    limit?: number | undefined;
     name?: string | undefined;
     description?: string | undefined;
     isActive?: boolean | undefined;
@@ -49,12 +49,12 @@ export declare const categoryQuerySchema: z.ZodObject<{
     limit: z.ZodDefault<z.ZodNumber>;
     isActive: z.ZodOptional<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     isActive?: boolean | undefined;
 }, {
-    limit?: number | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     isActive?: boolean | undefined;
 }>;
 export declare function listCategories(req: Request, res: Response): Promise<void>;
@@ -84,8 +84,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     status: "pending" | "draft";
     date: Date;
-    category: string;
     amount: number;
+    category: string;
     currency: string;
     receiptUrls: {
         name: string;
@@ -93,11 +93,11 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
     }[];
     description?: string | undefined;
     employeeId?: string | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }, {
     date: Date;
-    category: string;
     amount: number;
+    category: string;
     status?: "pending" | "draft" | undefined;
     description?: string | undefined;
     employeeId?: string | undefined;
@@ -106,12 +106,12 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }>, {
     status: "pending" | "draft";
     date: Date;
-    category: string;
     amount: number;
+    category: string;
     currency: string;
     receiptUrls: {
         name: string;
@@ -119,11 +119,11 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
     }[];
     description?: string | undefined;
     employeeId?: string | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }, {
     date: Date;
-    category: string;
     amount: number;
+    category: string;
     status?: "pending" | "draft" | undefined;
     description?: string | undefined;
     employeeId?: string | undefined;
@@ -132,7 +132,7 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }>;
 export declare const updateClaimSchema: z.ZodObject<Omit<{
     employeeId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
@@ -156,27 +156,27 @@ export declare const updateClaimSchema: z.ZodObject<Omit<{
 }, "employeeId">, "strip", z.ZodTypeAny, {
     status?: "pending" | "draft" | undefined;
     date?: Date | undefined;
-    category?: string | undefined;
     description?: string | undefined;
     amount?: number | undefined;
+    category?: string | undefined;
     currency?: string | undefined;
     receiptUrls?: {
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }, {
     status?: "pending" | "draft" | undefined;
     date?: Date | undefined;
-    category?: string | undefined;
     description?: string | undefined;
     amount?: number | undefined;
+    category?: string | undefined;
     currency?: string | undefined;
     receiptUrls?: {
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
 }>;
 export declare const claimQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -188,23 +188,23 @@ export declare const claimQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: "pending" | "approved" | "rejected" | "draft" | "reimbursed" | undefined;
-    to?: Date | undefined;
-    category?: string | undefined;
+    sort?: string | undefined;
     employeeId?: string | undefined;
+    category?: string | undefined;
     from?: Date | undefined;
+    to?: Date | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: "pending" | "approved" | "rejected" | "draft" | "reimbursed" | undefined;
-    to?: Date | undefined;
-    category?: string | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     employeeId?: string | undefined;
+    category?: string | undefined;
     from?: Date | undefined;
+    to?: Date | undefined;
 }>;
 export declare const rejectClaimSchema: z.ZodObject<{
     reason: z.ZodString;

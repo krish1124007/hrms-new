@@ -39,15 +39,15 @@ export declare const listQuerySchema: z.ZodObject<{
     department: z.ZodOptional<z.ZodString>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     sort?: string | undefined;
     search?: string | undefined;
     department?: string | undefined;
 }, {
-    limit?: number | undefined;
     sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     search?: string | undefined;
     department?: string | undefined;
 }>;

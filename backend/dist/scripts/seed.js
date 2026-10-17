@@ -5,32 +5,12 @@
  */
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { logger } from '../config/logger.js';
-import { Role, DEFAULT_ROLES } from '../models/role.model.js';
+import { ensureSystemRoles } from '../lib/seed-roles.js';
 async function seed() {
     await connectDatabase();
-    for (const r of DEFAULT_ROLES) {
-        const existing = await Role.findOne({ slug: r.slug }).exec();
-        if (existing) {
-            // System-managed roles (admin, hr_manager, hr_executive, manager,
-            // employee) take their permission list from this file — that's their
-            // contract. Refresh on every seed so a code change here propagates
-            // to existing installs without manual DB edits.
-            if (r.isSystem) {
-                existing.name = r.name;
-                existing.description = r.description;
-                existing.permissions = r.permissions;
-                existing.isSystem = true;
-                await existing.save();
-                logger.info(`Refreshed system role "${r.slug}" (${r.permissions.length} perms)`);
-            }
-            else {
-                logger.info(`Role "${r.slug}" already exists — skipping`);
-            }
-            continue;
-        }
-        await Role.create({ ...r });
-        logger.info(`Created role "${r.slug}"`);
-    }
+    const { created, refreshed, strippedRoles, strippedUsers } = await ensureSystemRoles();
+    logger.info(`Roles: ${created} created, ${refreshed} refreshed; retired permissions stripped from ` +
+        `${strippedRoles} custom role(s) and ${strippedUsers} user(s)`);
     logger.info('Seed complete');
     await disconnectDatabase();
 }

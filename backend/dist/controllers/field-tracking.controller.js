@@ -2,8 +2,10 @@ import { z } from 'zod';
 import { LocationTrack } from '../models/location-track.model.js';
 import { Employee } from '../models/employee.model.js';
 import { ValidationAppError } from '../lib/errors.js';
-import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
 import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
+/** Field managers watch every rep; a rep can only see their own trail. */
+const MANAGE = 'field-sales.manage';
 const pointSchema = z.object({
     timestamp: z.coerce.date().optional(),
     lat: z.coerce.number(),
@@ -24,16 +26,9 @@ export const batchSchema = z.object({
 export const historyQuerySchema = z.object({
     date: z.coerce.date().optional(),
 });
-async function resolveEmployeeId() {
-    const userId = getUserId();
-    if (!userId)
-        return null;
-    const emp = await Employee.findOne({ userId }).select('_id').exec();
-    return emp ? String(emp._id) : null;
-}
 export async function ingestBatch(req, res) {
     const body = req.body;
-    const empId = await resolveEmployeeId();
+    const empId = await currentEmployeeId(req);
     if (!empId)
         throw new ValidationAppError('Employee profile not found');
     const docs = body.points.map((p) => ({
@@ -72,12 +67,16 @@ export async function ingestBatch(req, res) {
     }
     res.status(201).json({ success: true, data: { ingested: docs.length } });
 }
-export async function liveTracking(_req, res) {
+export async function liveTracking(req, res) {
     // Return last known position per employee (today)
     const start = new Date();
     start.setHours(0, 0, 0, 0);
+    const match = { timestamp: { $gte: start } };
+    // `null` (no employee record) matches nothing — employeeId is required.
+    if (!hasPermission(req.user, MANAGE))
+        match.employeeId = await currentEmployeeId(req);
     const docs = await LocationTrack.aggregate([
-        { $match: { timestamp: { $gte: start } } },
+        { $match: match },
         { $sort: { timestamp: -1 } },
         {
             $group: {
@@ -110,6 +109,7 @@ export async function liveTracking(_req, res) {
 }
 export async function trackingHistory(req, res) {
     const employeeId = String(req.params.employeeId);
+    await assertOwnOrPermission(req, employeeId, MANAGE);
     const date = req.query.date ? new Date(String(req.query.date)) : new Date();
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);

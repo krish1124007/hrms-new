@@ -16,25 +16,25 @@ export declare const createTaskSchema: z.ZodObject<{
     title: string;
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
+    dueDate?: Date | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
+    order?: number | undefined;
+    estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    dueDate?: Date | undefined;
-    estimatedHours?: number | undefined;
     labels?: string[] | undefined;
-    order?: number | undefined;
     parentTask?: string | undefined;
 }, {
     title: string;
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
+    dueDate?: Date | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
+    order?: number | undefined;
+    estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    dueDate?: Date | undefined;
-    estimatedHours?: number | undefined;
     labels?: string[] | undefined;
-    order?: number | undefined;
     parentTask?: string | undefined;
 }>;
 export declare const updateTaskSchema: z.ZodObject<{
@@ -53,25 +53,25 @@ export declare const updateTaskSchema: z.ZodObject<{
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
     title?: string | undefined;
+    dueDate?: Date | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
+    order?: number | undefined;
+    estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    dueDate?: Date | undefined;
-    estimatedHours?: number | undefined;
     labels?: string[] | undefined;
-    order?: number | undefined;
     parentTask?: string | undefined;
 }, {
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
     title?: string | undefined;
+    dueDate?: Date | undefined;
+    priority?: "low" | "medium" | "high" | "critical" | undefined;
+    order?: number | undefined;
+    estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
-    priority?: "low" | "medium" | "high" | "critical" | undefined;
-    dueDate?: Date | undefined;
-    estimatedHours?: number | undefined;
     labels?: string[] | undefined;
-    order?: number | undefined;
     parentTask?: string | undefined;
 }>;
 export declare const updateStatusSchema: z.ZodObject<{
@@ -90,24 +90,24 @@ export declare const reorderSchema: z.ZodObject<{
         status: z.ZodEnum<["todo", "in_progress", "in_review", "done"]>;
         order: z.ZodNumber;
     }, "strip", z.ZodTypeAny, {
-        _id: string;
         status: "done" | "in_progress" | "todo" | "in_review";
+        _id: string;
         order: number;
     }, {
-        _id: string;
         status: "done" | "in_progress" | "todo" | "in_review";
+        _id: string;
         order: number;
     }>, "many">;
 }, "strip", z.ZodTypeAny, {
     items: {
-        _id: string;
         status: "done" | "in_progress" | "todo" | "in_review";
+        _id: string;
         order: number;
     }[];
 }, {
     items: {
-        _id: string;
         status: "done" | "in_progress" | "todo" | "in_review";
+        _id: string;
         order: number;
     }[];
 }>;

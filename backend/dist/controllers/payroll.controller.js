@@ -6,6 +6,8 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationAppError } from
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { generatePayslipPdf, } from '../services/payslip-pdf.service.js';
+import { deleteFile } from '../lib/local-storage.js';
+import { logger } from '../config/logger.js';
 /* ──────────────────────────────────────────────────────────── */
 /* Helpers                                                       */
 /* ──────────────────────────────────────────────────────────── */
@@ -581,10 +583,15 @@ export async function generatePayslips(req, res) {
             continue;
         try {
             const ytd = await ytdForEmployee(employee._id, cycle.year, cycle.month);
+            const previousUrl = record.payslipUrl;
             const url = await generatePayslipPdf(record, cycle, employee, company, ytd);
             record.payslipUrl = url;
             await record.save();
             generated += 1;
+            // Each generation writes a new random key; drop the file it supersedes.
+            if (previousUrl?.startsWith('/uploads/') && previousUrl !== url) {
+                await deleteFile(previousUrl.slice('/uploads/'.length)).catch((err) => logger.warn({ err, previousUrl }, 'payroll: could not delete superseded payslip'));
+            }
         }
         catch (err) {
             // Continue on individual failure — don't break the batch

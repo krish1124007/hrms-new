@@ -21,27 +21,27 @@ export declare const createLocationSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     type: "site" | "office" | "branch" | "warehouse";
     name: string;
+    employees: string[];
     address: string;
     isActive: boolean;
-    employees: string[];
-    phone?: string | undefined;
     coordinates?: {
         lat: number;
         lng: number;
     } | undefined;
     manager?: string | undefined;
+    phone?: string | undefined;
 }, {
     name: string;
     address: string;
     type?: "site" | "office" | "branch" | "warehouse" | undefined;
-    phone?: string | undefined;
-    isActive?: boolean | undefined;
+    employees?: string[] | undefined;
     coordinates?: {
         lat: number;
         lng: number;
     } | undefined;
-    employees?: string[] | undefined;
+    isActive?: boolean | undefined;
     manager?: string | undefined;
+    phone?: string | undefined;
 }>;
 export declare const updateLocationSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -64,27 +64,27 @@ export declare const updateLocationSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     type?: "site" | "office" | "branch" | "warehouse" | undefined;
     name?: string | undefined;
-    phone?: string | undefined;
-    address?: string | undefined;
-    isActive?: boolean | undefined;
+    employees?: string[] | undefined;
     coordinates?: {
         lat: number;
         lng: number;
     } | undefined;
-    employees?: string[] | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     manager?: string | undefined;
+    phone?: string | undefined;
 }, {
     type?: "site" | "office" | "branch" | "warehouse" | undefined;
     name?: string | undefined;
-    phone?: string | undefined;
-    address?: string | undefined;
-    isActive?: boolean | undefined;
+    employees?: string[] | undefined;
     coordinates?: {
         lat: number;
         lng: number;
     } | undefined;
-    employees?: string[] | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     manager?: string | undefined;
+    phone?: string | undefined;
 }>;
 export declare const assignEmployeesSchema: z.ZodObject<{
     employeeIds: z.ZodArray<z.ZodString, "many">;

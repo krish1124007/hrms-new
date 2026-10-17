@@ -2,10 +2,12 @@ import { z } from 'zod';
 import { PaymentCollection } from '../models/payment-collection.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { Client } from '../models/client.model.js';
-import { Employee } from '../models/employee.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+/** Field managers see every rep's collections; reps only their own. */
+const MANAGE = 'field-sales.manage';
 export const createPaymentSchema = z.object({
     clientId: z.string().min(1),
     employeeId: z.string().optional(),
@@ -29,13 +31,6 @@ export const listQuerySchema = z.object({
     to: z.coerce.date().optional(),
     sort: z.string().optional(),
 });
-async function resolveEmployeeId() {
-    const userId = getUserId();
-    if (!userId)
-        return null;
-    const emp = await Employee.findOne({ userId }).select('_id').exec();
-    return emp ? String(emp._id) : null;
-}
 async function nextReceiptNumber() {
     const last = await PaymentCollection.findOne({})
         .sort({ createdAt: -1 })
@@ -56,6 +51,9 @@ export async function listPayments(req, res) {
     const filter = {};
     if (q.employeeId)
         filter.employeeId = q.employeeId;
+    // Reps only ever see their own (`null` — no employee record — matches nothing).
+    if (!hasPermission(req.user, MANAGE))
+        filter.employeeId = await currentEmployeeId(req);
     if (q.clientId)
         filter.clientId = q.clientId;
     if (q.method)
@@ -80,8 +78,8 @@ export async function listPayments(req, res) {
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
-export async function myPayments(_req, res) {
-    const empId = await resolveEmployeeId();
+export async function myPayments(req, res) {
+    const empId = await currentEmployeeId(req);
     if (!empId)
         throw new ValidationAppError('Employee profile not found');
     const docs = await PaymentCollection.find({ employeeId: empId })
@@ -98,16 +96,28 @@ export async function getPayment(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Payment not found');
+    await assertOwnOrPermission(req, doc.employeeId, MANAGE);
     res.json({ success: true, data: doc });
 }
 export async function createPayment(req, res) {
     const body = req.body;
-    let employeeId = body.employeeId;
+    // Only a manager may record a collection against another rep.
+    let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
     if (!employeeId) {
-        const resolved = await resolveEmployeeId();
-        if (!resolved)
+        const own = await currentEmployeeId(req);
+        if (!own)
             throw new ValidationAppError('employeeId required');
-        employeeId = resolved;
+        employeeId = String(own);
+    }
+    // A linked order must be one the caller may touch, and must be for the same
+    // client — otherwise a rep could mark another rep's (or client's) order paid.
+    // Checked before anything is written.
+    const order = body.orderId ? await ProductOrder.findById(body.orderId).exec() : null;
+    if (order) {
+        await assertOwnOrPermission(req, order.employeeId, MANAGE);
+        if (String(order.clientId) !== String(body.clientId)) {
+            throw new AppError('The order belongs to a different client', 400, 'ORDER_CLIENT_MISMATCH');
+        }
     }
     const receiptNumber = await nextReceiptNumber();
     const doc = await PaymentCollection.create({
@@ -119,19 +129,16 @@ export async function createPayment(req, res) {
     // Reduce client outstanding
     await Client.updateOne({ _id: body.clientId }, { $inc: { totalPayments: body.amount, outstandingAmount: -body.amount } }).exec();
     // Update order paymentStatus if linked
-    if (body.orderId) {
-        const order = await ProductOrder.findById(body.orderId).exec();
-        if (order) {
-            const newPaid = order.paidAmount + body.amount;
-            let status = 'pending';
-            if (newPaid >= order.totalAmount)
-                status = 'paid';
-            else if (newPaid > 0)
-                status = 'partial';
-            order.paidAmount = newPaid;
-            order.paymentStatus = status;
-            await order.save();
-        }
+    if (order) {
+        const newPaid = order.paidAmount + body.amount;
+        let status = 'pending';
+        if (newPaid >= order.totalAmount)
+            status = 'paid';
+        else if (newPaid > 0)
+            status = 'partial';
+        order.paidAmount = newPaid;
+        order.paymentStatus = status;
+        await order.save();
     }
     void audit({ action: 'create', entity: 'PaymentCollection', entityId: String(doc._id) });
     res.status(201).json({ success: true, data: doc });
@@ -165,13 +172,17 @@ export async function dailyReport(req, res) {
     start.setHours(0, 0, 0, 0);
     const end = new Date(date);
     end.setHours(23, 59, 59, 999);
+    const match = { collectedAt: { $gte: start, $lte: end } };
+    // A rep's report covers their own collections only.
+    if (!hasPermission(req.user, MANAGE))
+        match.employeeId = await currentEmployeeId(req);
     const [byMethod, totals] = await Promise.all([
         PaymentCollection.aggregate([
-            { $match: { collectedAt: { $gte: start, $lte: end } } },
+            { $match: match },
             { $group: { _id: '$method', count: { $sum: 1 }, total: { $sum: '$amount' } } },
         ]),
         PaymentCollection.aggregate([
-            { $match: { collectedAt: { $gte: start, $lte: end } } },
+            { $match: match },
             { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
         ]),
     ]);

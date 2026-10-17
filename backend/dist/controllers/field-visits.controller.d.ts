@@ -9,21 +9,21 @@ export declare const createVisitSchema: z.ZodObject<{
     status: z.ZodDefault<z.ZodEnum<["scheduled", "in_progress", "completed", "cancelled"]>>;
     meetingWith: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    status: "cancelled" | "in_progress" | "completed" | "scheduled";
+    status: "cancelled" | "completed" | "in_progress" | "scheduled";
     clientId: string;
-    purpose: "other" | "collection" | "sales" | "service" | "followup";
+    purpose: "collection" | "service" | "other" | "sales" | "followup";
     isPlanned: boolean;
-    notes?: string | undefined;
     employeeId?: string | undefined;
+    notes?: string | undefined;
     meetingWith?: string | undefined;
 }, {
     clientId: string;
-    status?: "cancelled" | "in_progress" | "completed" | "scheduled" | undefined;
-    notes?: string | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     employeeId?: string | undefined;
-    purpose?: "other" | "collection" | "sales" | "service" | "followup" | undefined;
-    meetingWith?: string | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     isPlanned?: boolean | undefined;
+    notes?: string | undefined;
+    meetingWith?: string | undefined;
 }>;
 export declare const updateVisitSchema: z.ZodObject<{
     purpose: z.ZodOptional<z.ZodEnum<["sales", "service", "collection", "followup", "other"]>>;
@@ -34,18 +34,18 @@ export declare const updateVisitSchema: z.ZodObject<{
     photos: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     productsDiscussed: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
-    status?: "cancelled" | "in_progress" | "completed" | "scheduled" | undefined;
-    notes?: string | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
-    purpose?: "other" | "collection" | "sales" | "service" | "followup" | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
+    notes?: string | undefined;
     nextFollowUpDate?: Date | undefined;
     photos?: string[] | undefined;
     productsDiscussed?: string[] | undefined;
 }, {
-    status?: "cancelled" | "in_progress" | "completed" | "scheduled" | undefined;
-    notes?: string | undefined;
+    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
-    purpose?: "other" | "collection" | "sales" | "service" | "followup" | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
+    notes?: string | undefined;
     nextFollowUpDate?: Date | undefined;
     photos?: string[] | undefined;
     productsDiscussed?: string[] | undefined;
@@ -71,52 +71,52 @@ export declare const checkInSchema: z.ZodObject<{
         photo: z.ZodOptional<z.ZodString>;
         address: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     }, {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     }>;
     isPlanned: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
+    clientId: string;
     checkIn: {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     };
-    clientId: string;
-    purpose: "other" | "collection" | "sales" | "service" | "followup";
+    purpose: "collection" | "service" | "other" | "sales" | "followup";
     isPlanned: boolean;
 }, {
+    clientId: string;
     checkIn: {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     };
-    clientId: string;
-    purpose?: "other" | "collection" | "sales" | "service" | "followup" | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     isPlanned?: boolean | undefined;
 }>;
 export declare const checkOutSchema: z.ZodObject<{
@@ -138,21 +138,21 @@ export declare const checkOutSchema: z.ZodObject<{
         photo: z.ZodOptional<z.ZodString>;
         address: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     }, {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     }>;
@@ -161,31 +161,31 @@ export declare const checkOutSchema: z.ZodObject<{
     productsDiscussed: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
     checkOut: {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     };
-    notes?: string | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
+    notes?: string | undefined;
     productsDiscussed?: string[] | undefined;
 }, {
     checkOut: {
+        address?: string | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
-        address?: string | undefined;
         photo?: string | undefined;
         time?: Date | undefined;
     };
-    notes?: string | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
+    notes?: string | undefined;
     productsDiscussed?: string[] | undefined;
 }>;
 export declare const listQuerySchema: z.ZodObject<{
@@ -199,28 +199,28 @@ export declare const listQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: string | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
     purpose?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: string | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
     purpose?: string | undefined;
 }>;
 export declare function listVisits(req: Request, res: Response): Promise<void>;
-export declare function todayVisits(_req: Request, res: Response): Promise<void>;
+export declare function todayVisits(req: Request, res: Response): Promise<void>;
 export declare function getVisit(req: Request, res: Response): Promise<void>;
 export declare function createVisit(req: Request, res: Response): Promise<void>;
 export declare function updateVisit(req: Request, res: Response): Promise<void>;

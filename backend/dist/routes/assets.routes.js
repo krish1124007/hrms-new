@@ -2,19 +2,22 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as ctrl from '../controllers/assets.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { rejectRawUploadRefs } from '../middleware/presign-response.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
+import { uploadFileFilter } from '../lib/upload-policy.js';
 const router = Router();
 router.use(authMiddleware);
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: uploadFileFilter,
 });
 router.get('/me', asyncHandler(ctrl.myAssets));
 router.get('/', requirePermission('assets.view'), validate(ctrl.listQuerySchema, 'query'), asyncHandler(ctrl.listAssets));
 router.get('/stats', requirePermission('assets.view'), asyncHandler(ctrl.assetStats));
-router.post('/import', requirePermission('assets.manage'), upload.single('file'), asyncHandler(ctrl.importAssets));
+router.post('/import', requirePermission('assets.manage'), upload.single('file'), rejectRawUploadRefs, asyncHandler(ctrl.importAssets));
 router.post('/', requirePermission('assets.manage'), validate(ctrl.createAssetSchema), asyncHandler(ctrl.createAsset));
 router.get('/:id', requirePermission('assets.view'), asyncHandler(ctrl.getAsset));
 router.patch('/:id', requirePermission('assets.manage'), validate(ctrl.updateAssetSchema), asyncHandler(ctrl.updateAsset));

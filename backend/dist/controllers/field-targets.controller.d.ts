@@ -6,11 +6,11 @@ export declare const createTargetSchema: z.ZodObject<{
         month: z.ZodNumber;
         year: z.ZodNumber;
     }, "strip", z.ZodTypeAny, {
-        month: number;
         year: number;
+        month: number;
     }, {
-        month: number;
         year: number;
+        month: number;
     }>;
     type: z.ZodDefault<z.ZodEnum<["amount", "quantity", "visits"]>>;
     productCategory: z.ZodOptional<z.ZodString>;
@@ -32,8 +32,8 @@ export declare const createTargetSchema: z.ZodObject<{
     type: "amount" | "quantity" | "visits";
     employeeId: string;
     period: {
-        month: number;
         year: number;
+        month: number;
     };
     targetValue: number;
     productCategory?: string | undefined;
@@ -45,8 +45,8 @@ export declare const createTargetSchema: z.ZodObject<{
 }, {
     employeeId: string;
     period: {
-        month: number;
         year: number;
+        month: number;
     };
     targetValue: number;
     type?: "amount" | "quantity" | "visits" | undefined;
@@ -63,11 +63,11 @@ export declare const updateTargetSchema: z.ZodObject<{
         month: z.ZodNumber;
         year: z.ZodNumber;
     }, "strip", z.ZodTypeAny, {
-        month: number;
         year: number;
+        month: number;
     }, {
-        month: number;
         year: number;
+        month: number;
     }>>;
     type: z.ZodOptional<z.ZodDefault<z.ZodEnum<["amount", "quantity", "visits"]>>>;
     productCategory: z.ZodOptional<z.ZodOptional<z.ZodString>>;
@@ -89,8 +89,8 @@ export declare const updateTargetSchema: z.ZodObject<{
     type?: "amount" | "quantity" | "visits" | undefined;
     employeeId?: string | undefined;
     period?: {
-        month: number;
         year: number;
+        month: number;
     } | undefined;
     productCategory?: string | undefined;
     targetValue?: number | undefined;
@@ -103,8 +103,8 @@ export declare const updateTargetSchema: z.ZodObject<{
     type?: "amount" | "quantity" | "visits" | undefined;
     employeeId?: string | undefined;
     period?: {
-        month: number;
         year: number;
+        month: number;
     } | undefined;
     productCategory?: string | undefined;
     targetValue?: number | undefined;
@@ -122,19 +122,19 @@ export declare const listQuerySchema: z.ZodObject<{
     year: z.ZodOptional<z.ZodNumber>;
     type: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
+    limit: number;
     type?: string | undefined;
+    year?: number | undefined;
     employeeId?: string | undefined;
     month?: number | undefined;
-    year?: number | undefined;
 }, {
-    limit?: number | undefined;
     type?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
+    year?: number | undefined;
     employeeId?: string | undefined;
     month?: number | undefined;
-    year?: number | undefined;
 }>;
 export declare function listTargets(req: Request, res: Response): Promise<void>;
 export declare function myTargets(_req: Request, res: Response): Promise<void>;

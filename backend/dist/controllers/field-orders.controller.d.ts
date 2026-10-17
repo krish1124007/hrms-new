@@ -12,15 +12,15 @@ export declare const createOrderSchema: z.ZodObject<{
         total: z.ZodNumber;
     }, "strip", z.ZodTypeAny, {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         discount: number;
         productId?: string | undefined;
     }, {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         productId?: string | undefined;
         discount?: number | undefined;
@@ -31,37 +31,37 @@ export declare const createOrderSchema: z.ZodObject<{
     notes: z.ZodOptional<z.ZodString>;
     visitId: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    status: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered";
-    clientId: string;
+    status: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped";
     items: {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         discount: number;
         productId?: string | undefined;
     }[];
-    taxAmount: number;
-    notes?: string | undefined;
-    employeeId?: string | undefined;
-    visitId?: string | undefined;
-    deliveryDate?: Date | undefined;
-}, {
     clientId: string;
+    taxAmount: number;
+    employeeId?: string | undefined;
+    notes?: string | undefined;
+    deliveryDate?: Date | undefined;
+    visitId?: string | undefined;
+}, {
     items: {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         productId?: string | undefined;
         discount?: number | undefined;
     }[];
-    status?: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered" | undefined;
-    notes?: string | undefined;
+    clientId: string;
+    status?: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped" | undefined;
     employeeId?: string | undefined;
-    visitId?: string | undefined;
+    notes?: string | undefined;
     taxAmount?: number | undefined;
     deliveryDate?: Date | undefined;
+    visitId?: string | undefined;
 }>;
 export declare const updateOrderSchema: z.ZodObject<{
     clientId: z.ZodOptional<z.ZodString>;
@@ -75,15 +75,15 @@ export declare const updateOrderSchema: z.ZodObject<{
         total: z.ZodNumber;
     }, "strip", z.ZodTypeAny, {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         discount: number;
         productId?: string | undefined;
     }, {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         productId?: string | undefined;
         discount?: number | undefined;
@@ -94,44 +94,44 @@ export declare const updateOrderSchema: z.ZodObject<{
     notes: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     visitId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
-    status?: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered" | undefined;
-    notes?: string | undefined;
-    employeeId?: string | undefined;
-    clientId?: string | undefined;
-    visitId?: string | undefined;
+    status?: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped" | undefined;
     items?: {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         discount: number;
         productId?: string | undefined;
     }[] | undefined;
-    taxAmount?: number | undefined;
-    deliveryDate?: Date | undefined;
-}, {
-    status?: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered" | undefined;
-    notes?: string | undefined;
     employeeId?: string | undefined;
     clientId?: string | undefined;
+    notes?: string | undefined;
+    taxAmount?: number | undefined;
+    deliveryDate?: Date | undefined;
     visitId?: string | undefined;
+}, {
+    status?: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped" | undefined;
     items?: {
         name: string;
-        total: number;
         quantity: number;
+        total: number;
         unitPrice: number;
         productId?: string | undefined;
         discount?: number | undefined;
     }[] | undefined;
+    employeeId?: string | undefined;
+    clientId?: string | undefined;
+    notes?: string | undefined;
     taxAmount?: number | undefined;
     deliveryDate?: Date | undefined;
+    visitId?: string | undefined;
 }>;
 export declare const statusSchema: z.ZodObject<{
     status: z.ZodEnum<["draft", "confirmed", "processing", "shipped", "delivered", "cancelled"]>;
 }, "strip", z.ZodTypeAny, {
-    status: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered";
+    status: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped";
 }, {
-    status: "cancelled" | "draft" | "processing" | "confirmed" | "shipped" | "delivered";
+    status: "cancelled" | "confirmed" | "delivered" | "draft" | "processing" | "shipped";
 }>;
 export declare const listQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -144,28 +144,28 @@ export declare const listQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: string | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
     paymentStatus?: string | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: string | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
+    limit?: number | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
     paymentStatus?: string | undefined;
 }>;
 export declare function listOrders(req: Request, res: Response): Promise<void>;
-export declare function myOrders(_req: Request, res: Response): Promise<void>;
+export declare function myOrders(req: Request, res: Response): Promise<void>;
 export declare function getOrder(req: Request, res: Response): Promise<void>;
 export declare function createOrder(req: Request, res: Response): Promise<void>;
 export declare function updateOrder(req: Request, res: Response): Promise<void>;

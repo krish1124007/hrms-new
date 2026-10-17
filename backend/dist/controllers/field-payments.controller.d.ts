@@ -11,24 +11,24 @@ export declare const createPaymentSchema: z.ZodObject<{
     orderId: z.ZodOptional<z.ZodString>;
     notes: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    method: "other" | "cash" | "upi" | "cheque" | "bank_transfer";
     amount: number;
     clientId: string;
-    notes?: string | undefined;
+    method: "cash" | "upi" | "cheque" | "other" | "bank_transfer";
     employeeId?: string | undefined;
+    notes?: string | undefined;
+    visitId?: string | undefined;
     reference?: string | undefined;
     collectedAt?: Date | undefined;
-    visitId?: string | undefined;
     orderId?: string | undefined;
 }, {
-    method: "other" | "cash" | "upi" | "cheque" | "bank_transfer";
     amount: number;
     clientId: string;
-    notes?: string | undefined;
+    method: "cash" | "upi" | "cheque" | "other" | "bank_transfer";
     employeeId?: string | undefined;
+    notes?: string | undefined;
+    visitId?: string | undefined;
     reference?: string | undefined;
     collectedAt?: Date | undefined;
-    visitId?: string | undefined;
     orderId?: string | undefined;
 }>;
 export declare const updatePaymentSchema: z.ZodObject<{
@@ -42,24 +42,24 @@ export declare const updatePaymentSchema: z.ZodObject<{
     orderId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     notes: z.ZodOptional<z.ZodOptional<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
-    notes?: string | undefined;
-    method?: "other" | "cash" | "upi" | "cheque" | "bank_transfer" | undefined;
     employeeId?: string | undefined;
     amount?: number | undefined;
     clientId?: string | undefined;
+    method?: "cash" | "upi" | "cheque" | "other" | "bank_transfer" | undefined;
+    notes?: string | undefined;
+    visitId?: string | undefined;
     reference?: string | undefined;
     collectedAt?: Date | undefined;
-    visitId?: string | undefined;
     orderId?: string | undefined;
 }, {
-    notes?: string | undefined;
-    method?: "other" | "cash" | "upi" | "cheque" | "bank_transfer" | undefined;
     employeeId?: string | undefined;
     amount?: number | undefined;
     clientId?: string | undefined;
+    method?: "cash" | "upi" | "cheque" | "other" | "bank_transfer" | undefined;
+    notes?: string | undefined;
+    visitId?: string | undefined;
     reference?: string | undefined;
     collectedAt?: Date | undefined;
-    visitId?: string | undefined;
     orderId?: string | undefined;
 }>;
 export declare const listQuerySchema: z.ZodObject<{
@@ -73,28 +73,28 @@ export declare const listQuerySchema: z.ZodObject<{
     to: z.ZodOptional<z.ZodDate>;
     sort: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    limit: number;
     page: number;
-    sort?: string | undefined;
+    limit: number;
     status?: string | undefined;
-    to?: Date | undefined;
-    method?: string | undefined;
+    sort?: string | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    method?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
 }, {
-    limit?: number | undefined;
-    sort?: string | undefined;
     status?: string | undefined;
-    to?: Date | undefined;
+    sort?: string | undefined;
     page?: number | undefined;
-    method?: string | undefined;
+    limit?: number | undefined;
     employeeId?: string | undefined;
-    from?: Date | undefined;
     clientId?: string | undefined;
+    method?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
 }>;
 export declare function listPayments(req: Request, res: Response): Promise<void>;
-export declare function myPayments(_req: Request, res: Response): Promise<void>;
+export declare function myPayments(req: Request, res: Response): Promise<void>;
 export declare function getPayment(req: Request, res: Response): Promise<void>;
 export declare function createPayment(req: Request, res: Response): Promise<void>;
 export declare function updatePayment(req: Request, res: Response): Promise<void>;
