@@ -40,6 +40,7 @@ export const updateConfigSchema = z.object({
       requireLocation: z.boolean().default(false),
       requireNoteOnLateCheckIn: z.boolean().default(false),
       freeLateDaysPerMonth: z.number().int().min(0).default(3),
+      expenseBeforeCheckout: z.enum(['all', 'field', 'none']).default('all'),
     })
     .partial()
     .optional(),

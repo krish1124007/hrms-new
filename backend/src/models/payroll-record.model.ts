@@ -6,10 +6,28 @@ import {
   type PaginateModel,
 } from '../lib/mongoose-plugins.js';
 
+/** Which statutory deduction a line is, so payroll can find/override it by type not by name. */
+export type PayrollStatutoryType = 'pf' | 'esi' | 'pt' | 'tds';
+
 export interface IPayrollLine {
   componentId?: Types.ObjectId;
   name: string;
   amount: number;
+  statutoryType?: PayrollStatutoryType;
+}
+
+/**
+ * HR overrides applied on top of the computed figures. `null` means "not
+ * overridden — use the computed value"; a number (including 0) replaces it.
+ */
+export interface IPayrollManualAdjustments {
+  arrears: number | null;
+  advance: number | null;
+  expense: number | null;
+  reimbursements: number | null;
+  loanDeduction: number | null;
+  tds: number | null;
+  note?: string;
 }
 
 export interface IPayrollBank {
@@ -50,6 +68,8 @@ export interface IPayrollRecord extends Document {
   arrears: number;
   reimbursements: number;
   loanDeduction: number;
+  tds: number;
+  manualAdjustments: IPayrollManualAdjustments;
   payslipUrl?: string;
   paymentStatus: PayrollPaymentStatus;
   paymentRef?: string;
@@ -64,6 +84,20 @@ const lineSchema = new Schema<IPayrollLine>(
     componentId: { type: Schema.Types.ObjectId, ref: 'SalaryComponent' },
     name: { type: String, required: true },
     amount: { type: Number, default: 0 },
+    statutoryType: { type: String, enum: ['pf', 'esi', 'pt', 'tds'] },
+  },
+  { _id: false },
+);
+
+const manualAdjustmentsSchema = new Schema<IPayrollManualAdjustments>(
+  {
+    arrears: { type: Number, default: null },
+    advance: { type: Number, default: null },
+    expense: { type: Number, default: null },
+    reimbursements: { type: Number, default: null },
+    loanDeduction: { type: Number, default: null },
+    tds: { type: Number, default: null },
+    note: { type: String },
   },
   { _id: false },
 );
@@ -106,6 +140,8 @@ const payrollRecordSchema = new Schema<IPayrollRecord>({
   arrears: { type: Number, default: 0 },
   reimbursements: { type: Number, default: 0 },
   loanDeduction: { type: Number, default: 0 },
+  tds: { type: Number, default: 0 },
+  manualAdjustments: { type: manualAdjustmentsSchema, default: () => ({}) },
   payslipUrl: String,
   paymentStatus: { type: String, enum: ['pending', 'paid'], default: 'pending' },
   paymentRef: String,

@@ -32,6 +32,16 @@ export interface ISalary {
   specialAllowance: number;
   otherAllowances: Record<string, number>;
   grossSalary: number;
+  /** Monthly TDS to deduct, declared by HR. */
+  tdsMonthly?: number;
+}
+
+/** Statutory flags that carry state across payroll months. */
+export interface IEmployeeStatutory {
+  /** Whether ESI applies to this employee (decided against the wage ceiling). */
+  esiEligible?: boolean;
+  /** The ESI contribution period (e.g. `2026-04`) `esiEligible` was last decided for. */
+  esiPeriodKey?: string;
 }
 
 export interface IBankDetails {
@@ -79,6 +89,11 @@ export interface IEmployee extends Document {
   employmentType: EmploymentType;
   workLocation?: string;
   salary: ISalary;
+  /** Field staff: location and expense-before-checkout rules apply to them. */
+  isFieldStaff?: boolean;
+  /** The salary structure this employee's pay components come from. */
+  salaryStructureId?: Types.ObjectId;
+  statutory?: IEmployeeStatutory;
   bankDetails: IBankDetails;
   documents: IEmployeeDocument[];
   emergencyContact: IEmergencyContact;
@@ -118,6 +133,15 @@ const salarySchema = new Schema<ISalary>(
     specialAllowance: { type: Number, default: 0 },
     otherAllowances: { type: Schema.Types.Mixed, default: {} },
     grossSalary: { type: Number, default: 0 },
+    tdsMonthly: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
+const statutorySchema = new Schema<IEmployeeStatutory>(
+  {
+    esiEligible: { type: Boolean },
+    esiPeriodKey: { type: String },
   },
   { _id: false },
 );
@@ -213,6 +237,9 @@ const employeeSchema = new Schema<IEmployee>({
   },
   workLocation: String,
   salary: { type: salarySchema, default: () => ({}) },
+  isFieldStaff: { type: Boolean, default: false },
+  salaryStructureId: { type: Schema.Types.ObjectId, ref: 'SalaryStructure' },
+  statutory: { type: statutorySchema },
   bankDetails: { type: bankSchema, default: () => ({}) },
   documents: { type: [documentSchema], default: [] },
   emergencyContact: { type: emergencySchema, default: () => ({}) },

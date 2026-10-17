@@ -20,6 +20,11 @@ export interface IAttendanceSettings {
   requireLocation: boolean;
   requireNoteOnLateCheckIn: boolean;
   freeLateDaysPerMonth: number;
+  /**
+   * Whether an employee must file their day's expenses before checking out:
+   * `all` = everyone, `field` = field staff only, `none` = never.
+   */
+  expenseBeforeCheckout?: 'all' | 'field' | 'none';
 }
 
 export interface ILiveTrackingConfig {
@@ -67,6 +72,7 @@ const attendanceConfigSchema = new Schema<IAttendanceConfig>({
     requireLocation: { type: Boolean, default: false },
     requireNoteOnLateCheckIn: { type: Boolean, default: false },
     freeLateDaysPerMonth: { type: Number, default: 3, min: 0 },
+    expenseBeforeCheckout: { type: String, enum: ['all', 'field', 'none'], default: 'all' },
   },
   liveTracking: {
     enabled: { type: Boolean, default: false },

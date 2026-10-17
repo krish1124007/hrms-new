@@ -17,6 +17,24 @@ export type AttendanceStatus =
   | 'weekend';
 
 export type RegularizationStatus = 'pending' | 'approved' | 'rejected';
+
+/** How an attendance row came to exist. Rows written before this field are `punch`. */
+export type AttendanceSource =
+  | 'punch'
+  | 'leave'
+  | 'auto_absent'
+  | 'auto_checkout'
+  | 'regularization'
+  | 'correction';
+
+export const ATTENDANCE_SOURCES: AttendanceSource[] = [
+  'punch',
+  'leave',
+  'auto_absent',
+  'auto_checkout',
+  'regularization',
+  'correction',
+];
 export type BreakType = 'tea' | 'lunch' | 'personal' | 'other';
 
 export interface ILocationPoint {
@@ -63,6 +81,9 @@ export interface IRegularization {
   approvedBy?: Types.ObjectId;
   approvedAt?: Date;
   status: RegularizationStatus;
+  /** Punch times the employee is asking to be recorded; applied on approval. */
+  requestedCheckIn?: Date;
+  requestedCheckOut?: Date;
 }
 
 export interface IAttendance extends Document {
@@ -78,6 +99,11 @@ export interface IAttendance extends Document {
   earlyLeaveBy: number; // minutes
   isRegularized: boolean;
   regularization?: IRegularization;
+  /** The approved leave request that produced this row, when `source` is `leave`. */
+  leaveRequestId?: Types.ObjectId;
+  /** Whether the leave behind this row is paid; undefined for non-leave rows. */
+  isPaidLeave?: boolean;
+  source: AttendanceSource;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -145,6 +171,8 @@ const regularizationSchema = new Schema<IRegularization>(
     approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     approvedAt: Date,
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    requestedCheckIn: Date,
+    requestedCheckOut: Date,
   },
   { _id: false },
 );
@@ -166,6 +194,9 @@ const attendanceSchema = new Schema<IAttendance>({
   earlyLeaveBy: { type: Number, default: 0 },
   isRegularized: { type: Boolean, default: false },
   regularization: regularizationSchema,
+  leaveRequestId: { type: Schema.Types.ObjectId, ref: 'LeaveRequest' },
+  isPaidLeave: { type: Boolean },
+  source: { type: String, enum: ATTENDANCE_SOURCES, default: 'punch' },
 });
 attendanceSchema.plugin(timestampPlugin);
 attendanceSchema.plugin(softDeletePlugin);
@@ -173,6 +204,7 @@ attendanceSchema.plugin(paginatePlugin);
 
 attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ date: 1, status: 1 });
+attendanceSchema.index({ leaveRequestId: 1 }, { sparse: true });
 
 export const Attendance = model<IAttendance, PaginateModel<IAttendance> & Model<IAttendance>>(
   'Attendance',

@@ -32,6 +32,8 @@ const salarySchema = z
     da: z.coerce.number().min(0).default(0),
     specialAllowance: z.coerce.number().min(0).default(0),
     otherAllowances: z.record(z.coerce.number()).default({}),
+    /** Monthly TDS to deduct. */
+    tdsMonthly: z.coerce.number().min(0).optional(),
   })
   .partial();
 
@@ -73,6 +75,14 @@ export const createEmployeeSchema = z.object({
   shift: z.string().optional(),
   /** Force this employee to share location when clocking in / out. */
   requireLocation: z.boolean().optional(),
+  /** Field staff — drives the expense-before-checkout rule. */
+  isFieldStaff: z.boolean().optional(),
+  /** Salary structure this employee's pay components come from. */
+  salaryStructureId: z
+    .string()
+    .regex(/^[0-9a-f]{24}$/i)
+    .optional()
+    .nullable(),
   reportingManager: z.string().optional(),
   joiningDate: z.coerce.date(),
   confirmationDate: z.coerce.date().optional(),
