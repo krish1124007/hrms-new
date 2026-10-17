@@ -71,3 +71,16 @@ export function applyShiftRules(
     att.status = 'half_day';
   }
 }
+
+/**
+ * Whether a shift runs past midnight — flagged as a night shift, or ending
+ * at an earlier clock time than it starts (`HH:mm` compares as a string).
+ * Such a shift's day ends on the next calendar day.
+ */
+export function isOvernightShift(
+  shift: Pick<IShift, 'isNightShift' | 'startTime' | 'endTime'> | null | undefined,
+): boolean {
+  if (!shift) return false;
+  if (shift.isNightShift === true) return true;
+  return Boolean(shift.startTime && shift.endTime && shift.endTime < shift.startTime);
+}

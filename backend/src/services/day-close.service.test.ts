@@ -12,8 +12,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { createApp } from '../app.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
-import { closeBusinessDay } from './day-close.service.js';
+import { closeBusinessDay, DayCloseError } from './day-close.service.js';
 import { invalidateWeekOffRule } from './week-off.service.js';
+import { logger } from '../config/logger.js';
 import { Attendance } from '../models/attendance.model.js';
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
@@ -281,8 +282,9 @@ describe('closeBusinessDay — auto-checkout', () => {
     expect(after!.source).toBe('auto_checkout');
     expect(after!.totalWorkingHours).toBeGreaterThan(0);
     expect(after!.totalWorkingHours).toBe(9.5);
-    // 9.5 h against the default 540-minute overtime threshold.
-    expect(after!.overtimeHours).toBe(0.5);
+    // 9.5 h is past the 540-minute threshold, but an assumed check-out time
+    // is not evidence of extra work.
+    expect(after!.overtimeHours).toBe(0);
     expect(after!.status).toBe('present');
   });
 
@@ -295,6 +297,9 @@ describe('closeBusinessDay — auto-checkout', () => {
     const after = await Attendance.findById(row._id).lean().exec();
     expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-12T18:29:00.000Z');
     expect(after!.source).toBe('auto_checkout');
+    // 09:30 → 23:59 is 14.48 h, yet auto-checkout never grants overtime.
+    expect(after!.totalWorkingHours).toBe(14.48);
+    expect(after!.overtimeHours).toBe(0);
   });
 
   it('applies the half-day rule and closes an open break at the auto-checkout time', async () => {
@@ -339,6 +344,44 @@ describe('closeBusinessDay — auto-checkout', () => {
     expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-12T18:29:00.000Z');
   });
 
+  it('leaves an overnight-shift check-in open; a day-shift row in the same run is still closed', async () => {
+    await AttendanceConfig.create({ settings: { autoCheckoutTime: '19:00' } });
+    const night = await Shift.create({
+      name: 'Night',
+      startTime: '22:00',
+      endTime: '06:00',
+      isNightShift: true,
+    });
+    const nightOwl = await makeEmployee({ shift: night._id });
+    const dayWorker = await makeEmployee();
+    const nightRow = await openRow(nightOwl, '2026-10-12', '22:00');
+    const dayRow = await openRow(dayWorker, '2026-10-12', '09:30');
+    const nightBefore = await Attendance.findById(nightRow._id).lean().exec();
+
+    const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
+
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 1 });
+    const nightAfter = await Attendance.findById(nightRow._id).lean().exec();
+    expect(nightAfter!.checkOut?.time).toBeFalsy();
+    expect(nightAfter!.status).toBe('present');
+    expect(nightAfter).toEqual(nightBefore);
+    expect((await Attendance.findById(dayRow._id).lean())!.checkOut!.time!.toISOString()).toBe(
+      '2026-10-12T13:30:00.000Z',
+    );
+  });
+
+  it('treats a shift ending before it starts as overnight even without isNightShift', async () => {
+    const late = await Shift.create({ name: 'Late', startTime: '18:00', endTime: '02:00' });
+    const emp = await makeEmployee({ shift: late._id });
+    const row = await openRow(emp, '2026-10-12', '18:00');
+
+    const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
+
+    expect(counts.autoCheckedOut).toBe(0);
+    expect(counts.skipped).toBe(1);
+    expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
+  });
+
   it('closes open rows of that day only, including employees no longer active', async () => {
     await AttendanceConfig.create({ settings: { autoCheckoutTime: '19:00' } });
     const gone = await makeEmployee({ status: 'resigned' });
@@ -350,6 +393,91 @@ describe('closeBusinessDay — auto-checkout', () => {
     expect(counts.autoCheckedOut).toBe(1);
     expect((await Attendance.findById(today._id).lean())!.checkOut?.time).toBeTruthy();
     expect((await Attendance.findById(other._id).lean())!.checkOut?.time).toBeFalsy();
+  });
+});
+
+describe('closeBusinessDay — one bad row does not stop the day', () => {
+  it('closes the valid open row, rejects naming the bad one, and succeeds once it is fixed', async () => {
+    await AttendanceConfig.create({ settings: { autoCheckoutTime: '19:00' } });
+    const good = await makeEmployee();
+    const bad = await makeEmployee();
+    const checkIn = { time: ist('2026-10-12', '09:30'), method: 'manual' };
+    const goodRow = await Attendance.create({ employeeId: good._id, date: label('2026-10-12'), checkIn, status: 'present' });
+    const badRow = await Attendance.create({ employeeId: bad._id, date: label('2026-10-12'), checkIn, status: 'present' });
+    // A value the schema rejects, written behind Mongoose's back: save() fails.
+    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { status: 'bogus' } });
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    const err = await closeBusinessDay(ist('2026-10-12', '23:59')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(logged).toHaveBeenCalledWith(
+      expect.objectContaining({ attendanceId: String(badRow._id), employeeId: String(bad._id) }),
+      expect.any(String),
+    );
+    logged.mockRestore();
+
+    expect(err).toBeInstanceOf(DayCloseError);
+    const dayErr = err as DayCloseError;
+    expect(dayErr).toBeInstanceOf(AggregateError);
+    expect(dayErr.failures).toHaveLength(1);
+    expect(dayErr.failures[0]).toMatchObject({ step: 'auto-checkout', attendanceId: String(badRow._id) });
+    expect(dayErr.errors).toHaveLength(1);
+    expect(dayErr.message).toContain('1 failure(s)');
+    expect(dayErr.message).toContain(String(badRow._id));
+    expect(dayErr.counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect((await Attendance.findById(goodRow._id).lean())!.checkOut!.time!.toISOString()).toBe(
+      '2026-10-12T13:30:00.000Z',
+    );
+    expect((await Attendance.collection.findOne({ _id: badRow._id }))!.checkOut).toBeUndefined();
+
+    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { status: 'present' } });
+    const retry = await closeBusinessDay(ist('2026-10-12', '23:59'));
+
+    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect((await Attendance.findById(badRow._id).lean())!.checkOut!.time!.toISOString()).toBe(
+      '2026-10-12T13:30:00.000Z',
+    );
+  });
+
+  it('a failing leave stamp does not stop the other employees', async () => {
+    const type = await LeaveType.create({ name: 'Casual Leave', code: 'CLX', daysAllowed: 12 });
+    const first = await makeEmployee();
+    const second = await makeEmployee();
+    const absentee = await makeEmployee();
+    for (const emp of [first, second]) {
+      await LeaveRequest.create({
+        employeeId: emp._id,
+        leaveTypeId: type._id,
+        startDate: new Date('2026-10-12'),
+        endDate: new Date('2026-10-12'),
+        days: 1,
+        reason: 'Errand',
+        status: 'approved',
+      });
+    }
+    const create = vi.spyOn(Attendance, 'create').mockRejectedValueOnce(new Error('disk on fire'));
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    try {
+      const err = (await closeBusinessDay(ist('2026-10-12', '23:59')).catch((e: unknown) => e)) as DayCloseError;
+
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(err).toBeInstanceOf(DayCloseError);
+      expect(err.failures).toHaveLength(1);
+      expect(err.failures[0]!.step).toBe('leave-stamp');
+      expect(err.counts).toMatchObject({ absentCreated: 1, leaveStamped: 1 });
+      expect(await Attendance.countDocuments({ source: 'leave' })).toBe(1);
+      expect(await Attendance.countDocuments({ employeeId: absentee._id, source: 'auto_absent' })).toBe(1);
+    } finally {
+      create.mockRestore();
+      logged.mockRestore();
+    }
+
+    const retry = await closeBusinessDay(ist('2026-10-12', '23:59'));
+    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 1, autoCheckedOut: 0, skipped: 0 });
+    expect(await Attendance.countDocuments({ source: 'leave' })).toBe(2);
   });
 });
 

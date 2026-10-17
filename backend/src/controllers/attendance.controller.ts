@@ -16,7 +16,7 @@ import { isWeekOff, toKey } from '../lib/week-off.js';
 import { startOfBusinessDay } from '../lib/business-day.js';
 import { applyShiftRules, computeHours, type WorkedHoursSource } from '../lib/attendance-hours.js';
 import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
-import { closeBusinessDay, type DayCloseCounts } from '../services/day-close.service.js';
+import { closeBusinessDay, DayCloseError, type DayCloseCounts } from '../services/day-close.service.js';
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
@@ -1033,44 +1033,60 @@ const sumCounts = (all: DayCloseCounts[]): DayCloseCounts =>
     { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
   );
 
+/**
+ * Close one day and audit it. A day where some rows failed is audited too,
+ * with the counts of what did succeed and the failed rows, before the error
+ * propagates — so a backfill that stops midway still leaves a trail.
+ */
+async function closeAndAudit(day: Date, range?: { from: string; to: string }): Promise<DayCloseCounts> {
+  const date = isoDay(day);
+  try {
+    const counts = await closeBusinessDay(day);
+    void audit({ action: 'update', entity: 'Attendance', metadata: { event: 'day-close', date, ...range, counts } });
+    return counts;
+  } catch (err) {
+    if (err instanceof DayCloseError) {
+      void audit({
+        action: 'update',
+        entity: 'Attendance',
+        metadata: { event: 'day-close', date, ...range, counts: err.counts, failures: err.failures },
+      });
+    }
+    throw err;
+  }
+}
+
 /** POST /api/v1/attendance/close-day — run the day-close for one past day. */
 export async function closeDay(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof closeDaySchema>;
   const day = startOfBusinessDay(body.date);
   assertPastDay(day);
 
-  const counts = await closeBusinessDay(day);
-  const date = isoDay(day);
-  void audit({ action: 'update', entity: 'Attendance', metadata: { event: 'day-close', date, counts } });
-  res.json({ success: true, data: { date, ...counts } });
+  const counts = await closeAndAudit(day);
+  res.json({ success: true, data: { date: isoDay(day), ...counts } });
 }
 
 /**
  * POST /api/v1/attendance/close-days — run the day-close for every day in
  * `[from, to]` (at most 62), oldest first, and report each day's counts.
+ * Each day is audited as it is closed; a failing day stops the run.
  */
 export async function closeDays(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof closeDaysSchema>;
   const fromDay = startOfBusinessDay(body.from);
   const toDay = startOfBusinessDay(body.to);
   assertPastDay(toDay);
+  const from = isoDay(fromDay);
+  const to = isoDay(toDay);
 
   const days: (DayCloseCounts & { date: string })[] = [];
   for (let t = fromDay.getTime(); t <= toDay.getTime(); t += DAY_MS) {
     // Sequential on purpose: one day's rows are settled before the next.
     // eslint-disable-next-line no-await-in-loop
-    const counts = await closeBusinessDay(new Date(t));
+    const counts = await closeAndAudit(new Date(t), { from, to });
     days.push({ date: isoDay(new Date(t)), ...counts });
   }
-  const totals = sumCounts(days);
-  const from = isoDay(fromDay);
-  const to = isoDay(toDay);
-  void audit({
-    action: 'update',
-    entity: 'Attendance',
-    metadata: { event: 'day-close', from, to, counts: totals },
-  });
-  res.json({ success: true, data: { from, to, days, totals } });
+  res.json({ success: true, data: { from, to, days, totals: sumCounts(days) } });
 }
 
 export const reportQuerySchema = z.object({

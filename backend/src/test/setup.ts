@@ -78,7 +78,8 @@ vi.mock('../jobs/backup.jobs.js', () => ({
 vi.mock('../jobs/attendance.jobs.js', () => ({
   attendanceQueue: {},
   startAttendanceWorker: vi.fn(),
-  ensureAttendanceSchedules: vi.fn(),
+  // Resolves like the real one, so `ensureAttendanceSchedules().catch(...)` is safe.
+  ensureAttendanceSchedules: vi.fn(async () => undefined),
 }));
 
 let mongod: MongoMemoryServer | undefined;

@@ -14,10 +14,18 @@
  *      touched.
  *   2. closes every check-in of that day that has no check-out, at the
  *      configured `autoCheckoutTime` (23:59 when unset), and recomputes the
- *      hours with the same rules a real check-out uses.
+ *      hours with the same rules a real check-out uses — except rows on an
+ *      overnight shift, whose day ends tomorrow. Auto-checkout never grants
+ *      overtime.
  *
  * Idempotent: a second run for the same day finds every row already there
  * and every check-in already closed, and returns all-zero counts.
+ *
+ * One bad row does not stop the day: each leave stamp and each auto-checkout
+ * is isolated, logged, and the rest carry on. If any failed, the run then
+ * rejects with a `DayCloseError` (an `AggregateError` carrying the counts of
+ * what did succeed), so the job is marked failed and its retry — safe,
+ * because the run is idempotent — redoes only what is still missing.
  *
  * Run nightly at 23:59 business time by `jobs/attendance.jobs.ts`, and for
  * past days by `POST /attendance/close-day` and `/close-days`.
@@ -32,7 +40,8 @@ import type { IShift } from '../models/shift.model.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
 import { atBusinessTime, endOfBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
-import { applyShiftRules, computeHours } from '../lib/attendance-hours.js';
+import { applyShiftRules, computeHours, isOvernightShift } from '../lib/attendance-hours.js';
+import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
 
 export interface DayCloseCounts {
@@ -45,9 +54,41 @@ export interface DayCloseCounts {
   /**
    * Nothing written although the employee/row was in scope: a non-working
    * day for them, a soft-deleted row already holding the day, a check-in
-   * that raced the job, or an auto-checkout time that has not arrived yet.
+   * that raced the job, an auto-checkout time that has not arrived yet, or
+   * an open row on an overnight shift.
    */
   skipped: number;
+}
+
+/** One leave stamp or auto-checkout that threw. */
+export interface DayCloseFailure {
+  step: 'leave-stamp' | 'auto-checkout';
+  employeeId: string;
+  /** Set for an auto-checkout failure: the open row that could not be closed. */
+  attendanceId?: string;
+  message: string;
+}
+
+/**
+ * Some rows of the day could not be written. `counts` is what did succeed;
+ * `failures` names each row that did not (the causes are in `errors`).
+ */
+export class DayCloseError extends AggregateError {
+  constructor(
+    readonly day: string,
+    readonly counts: DayCloseCounts,
+    readonly failures: DayCloseFailure[],
+    causes: unknown[],
+  ) {
+    const which = failures
+      .map((f) => `${f.step} ${f.attendanceId ? `attendance ${f.attendanceId}` : `employee ${f.employeeId}`}`)
+      .join(', ');
+    const done = Object.entries(counts)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ');
+    super(causes, `day-close ${day}: ${failures.length} failure(s) — ${which}; succeeded: ${done}`);
+    this.name = 'DayCloseError';
+  }
 }
 
 /** Check-out time used when `settings.autoCheckoutTime` is unset or invalid. */
@@ -158,6 +199,8 @@ export async function closeBusinessDay(
   const dayEnd = endOfBusinessDay(day);
   const localDay = localDateOf(day);
   const counts: DayCloseCounts = { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 };
+  const failures: DayCloseFailure[] = [];
+  const causes: unknown[] = [];
 
   const [cfg, weekOffRule, holidays] = await Promise.all([
     AttendanceConfig.findOne({}).exec(),
@@ -236,11 +279,17 @@ export async function closeBusinessDay(
     const leave = leaveByEmployee.get(key);
     if (leave) {
       const type = leaveTypes.get(String(leave.leaveTypeId)) ?? null;
-      // eslint-disable-next-line no-await-in-loop
-      if (await stampApprovedLeaveDay(emp._id as Types.ObjectId, day, leave, type, dryRun)) {
-        counts.leaveStamped += 1;
-      } else {
-        counts.skipped += 1;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        if (await stampApprovedLeaveDay(emp._id as Types.ObjectId, day, leave, type, dryRun)) {
+          counts.leaveStamped += 1;
+        } else {
+          counts.skipped += 1;
+        }
+      } catch (err) {
+        logger.error({ employeeId: key, leaveRequestId: String(leave._id), err }, 'day-close: leave stamp failed');
+        failures.push({ step: 'leave-stamp', employeeId: key, message: (err as Error).message });
+        causes.push(err);
       }
       continue;
     }
@@ -252,37 +301,62 @@ export async function closeBusinessDay(
   counts.skipped += absentRows.length - inserted;
 
   // ── 2. Close check-ins left open ───────────────────────────────────────
+  // Hook: the overnight-shift sweep belongs here — closing the *previous*
+  // day's still-open overnight rows at shift end + grace, which this run
+  // deliberately leaves open (below).
   const openRows = await Attendance.find({
     date: { $gte: day, $lte: dayEnd },
     'checkIn.time': { $ne: null },
     'checkOut.time': null,
   }).exec();
-  if (openRows.length === 0) return counts;
 
-  const autoCheckoutTime = HHMM.test(cfg?.settings.autoCheckoutTime ?? '')
-    ? cfg!.settings.autoCheckoutTime!
-    : DEFAULT_AUTO_CHECKOUT_TIME;
-  const owners = await Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
-    .setOptions({ withDeleted: true })
-    .select('_id shift')
-    .populate('shift')
-    .exec();
-  const ownerShift = new Map(owners.map((e) => [String(e._id), shiftOf(e)]));
+  if (openRows.length > 0) {
+    const autoCheckoutTime = HHMM.test(cfg?.settings.autoCheckoutTime ?? '')
+      ? cfg!.settings.autoCheckoutTime!
+      : DEFAULT_AUTO_CHECKOUT_TIME;
+    const owners = await Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
+      .setOptions({ withDeleted: true })
+      .select('_id shift')
+      .populate('shift')
+      .exec();
+    const ownerShift = new Map(owners.map((e) => [String(e._id), shiftOf(e)]));
 
-  for (const row of openRows) {
-    const out = autoCheckoutInstant(day, row.checkIn!.time!, autoCheckoutTime);
-    if (out.getTime() > now.getTime()) {
-      // The day is still running (a run before 23:59); leave it open.
-      counts.skipped += 1;
-      continue;
+    for (const row of openRows) {
+      const shift = ownerShift.get(String(row.employeeId)) ?? null;
+      if (isOvernightShift(shift)) {
+        // The shift ends tomorrow: closing a 22:00 check-in at 23:59 would
+        // record under 2 h and a half day. Left open for the overnight sweep.
+        counts.skipped += 1;
+        continue;
+      }
+      const out = autoCheckoutInstant(day, row.checkIn!.time!, autoCheckoutTime);
+      if (out.getTime() > now.getTime()) {
+        // The day is still running (a run before 23:59); leave it open.
+        counts.skipped += 1;
+        continue;
+      }
+      if (dryRun) {
+        counts.autoCheckedOut += 1;
+        continue;
+      }
+      try {
+        closeOpenRow(row, out, shift, cfg);
+        // eslint-disable-next-line no-await-in-loop
+        await row.save();
+        counts.autoCheckedOut += 1;
+      } catch (err) {
+        const employeeId = String(row.employeeId);
+        const attendanceId = String(row._id);
+        logger.error({ employeeId, attendanceId, err }, 'day-close: auto-checkout failed');
+        failures.push({ step: 'auto-checkout', employeeId, attendanceId, message: (err as Error).message });
+        causes.push(err);
+      }
     }
-    counts.autoCheckedOut += 1;
-    if (dryRun) continue;
-    closeOpenRow(row, out, ownerShift.get(String(row.employeeId)) ?? null, cfg);
-    // eslint-disable-next-line no-await-in-loop
-    await row.save();
   }
 
+  if (failures.length > 0) {
+    throw new DayCloseError(day.toISOString().slice(0, 10), counts, failures, causes);
+  }
   return counts;
 }
 
@@ -305,4 +379,6 @@ function closeOpenRow(
   row.source = 'auto_checkout';
   row.totalWorkingHours = computeHours(row, out);
   applyShiftRules(row, shift, cfg);
+  // An assumed check-out time is not evidence of extra work: no overtime.
+  row.overtimeHours = 0;
 }
