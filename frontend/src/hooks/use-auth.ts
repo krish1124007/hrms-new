@@ -41,20 +41,24 @@ export function useLogin() {
   });
 }
 
-export function useRegister() {
+/**
+ * Activate an invited account. On success the response is a full session
+ * (same shape as login), stored exactly as `useLogin` stores it. Errors are
+ * rendered inline by the page (an invalid or used link needs a way back to
+ * sign-in, not a toast), so the global toast is silenced.
+ */
+export function useAcceptInvite() {
   const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
 
   return useMutation({
-    mutationFn: authApi.register,
+    mutationFn: authApi.acceptInvite,
+    meta: { silent: true },
     onSuccess: (session) => {
       tokenStorage.set(session.accessToken, session.refreshToken);
       setSession({ user: session.user });
-      toast.success('Account created.');
+      toast.success(`Welcome, ${session.user.firstName ?? session.user.email}`);
       navigate('/dashboard');
-    },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Registration failed');
     },
   });
 }

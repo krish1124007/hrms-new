@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactElement } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { Edit, FileText, KeyRound, Mail, MapPin, Phone, Trash2, Upload, UserMinus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';

@@ -29,13 +29,12 @@ export const authApi = {
     return data.data;
   },
 
-  register: async (input: {
-    firstName: string;
-    lastName: string;
-    email: string;
-    password: string;
-  }): Promise<AuthSession> => {
-    const { data } = await api.post<ApiOk<AuthSession>>('/auth/register', input);
+  /**
+   * Activate an invited account: sets its first password and signs it in.
+   * The response has the same shape as `login`.
+   */
+  acceptInvite: async (input: { token: string; password: string }): Promise<AuthSession> => {
+    const { data } = await api.post<ApiOk<AuthSession>>('/auth/accept-invite', input);
     return data.data;
   },
 

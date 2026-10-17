@@ -1,5 +1,7 @@
 import type { ReactNode, ReactElement } from 'react';
+import { AlertTriangle, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Button } from './button';
 import { Skeleton } from './skeleton';
 import { EmptyState } from './empty-state';
 
@@ -19,6 +21,13 @@ interface DataTableProps<T> {
   emptyDescription?: string;
   rowKey?: (row: T) => string;
   onRowClick?: (row: T) => void;
+  /**
+   * The query's error, if it failed. A failed load renders an error with a
+   * retry button instead of the empty state ("nothing here" would be a lie).
+   */
+  error?: unknown;
+  /** Called by the retry button — usually the query's `refetch`. */
+  onRetry?: () => void;
 }
 
 export function DataTable<T>({
@@ -29,6 +38,8 @@ export function DataTable<T>({
   emptyDescription,
   rowKey,
   onRowClick,
+  error,
+  onRetry,
 }: DataTableProps<T>): ReactElement {
   if (loading) {
     return (
@@ -41,6 +52,25 @@ export function DataTable<T>({
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-8">
+        <EmptyState
+          icon={AlertTriangle}
+          title="Couldn't load this list"
+          description="Something went wrong while fetching the data. Check your connection and try again."
+          action={
+            onRetry ? (
+              <Button variant="outline" size="sm" onClick={onRetry}>
+                <RotateCw className="size-4" /> Retry
+              </Button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

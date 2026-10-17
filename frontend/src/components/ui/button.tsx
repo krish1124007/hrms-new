@@ -1,4 +1,12 @@
-import { forwardRef, type ButtonHTMLAttributes } from 'react';
+import {
+  Children,
+  cloneElement,
+  forwardRef,
+  isValidElement,
+  type ButtonHTMLAttributes,
+  type ReactElement,
+  type Ref,
+} from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
@@ -35,10 +43,25 @@ export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   loading?: boolean;
+  /**
+   * Render the single child element (e.g. a router `<Link>` or an `<a>`)
+   * with the button's styling instead of a `<button>` — avoids nesting an
+   * interactive element inside another one.
+   */
+  asChild?: boolean;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, loading, disabled, children, ...props }, ref) => {
+  ({ className, variant, size, loading, disabled, asChild, children, ...props }, ref) => {
+    if (asChild && isValidElement(children) && Children.count(children) === 1) {
+      const child = children as ReactElement<{ className?: string; ref?: Ref<unknown> }>;
+      return cloneElement(child, {
+        ...props,
+        ref,
+        className: cn(buttonVariants({ variant, size }), className, child.props.className),
+      });
+    }
+
     return (
       <button
         ref={ref}

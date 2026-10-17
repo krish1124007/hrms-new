@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowDownRight, ArrowUpRight, type LucideIcon } from 'lucide-react';
 import { Card } from './card';
@@ -6,7 +6,8 @@ import { cn } from '@/lib/utils';
 
 interface StatCardProps {
   label: string;
-  value: number | string;
+  /** A number animates up from zero; anything else (text, a skeleton) renders as-is. */
+  value: ReactNode;
   icon?: LucideIcon;
   trend?: { value: number; direction: 'up' | 'down' };
   format?: (n: number) => string;
@@ -57,13 +58,15 @@ export function StatCard({
         <div className="flex items-start justify-between">
           <div>
             <p className="text-sm font-medium text-muted-foreground">{label}</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight">
-              {numericValue !== null ? (
-                <CountUp to={numericValue} format={format} />
-              ) : (
-                value
-              )}
-            </p>
+            {numericValue !== null || typeof value === 'string' ? (
+              <p className="mt-2 text-3xl font-bold tracking-tight">
+                {numericValue !== null ? <CountUp to={numericValue} format={format} /> : value}
+              </p>
+            ) : (
+              // Arbitrary nodes (e.g. a loading skeleton <div>) may not be
+              // valid inside a <p>, so they get a block wrapper.
+              <div className="mt-2 text-3xl font-bold tracking-tight">{value}</div>
+            )}
             {trend && (
               <p
                 className={cn(

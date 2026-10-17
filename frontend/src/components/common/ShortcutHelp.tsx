@@ -11,7 +11,7 @@ import { useShortcut, listShortcuts, displayCombo } from '@/hooks/use-shortcut';
  * populates — so it stays in sync with what's actually bound, without
  * anyone having to maintain a separate docs page.
  *
- * Group names (e.g. "Navigation", "CRM") let us organise the list; pass
+ * Group names (e.g. "Navigation", "Help") let us organise the list; pass
  * `{ group: 'Navigation' }` when registering each shortcut.
  */
 export function ShortcutHelp(): ReactElement {

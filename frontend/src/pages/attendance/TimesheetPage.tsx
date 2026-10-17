@@ -20,7 +20,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useMonthlyAttendance, useMyShift } from '@/hooks/use-attendance';
-import { useAuthStore } from '@/stores/auth.store';
 import type { AttendanceStatus } from '@/lib/attendance.api';
 
 // ─── Status colour config ────────────────────────────────────────────
@@ -161,7 +160,6 @@ export default function EmployeeTimesheetPage(): ReactElement {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
 
-  const user = useAuthStore((s) => s.user);
   const { data, isLoading } = useMonthlyAttendance(year, month);
   const records = data?.data ?? [];
 

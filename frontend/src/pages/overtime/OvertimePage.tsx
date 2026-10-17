@@ -66,9 +66,11 @@ const rejectSchema = z.object({
 });
 
 export default function OvertimePage(): ReactElement {
-  const { hasAny } = usePermissions();
-  const canApprove = hasAny(['overtime.approve', 'attendance.manage']);
-  const canViewAll = hasAny(['overtime.view', 'attendance.view']) || canApprove;
+  const { has } = usePermissions();
+  // Same names the API checks: listing everyone's requests is `overtime.view`,
+  // approving is `overtime.approve` (done from that list, so it needs both).
+  const canViewAll = has('overtime.view');
+  const canApprove = canViewAll && has('overtime.approve');
   // Approvers land on the All-Requests tab; submitters land on My Requests.
   const defaultTab = canApprove ? 'all' : 'mine';
 

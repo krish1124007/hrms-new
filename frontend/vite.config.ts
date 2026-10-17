@@ -50,8 +50,10 @@ export default defineConfig((): UserConfig => {
       // Warn when any chunk > 600kb gzipped — pushes us to investigate
       // before the bundle gets out of hand.
       chunkSizeWarningLimit: 600,
-      // Emit sourcemaps so Sentry stack traces remain interpretable.
-      sourcemap: true,
+      // Emit sourcemaps for Sentry uploads, but 'hidden': the built JS carries
+      // no `//# sourceMappingURL` comment, so browsers never fetch the source.
+      // Don't serve the .map files — upload them to Sentry, then drop them.
+      sourcemap: 'hidden',
       rollupOptions: {
         /* 
           output: {

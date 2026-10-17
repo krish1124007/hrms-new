@@ -101,7 +101,7 @@ export function CookieConsentBanner(): ReactElement | null {
               cookies for analytics (to fix bugs and improve the product), marketing (to measure
               campaign effectiveness), and preferences (to remember your theme across devices).
               Read our{' '}
-              <a href="/privacy" className="underline hover:text-foreground">privacy policy</a>
+              <a href="/privacy-policy.html" target="_blank" rel="noopener" className="underline hover:text-foreground">privacy policy</a>
               {' '}for details.
             </p>
 

@@ -15,7 +15,7 @@ import {
   DialogBody,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { rolesApi, type Role } from '@/lib/phase1.api';
+import { rolesApi, type Role } from '@/lib/roles.api';
 
 /**
  * Role + permission management.
@@ -41,6 +41,8 @@ export default function RolesPage(): ReactElement {
     queryFn: rolesApi.list,
   });
 
+  // A 409 ROLE_IN_USE or 403 (missing permissions) is toasted with the server's
+  // message by the global MutationCache handler in main.tsx.
   const remove = useMutation({
     mutationFn: (id: string) => rolesApi.delete(id),
     onSuccess: () => {
@@ -219,9 +221,8 @@ function RoleEditor({
       toast.success(mode.kind === 'edit' ? 'Role updated' : 'Role created');
       onSaved();
     },
-    onError: (e: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(e.response?.data?.error?.message ?? 'Failed to save role');
-    },
+    // No onError: the global MutationCache handler (main.tsx) already toasts the
+    // server's `error.message` — e.g. a 403 naming permissions you cannot grant.
   });
 
   const toggle = (p: string): void => {

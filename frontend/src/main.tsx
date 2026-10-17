@@ -25,8 +25,6 @@ if (consent?.analytics) initSentry();
 // Refresh the app when consent changes so Sentry init + analytics
 // subscribe to the new state without a full mental-model split.
 window.addEventListener('cookie-consent-changed', () => {
-  // eslint-disable-next-line no-console
-  console.info('[consent] updated — reloading to apply');
   window.location.reload();
 });
 

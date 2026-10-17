@@ -7,7 +7,6 @@ import {
   FileText,
   Plus,
   Receipt,
-  TrendingUp,
   UserCheck,
   Users,
   Cake,

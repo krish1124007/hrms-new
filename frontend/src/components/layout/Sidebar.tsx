@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
-import { NAV_GROUPS, type NavItem } from '@/config/navigation';
+import { NAV_GROUPS, isNavItemEnabled, type NavItem } from '@/config/navigation';
 import { cn } from '@/lib/utils';
 import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/hooks/use-auth';
@@ -90,21 +90,8 @@ export function Sidebar({
     localStorage.setItem(EXPANDED_KEY, JSON.stringify(expanded));
   }, [expanded]);
 
-  const isItemEnabled = (item: NavItem): boolean => {
-    if (item.hidden) return false;
-    if (item.module && enabledModules && !enabledModules.includes(item.module)) {
-      return false;
-    }
-    // Hide self-service items (My-*) from admin / HR roles — they're not
-    // employees in the workforce sense and would just see empty data.
-    if (item.excludeRoles && user?.role?.slug && item.excludeRoles.includes(user.role.slug)) {
-      return false;
-    }
-    if (item.permissions && item.permissions.length > 0) {
-      return hasAny(item.permissions);
-    }
-    return true;
-  };
+  const isItemEnabled = (item: NavItem): boolean =>
+    isNavItemEnabled(item, { roleSlug: user?.role?.slug, hasAny, enabledModules });
 
   /** A parent is "effectively active" when its actively-matched leaf is one of its children. */
   const isChildActive = (children: NavItem[] | undefined): boolean => {

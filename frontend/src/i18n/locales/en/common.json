@@ -30,7 +30,6 @@
   "auth": {
     "signIn": "Sign in",
     "signOut": "Sign out",
-    "signUp": "Create workspace",
     "email": "Email",
     "password": "Password",
     "forgotPassword": "Forgot password?",

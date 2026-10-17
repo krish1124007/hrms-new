@@ -121,15 +121,10 @@ export function CheckInWidget(): ReactElement {
       } else {
         await checkOut.mutateAsync(payload);
       }
-    } catch (e: any) {
-      alert('DEBUG ERROR CAUGHT: ' + JSON.stringify({
-        isAxios: !!e.isAxiosError,
-        status: e.response?.status,
-        code: e.response?.data?.error?.code,
-        msg: e.message
-      }));
+    } catch (e: unknown) {
+      // Other errors are already toasted by the check-in/out mutations;
+      // LOCATION_REQUIRED is skipped there and gets the permission dialog.
       if (isLocationRequiredError(e)) {
-        alert('DEBUG: Intercepted LOCATION_REQUIRED backend error! Showing popup now.');
         setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind });
       }
     }

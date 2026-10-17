@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Bell,
   CalendarCheck,
@@ -205,15 +204,6 @@ export function NotificationDropdown(): ReactElement {
             )}
           </ul>
 
-          <div className="border-t border-border p-2">
-            <Link
-              to="/notifications"
-              onClick={() => setOpen(false)}
-              className="block w-full rounded-md py-2 text-center text-xs font-medium text-primary hover:bg-accent"
-            >
-              View all notifications
-            </Link>
-          </div>
         </div>
       )}
     </div>

@@ -31,8 +31,6 @@ export function OfflineIndicator(): ReactElement | null {
       setShowFlash(true);
       // Refresh every cached query — data may have changed while away
       void qc.invalidateQueries();
-      const t = setTimeout(() => setShowFlash(false), 1200);
-      return () => clearTimeout(t);
     };
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
@@ -41,6 +39,13 @@ export function OfflineIndicator(): ReactElement | null {
       window.removeEventListener('online', handleOnline);
     };
   }, [qc]);
+
+  // Hide the "back online" flash after 1.2s (cancelled if we drop offline again).
+  useEffect(() => {
+    if (!showFlash) return undefined;
+    const t = setTimeout(() => setShowFlash(false), 1200);
+    return () => clearTimeout(t);
+  }, [showFlash]);
 
   if (!offline && !showFlash) return null;
 

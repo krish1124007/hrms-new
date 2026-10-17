@@ -13,7 +13,6 @@ import {
   Clock3,
   FileBarChart,
   FileText,
-  FolderKanban,
   FolderOpen,
   HandCoins,
   HardDrive,
@@ -68,36 +67,34 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-// ─── Permission shortcuts ─────────────────────────────────────────
-const P = {
-  self: [] as string[],
-  employeesView: ['employees.view'],
-  employeesManage: ['employees.create', 'employees.update', 'employees.delete'],
+// ─── Permission lists ─────────────────────────────────────────────
+// Every name here is in the backend permission catalogue. The router's
+// <RequirePermission> guards import these same lists, so a page's sidebar
+// entry and its route guard can never disagree.
+export const NAV_ACCESS = {
+  employees: ['employees.view'],
+  departments: ['departments.view'],
+  designations: ['designations.view'],
+  shifts: ['shifts.view'],
+  holidays: ['holidays.view'],
   attendanceView: ['attendance.view'],
   attendanceConfig: ['attendance.config'],
-  leavesView: ['leaves.view'],
-  leavesApprove: ['leaves.approve'],
-  leavesConfig: ['leaves.config', 'leaves.update'],
-  payrollView: ['payroll.view'],
-  payrollProcess: ['payroll.process', 'payroll.config'],
-  expensesView: ['expense-claims.view', 'expenses.view'],
-  expensesManage: ['expense-claims.approve', 'expenses.approve', 'expense-claims.update'],
-  projects: ['projects.view'],
-  field: ['field-sales.view'],
-  documents: ['documents.view'],
-  settings: ['settings.view', 'settings.manage'],
-  roles: ['roles.view', 'roles.manage'],
-  audit: ['audit.view', 'settings.manage'],
-  backups: ['backups.view', 'settings.manage'],
-  assetsView: ['assets.view'],
-  assetsManage: ['assets.manage'],
-  loansView: ['loans.view'],
-  loansManage: ['loans.manage'],
-  disciplinaryView: ['disciplinary.view'],
-  disciplinaryManage: ['disciplinary.manage'],
-  policiesView: ['policies.view'],
-  policiesManage: ['policies.manage'],
-};
+  leaveRequests: ['leaves.approve'],
+  leaveBalances: ['leaves.update'],
+  leaveTypes: ['leaves.update'],
+  payrollAdmin: ['payroll.process', 'payroll.config'],
+  expensesManage: ['expenses.approve'],
+  assets: ['assets.view'],
+  loans: ['loans.view'],
+  policies: ['policies.view'],
+  roles: ['roles.view'],
+  audit: ['audit.view'],
+  backups: ['backups.view'],
+  /** The Settings home page and the sidebar group around it. */
+  settings: ['roles.view', 'audit.view', 'backups.view', 'settings.manage'],
+} satisfies Record<string, string[]>;
+
+const P = NAV_ACCESS;
 
 // ─── Groups ───────────────────────────────────────────────────────
 // Each group renders as a sidebar section. Parent items with `children`
@@ -122,12 +119,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Employees',
         icon: Users,
         module: 'hr',
-        permissions: P.employeesView,
+        permissions: [...P.employees, ...P.departments, ...P.designations],
         excludeRoles: ['employee'],
         children: [
-          { label: 'All Employees', to: '/employees', icon: Users, module: 'hr', permissions: P.employeesView, excludeRoles: ['employee'] },
-          { label: 'Departments', to: '/departments', icon: Building2, module: 'hr', permissions: P.employeesManage },
-          { label: 'Designations', to: '/designations', icon: Briefcase, module: 'hr', permissions: P.employeesManage },
+          { label: 'All Employees', to: '/employees', icon: Users, module: 'hr', permissions: P.employees, excludeRoles: ['employee'] },
+          { label: 'Departments', to: '/departments', icon: Building2, module: 'hr', permissions: P.departments },
+          { label: 'Designations', to: '/designations', icon: Briefcase, module: 'hr', permissions: P.designations },
         ],
       },
       {
@@ -138,6 +135,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { label: 'Dashboard', to: '/attendance', icon: LayoutDashboard, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
           { label: 'Live Tracking', to: '/attendance/live-tracking', icon: Radar, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
           { label: 'My Attendance', to: '/attendance/my', icon: CalendarDays, module: 'attendance', excludeRoles: ['admin'] },
+          // Self-service for everyone; the page adds the team view for `overtime.view`.
           { label: 'Overtime', to: '/overtime', icon: Clock3, module: 'attendance' },
           { label: 'Records', to: '/attendance/records', icon: ClipboardList, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
           { label: 'Sites', to: '/attendance/sites', icon: MapPin, module: 'attendance', permissions: P.attendanceConfig },
@@ -154,10 +152,10 @@ export const NAV_GROUPS: NavGroup[] = [
         module: 'leave',
         children: [
           { label: 'My Leaves', to: '/leaves', icon: CalendarOff, module: 'leave', excludeRoles: ['admin'] },
-          { label: 'Requests', to: '/leaves/requests', icon: ClipboardList, module: 'leave', permissions: P.leavesApprove },
+          { label: 'Requests', to: '/leaves/requests', icon: ClipboardList, module: 'leave', permissions: P.leaveRequests },
           { label: 'Calendar', to: '/leaves/calendar', icon: CalendarDays, module: 'leave' },
-          { label: 'Balances', to: '/leaves/balances', icon: BookOpen, module: 'leave', permissions: P.leavesView, excludeRoles: ['employee'] },
-          { label: 'Leave Types', to: '/leaves/types', icon: Settings, module: 'leave', permissions: P.leavesConfig },
+          { label: 'Balances', to: '/leaves/balances', icon: BookOpen, module: 'leave', permissions: P.leaveBalances },
+          { label: 'Leave Types', to: '/leaves/types', icon: Settings, module: 'leave', permissions: P.leaveTypes },
         ],
       },
       {
@@ -165,10 +163,10 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Wallet,
         module: 'payroll',
         children: [
-          { label: 'Dashboard', to: '/payroll', icon: LayoutDashboard, module: 'payroll', permissions: P.payrollProcess },
+          { label: 'Dashboard', to: '/payroll', icon: LayoutDashboard, module: 'payroll', permissions: P.payrollAdmin },
           { label: 'My Payslips', to: '/payroll/my-payslips', icon: FileText, module: 'payroll', excludeRoles: ['admin'] },
-          { label: 'Salary Components', to: '/payroll/components', icon: Banknote, module: 'payroll', permissions: P.payrollProcess },
-          { label: 'Salary Structures', to: '/payroll/structures', icon: Layers, module: 'payroll', permissions: P.payrollProcess },
+          { label: 'Salary Components', to: '/payroll/components', icon: Banknote, module: 'payroll', permissions: P.payrollAdmin },
+          { label: 'Salary Structures', to: '/payroll/structures', icon: Layers, module: 'payroll', permissions: P.payrollAdmin },
         ],
       },
       {
@@ -182,16 +180,16 @@ export const NAV_GROUPS: NavGroup[] = [
           { label: 'Reports', to: '/expense-claims/reports', icon: FileBarChart, module: 'expenses', permissions: P.expensesManage },
         ],
       },
-      { label: 'Shifts', to: '/shifts', icon: Clock3, module: 'hr', permissions: P.employeesManage },
-      { label: 'Holidays', to: '/holidays', icon: PartyPopper, module: 'hr' },
+      { label: 'Shifts', to: '/shifts', icon: Clock3, module: 'hr', permissions: P.shifts },
+      { label: 'Holidays', to: '/holidays', icon: PartyPopper, module: 'hr', permissions: P.holidays },
 
-      { label: 'Assets', to: '/assets', icon: Package, module: 'assets', permissions: P.assetsView },
-      { label: 'Loans', to: '/loans', icon: HandCoins, module: 'loans', permissions: P.loansView },
+      { label: 'Assets', to: '/assets', icon: Package, module: 'assets', permissions: P.assets },
+      { label: 'Loans', to: '/loans', icon: HandCoins, module: 'loans', permissions: P.loans },
       // No permissions gate — the page is role-aware: managers see all cases,
       // employees see only their own via /disciplinary/me. The "New Case" button
       // and other manage actions are hidden client-side for non-managers.
       { label: 'Disciplinary', to: '/disciplinary', icon: ShieldAlert, module: 'disciplinary' },
-      { label: 'HR Policies', to: '/hr-policies', icon: BookText, module: 'hr', permissions: P.policiesView },
+      { label: 'HR Policies', to: '/hr-policies', icon: BookText, module: 'hr', permissions: P.policies },
     ],
   },
 
@@ -202,6 +200,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Tools',
     items: [
+      // Open to every signed-in user — the documents API is auth-only.
       { label: 'Documents', to: '/documents', icon: FolderOpen, module: 'documents' },
       { label: 'Calendar', to: '/calendar', icon: CalendarDays },
       { label: 'Notice Board', to: '/notice-board', icon: Megaphone },
@@ -227,7 +226,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         label: 'Access & Security',
         icon: Shield,
-        permissions: P.roles,
+        permissions: P.settings,
         children: [
           { label: 'Roles & Permissions', to: '/settings/roles', icon: Shield, permissions: P.roles },
           { label: 'Audit Logs', to: '/settings/audit', icon: ScrollText, permissions: P.audit },
@@ -238,3 +237,54 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
 ];
+
+// ─── Visibility ───────────────────────────────────────────────────
+
+export interface NavAccessContext {
+  /** The signed-in user's role slug (for `excludeRoles`). */
+  roleSlug?: string;
+  /** Permission check — `usePermissions().hasAny`. */
+  hasAny: (permissions: string[]) => boolean;
+  /** When set, items whose `module` is not listed are hidden. */
+  enabledModules?: string[];
+}
+
+/** Should this item (leaf or parent) be shown to the current user? */
+export function isNavItemEnabled(item: NavItem, ctx: NavAccessContext): boolean {
+  if (item.hidden) return false;
+  if (item.module && ctx.enabledModules && !ctx.enabledModules.includes(item.module)) {
+    return false;
+  }
+  // Hide self-service items (My-*) from admin / HR roles — they're not
+  // employees in the workforce sense and would just see empty data.
+  if (item.excludeRoles && ctx.roleSlug && item.excludeRoles.includes(ctx.roleSlug)) {
+    return false;
+  }
+  if (item.permissions && item.permissions.length > 0) {
+    return ctx.hasAny(item.permissions);
+  }
+  return true;
+}
+
+/**
+ * Every navigable leaf the user can see, in sidebar order. A child is only
+ * included when its parent is visible too, and entries without `to` are
+ * skipped, so callers never navigate to `undefined`.
+ */
+export function visibleNavLeaves(
+  ctx: NavAccessContext,
+): Array<{ item: NavItem & { to: string }; parentLabel?: string }> {
+  const out: Array<{ item: NavItem & { to: string }; parentLabel?: string }> = [];
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      if (!isNavItemEnabled(item, ctx)) continue;
+      if (item.to) out.push({ item: item as NavItem & { to: string } });
+      for (const child of item.children ?? []) {
+        if (child.to && isNavItemEnabled(child, ctx)) {
+          out.push({ item: child as NavItem & { to: string }, parentLabel: item.label });
+        }
+      }
+    }
+  }
+  return out;
+}

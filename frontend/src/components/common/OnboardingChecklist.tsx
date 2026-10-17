@@ -70,7 +70,7 @@ export function OnboardingChecklist(): ReactElement | null {
         label: 'Invite your team',
         description: 'Add at least one teammate so you\'re not working alone.',
         done: status.userCount > 1,
-        cta: { label: 'Invite', to: '/users' },
+        cta: { label: 'Invite', to: '/employees/new' },
       },
       {
         id: 'department',
@@ -101,13 +101,12 @@ export function OnboardingChecklist(): ReactElement | null {
   const allDone = totalCount > 0 && completedCount === totalCount;
 
   useEffect(() => {
-    if (allDone) {
-      const t = setTimeout(() => {
-        localStorage.setItem(DISMISS_KEY, '1');
-        setDismissed(true);
-      }, 30_000);
-      return () => clearTimeout(t);
-    }
+    if (!allDone) return undefined;
+    const t = setTimeout(() => {
+      localStorage.setItem(DISMISS_KEY, '1');
+      setDismissed(true);
+    }, 30_000);
+    return () => clearTimeout(t);
   }, [allDone]);
 
   if (dismissed || !isAdmin || isLoading || !status) return null;
@@ -179,11 +178,9 @@ export function OnboardingChecklist(): ReactElement | null {
                   )}
                 </div>
                 {!t.done && (
-                  <Link to={t.cta.to}>
-                    <Button size="sm" variant="outline">
-                      {t.cta.label}
-                    </Button>
-                  </Link>
+                  <Button size="sm" variant="outline" asChild>
+                    <Link to={t.cta.to}>{t.cta.label}</Link>
+                  </Button>
                 )}
               </li>
             ))}

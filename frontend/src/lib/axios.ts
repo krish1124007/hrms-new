@@ -33,11 +33,24 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 let isRefreshing = false;
-let pendingRequests: Array<(token: string) => void> = [];
 
-const processQueue = (token: string): void => {
-  pendingRequests.forEach((cb) => cb(token));
+/** Requests that hit a 401 while a refresh was already in flight. */
+interface PendingRequest {
+  resolve: (token: string) => void;
+  reject: (error: unknown) => void;
+}
+let pendingRequests: PendingRequest[] = [];
+
+const resolveQueue = (token: string): void => {
+  const queued = pendingRequests;
   pendingRequests = [];
+  queued.forEach(({ resolve }) => resolve(token));
+};
+
+const rejectQueue = (error: unknown): void => {
+  const queued = pendingRequests;
+  pendingRequests = [];
+  queued.forEach(({ reject }) => reject(error));
 };
 
 const MAX_NETWORK_RETRIES = 2;
@@ -57,7 +70,7 @@ function shouldRetryNetworkError(err: AxiosError): boolean {
  */
 const AUTH_ENDPOINTS = [
   '/auth/login',
-  '/auth/register',
+  '/auth/accept-invite',
   '/auth/refresh-token',
   '/auth/forgot-password',
   '/auth/reset-password',
@@ -95,10 +108,13 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       if (isRefreshing) {
-        return new Promise((resolve) => {
-          pendingRequests.push((token) => {
-            originalRequest.headers.set('Authorization', `Bearer ${token}`);
-            resolve(api(originalRequest));
+        return new Promise((resolve, reject) => {
+          pendingRequests.push({
+            resolve: (token) => {
+              originalRequest.headers.set('Authorization', `Bearer ${token}`);
+              resolve(api(originalRequest));
+            },
+            reject,
           });
         });
       }
@@ -114,19 +130,34 @@ api.interceptors.response.use(
         }>(`${API_BASE_URL}/auth/refresh-token`, { refreshToken: refresh });
 
         tokenStorage.set(data.data.accessToken, data.data.refreshToken);
-        processQueue(data.data.accessToken);
+        isRefreshing = false;
+        resolveQueue(data.data.accessToken);
         originalRequest.headers.set('Authorization', `Bearer ${data.data.accessToken}`);
         return api(originalRequest);
       } catch (refreshError) {
+        // Reset the flag here rather than in a `finally`: a 401 that lands
+        // during the lazy import below must not queue behind a refresh that
+        // has already failed, and a later reset would clobber its own refresh.
+        isRefreshing = false;
         tokenStorage.clear();
+        // Every request queued behind this refresh fails with it — leaving
+        // them pending would hang their callers forever.
+        rejectQueue(refreshError);
+        // Drop the persisted session before navigating, so /login does not
+        // boot with `isAuthenticated: true` and bounce straight back. The
+        // store imports auth.api → axios, so load it lazily to avoid a cycle.
+        try {
+          const { useAuthStore } = await import('@/stores/auth.store');
+          useAuthStore.getState().clear();
+        } catch {
+          // The tokens are already gone; the next guarded route redirects.
+        }
         // Only force-redirect if we're not already on /login — otherwise we'd
         // hard-reload the login page and swallow any pending error toast.
         if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
         return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
       }
     }
 

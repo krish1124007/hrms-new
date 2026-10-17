@@ -20,7 +20,6 @@ export function DashboardLayout(): ReactElement {
   // "jump to X" hotkeys; pages can register their own in-context ones.
   useShortcut('g d', () => navigate('/dashboard'), { label: 'Go to dashboard', group: 'Navigation' });
   useShortcut('g e', () => navigate('/employees'), { label: 'Go to employees', group: 'Navigation' });
-  useShortcut('g c', () => navigate('/crm'), { label: 'Go to CRM', group: 'Navigation' });
   useShortcut('g s', () => navigate('/settings'), { label: 'Go to settings', group: 'Navigation' });
 
   return (

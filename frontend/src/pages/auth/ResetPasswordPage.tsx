@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -6,8 +6,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PasswordStrengthMeter } from '@/components/common/PasswordStrengthMeter';
 import { useResetPassword } from '@/hooks/use-auth';
-import { cn } from '@/lib/utils';
 
 const schema = z
   .object({
@@ -19,17 +19,6 @@ const schema = z
     path: ['confirm'],
   });
 type FormValues = z.infer<typeof schema>;
-
-function passwordStrength(p: string): { score: number; label: string } {
-  let score = 0;
-  if (p.length >= 8) score++;
-  if (p.length >= 12) score++;
-  if (/[A-Z]/.test(p) && /[a-z]/.test(p)) score++;
-  if (/\d/.test(p)) score++;
-  if (/[^A-Za-z0-9]/.test(p)) score++;
-  const labels = ['Too weak', 'Weak', 'Fair', 'Good', 'Strong', 'Excellent'];
-  return { score, label: labels[score] ?? 'Too weak' };
-}
 
 export default function ResetPasswordPage(): ReactElement {
   const [params] = useSearchParams();
@@ -43,7 +32,6 @@ export default function ResetPasswordPage(): ReactElement {
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
   const reset = useResetPassword();
   const pwd = watch('password') ?? '';
-  const strength = useMemo(() => passwordStrength(pwd), [pwd]);
 
   const onSubmit = (values: FormValues): void => {
     reset.mutate({ token, password: values.password });
@@ -77,28 +65,7 @@ export default function ResetPasswordPage(): ReactElement {
         <div className="space-y-1.5">
           <Label htmlFor="password">New password</Label>
           <Input id="password" type="password" {...register('password')} />
-          {pwd && (
-            <div className="mt-2">
-              <div className="flex gap-1">
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      'h-1 flex-1 rounded-full transition-colors',
-                      i < strength.score
-                        ? strength.score <= 2
-                          ? 'bg-destructive'
-                          : strength.score <= 3
-                            ? 'bg-warning'
-                            : 'bg-success'
-                        : 'bg-muted',
-                    )}
-                  />
-                ))}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">{strength.label}</p>
-            </div>
-          )}
+          <PasswordStrengthMeter password={pwd} />
           {errors.password && (
             <p className="text-xs text-destructive">{errors.password.message}</p>
           )}

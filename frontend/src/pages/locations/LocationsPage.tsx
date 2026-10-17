@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useCreateLocation, useDeleteLocation, useLocations } from '@/hooks/use-locations';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { Location, LocationType } from '@/lib/locations.api';
 import { cn } from '@/lib/utils';
 
@@ -60,6 +61,9 @@ export default function LocationsPage(): ReactElement {
   const { data, isLoading } = useLocations({ limit: 100, search: search || undefined });
   const createLocation = useCreateLocation();
   const deleteLocation = useDeleteLocation();
+  // Anyone signed in can read locations; changing them is `locations.manage`.
+  const { has } = usePermissions();
+  const canManage = has('locations.manage');
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -119,10 +123,12 @@ export default function LocationsPage(): ReactElement {
         title="Locations"
         description="Manage offices, branches, warehouses, and field sites"
         actions={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="mr-2 size-4" />
-            Add Location
-          </Button>
+          canManage ? (
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="mr-2 size-4" />
+              Add Location
+            </Button>
+          ) : undefined
         }
       />
 
@@ -149,10 +155,12 @@ export default function LocationsPage(): ReactElement {
           <p className="mt-1 text-xs text-muted-foreground">
             Add your offices, branches, warehouses, and field sites
           </p>
-          <Button variant="outline" className="mt-4 gap-2" onClick={() => setOpen(true)}>
-            <Plus className="size-4" />
-            Add Location
-          </Button>
+          {canManage && (
+            <Button variant="outline" className="mt-4 gap-2" onClick={() => setOpen(true)}>
+              <Plus className="size-4" />
+              Add Location
+            </Button>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -182,13 +190,15 @@ export default function LocationsPage(): ReactElement {
                     <Badge variant={loc.isActive ? 'default' : 'secondary'} className="text-[10px]">
                       {loc.isActive ? 'Active' : 'Inactive'}
                     </Badge>
-                    <button
-                      onClick={() => deleteLocation.mutate(loc._id)}
-                      className="rounded p-1.5 text-destructive hover:bg-destructive/10"
-                      title="Delete location"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
+                    {canManage && (
+                      <button
+                        onClick={() => deleteLocation.mutate(loc._id)}
+                        className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+                        title="Delete location"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 

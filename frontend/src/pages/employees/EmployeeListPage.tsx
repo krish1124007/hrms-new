@@ -63,7 +63,7 @@ export default function EmployeeListPage(): ReactElement {
   if (designation) params.designation = designation;
   if (statusTab !== 'all') params.status = statusTab;
 
-  const { data, isLoading } = useEmployees(params);
+  const { data, isLoading, isFetching, error, refetch } = useEmployees(params);
   const { data: statsData } = useEmployeeStats();
   const { data: deptData } = useDepartments({ limit: 100 });
   const { data: desigData } = useDesignations({ limit: 100, department: department || undefined });
@@ -269,7 +269,10 @@ export default function EmployeeListPage(): ReactElement {
       <DataTable
         columns={columns}
         data={data?.data ?? []}
-        loading={isLoading}
+        // A retry after a failure shows the skeleton rather than the stale error.
+        loading={isLoading || (!!error && isFetching)}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         onRowClick={(r) => navigate(`/employees/${r._id}`)}
         emptyTitle="No employees found"

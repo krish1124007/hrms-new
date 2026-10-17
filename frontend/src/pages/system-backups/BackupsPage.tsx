@@ -1,9 +1,10 @@
-import { useState, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Database,
   Download,
+  ArchiveRestore,
   Trash2,
   Plus,
   HardDrive,
@@ -18,7 +19,8 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
-import { backupsApi, type BackupRow } from '@/lib/phase1.api';
+import { usePermissions } from '@/hooks/use-permissions';
+import { backupsApi, saveBlob, type BackupRow } from '@/lib/backups.api';
 import { cn } from '@/lib/utils';
 
 const STATUS_CONFIG: Record<
@@ -57,6 +59,9 @@ function formatDateTime(s?: string): string {
 
 export default function BackupsPage(): ReactElement {
   const qc = useQueryClient();
+  // Viewing needs `backups.view` (route guard); every action needs `backups.manage`.
+  const { has } = usePermissions();
+  const canManage = has('backups.manage');
 
   const { data: backups = [], isLoading } = useQuery<BackupRow[]>({
     queryKey: ['backups'],
@@ -73,14 +78,25 @@ export default function BackupsPage(): ReactElement {
     queryFn: backupsApi.getSchedule,
   });
 
+  // Errors on every mutation below are toasted (with the server's message) by
+  // the global MutationCache handler in main.tsx.
   const create = useMutation({
     mutationFn: () => backupsApi.create({ type: 'database' }),
     onSuccess: () => {
       toast.success('Backup queued — will complete in a few minutes');
       void qc.invalidateQueries({ queryKey: ['backups'] });
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Failed to start backup');
+  });
+
+  const download = useMutation({
+    mutationFn: (backup: BackupRow) => backupsApi.download(backup),
+    onSuccess: (file) => saveBlob(file),
+  });
+
+  const restore = useMutation({
+    mutationFn: (id: string) => backupsApi.restore(id),
+    onSuccess: () => {
+      toast.success('Restore queued into the scratch database — inspect it before any further action.');
     },
   });
 
@@ -107,9 +123,11 @@ export default function BackupsPage(): ReactElement {
         description="Database backups & data recovery"
         breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'Backups' }]}
         actions={
-          <Button size="sm" onClick={() => create.mutate()} loading={create.isPending}>
-            <Plus className="size-4" /> Backup now
-          </Button>
+          canManage ? (
+            <Button size="sm" onClick={() => create.mutate()} loading={create.isPending}>
+              <Plus className="size-4" /> Backup now
+            </Button>
+          ) : undefined
         }
       />
 
@@ -145,15 +163,17 @@ export default function BackupsPage(): ReactElement {
               </p>
             </div>
           </div>
-          <Button
-            variant={schedule?.enabled ? 'outline' : 'default'}
-            onClick={() => toggleSchedule.mutate(!schedule?.enabled)}
-            loading={toggleSchedule.isPending}
-            size="sm"
-          >
-            <Zap className="size-4" />
-            {schedule?.enabled ? 'Disable' : 'Enable'}
-          </Button>
+          {canManage && (
+            <Button
+              variant={schedule?.enabled ? 'outline' : 'default'}
+              onClick={() => toggleSchedule.mutate(!schedule?.enabled)}
+              loading={toggleSchedule.isPending}
+              size="sm"
+            >
+              <Zap className="size-4" />
+              {schedule?.enabled ? 'Disable' : 'Enable'}
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -183,7 +203,7 @@ export default function BackupsPage(): ReactElement {
                 <th className="px-4 py-3 text-left font-medium">Size</th>
                 <th className="px-4 py-3 text-left font-medium">Started</th>
                 <th className="px-4 py-3 text-left font-medium">Completed</th>
-                <th className="px-4 py-3 text-right font-medium">Actions</th>
+                {canManage && <th className="px-4 py-3 text-right font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -237,32 +257,60 @@ export default function BackupsPage(): ReactElement {
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
                       {formatDateTime(backup.completedAt)}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {backup.status === 'completed' && backup.fileUrl && (
-                          <a
-                            href={backup.fileUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            title="Download"
+                    {canManage && (
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          {backup.downloadUrl && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => download.mutate(backup)}
+                                disabled={download.isPending}
+                                className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                title="Download"
+                                aria-label="Download backup"
+                              >
+                                {download.isPending && download.variables?._id === backup._id ? (
+                                  <Loader2 className="size-4 animate-spin" />
+                                ) : (
+                                  <Download className="size-4" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (
+                                    confirm(
+                                      'Restore this backup into the scratch database configured on the server? The live database is not touched.',
+                                    )
+                                  )
+                                    restore.mutate(backup._id);
+                                }}
+                                disabled={restore.isPending}
+                                className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                title="Restore to scratch database"
+                                aria-label="Restore backup to scratch database"
+                              >
+                                <ArchiveRestore className="size-4" />
+                              </button>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm('Delete this backup? The file will be removed from storage.'))
+                                remove.mutate(backup._id);
+                            }}
+                            disabled={remove.isPending}
+                            className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            title="Delete"
+                            aria-label="Delete backup"
                           >
-                            <Download className="size-4" />
-                          </a>
-                        )}
-                        <button
-                          onClick={() => {
-                            if (confirm('Delete this backup? The file will be removed from storage.'))
-                              remove.mutate(backup._id);
-                          }}
-                          disabled={remove.isPending}
-                          className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          title="Delete"
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
-                      </div>
-                    </td>
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}

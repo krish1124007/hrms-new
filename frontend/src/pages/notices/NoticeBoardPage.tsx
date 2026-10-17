@@ -67,8 +67,9 @@ type CreateValues = z.infer<typeof createSchema>;
 export default function NoticeBoardPage(): ReactElement {
   const qc = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?._id);
-  const { hasAny } = usePermissions();
-  const canManage = hasAny(['notices.manage', 'settings.manage']);
+  const { has } = usePermissions();
+  // Posting, editing and deleting notices is `notices.manage` on the API.
+  const canManage = has('notices.manage');
 
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);

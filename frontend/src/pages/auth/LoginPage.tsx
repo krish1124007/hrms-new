@@ -139,6 +139,16 @@ export default function LoginPage(): ReactElement {
       <p className="mt-8 text-center text-xs text-muted-foreground">
         Trouble signing in? Contact your HR administrator.
       </p>
+      <p className="mt-2 text-center text-xs">
+        <a
+          href="/privacy-policy.html"
+          target="_blank"
+          rel="noopener"
+          className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Privacy policy
+        </a>
+      </p>
     </div>
   );
 }

@@ -11,6 +11,8 @@ import { AuthLayout } from '@/layouts/AuthLayout';
 import { DashboardLayout } from '@/layouts/DashboardLayout';
 import { useAuthStore } from '@/stores/auth.store';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
+import { RequirePermission } from '@/components/common/RequirePermission';
+import { NAV_ACCESS } from '@/config/navigation';
 
 const NotFoundPage = lazy(() => import('@/components/common/NotFoundPage'));
 
@@ -19,8 +21,7 @@ const SupportPage = lazy(() => import('@/pages/public/SupportPage'));
 const VerifyIDPage = lazy(() => import('@/pages/public/VerifyIDPage'));
 
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage'));
-const RegisterPage = lazy(() => import('@/pages/auth/RegisterPage'));
-const SignupSuccessPage = lazy(() => import('@/pages/auth/SignupSuccessPage'));
+const AcceptInvitePage = lazy(() => import('@/pages/auth/AcceptInvitePage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'));
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardRouter'));
@@ -137,6 +138,11 @@ function RequireAuth({ children }: { children: ReactElement }): ReactElement {
   return children;
 }
 
+/** Wraps an element in a permission guard using the same list as its sidebar entry. */
+function guard(anyOf: string[], element: ReactElement): ReactElement {
+  return <RequirePermission anyOf={anyOf}>{element}</RequirePermission>;
+}
+
 // NotFound is now lazy-loaded from @/components/common/NotFoundPage
 
 export function AppRouter(): ReactElement {
@@ -152,8 +158,7 @@ export function AppRouter(): ReactElement {
           {/* Public auth routes */}
           <Route element={<AuthLayout />}>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<RegisterPage />} />
-            <Route path="/signup/success" element={<SignupSuccessPage />} />
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
           </Route>
@@ -173,43 +178,43 @@ export function AppRouter(): ReactElement {
             <Route path="/profile" element={<ProfilePage />} />
 
             {/* SystemCore */}
-            <Route path="/employees" element={<EmployeeListPage />} />
-            <Route path="/employees/new" element={<EmployeeFormPage />} />
-            <Route path="/employees/:id" element={<EmployeeDetailPage />} />
-            <Route path="/employees/:id/edit" element={<EmployeeFormPage />} />
-            <Route path="/departments" element={<DepartmentListPage />} />
-            <Route path="/designations" element={<DesignationListPage />} />
-            <Route path="/shifts" element={<ShiftListPage />} />
-            <Route path="/holidays" element={<HolidayListPage />} />
+            <Route path="/employees" element={guard(NAV_ACCESS.employees, <EmployeeListPage />)} />
+            <Route path="/employees/new" element={guard(NAV_ACCESS.employees, <EmployeeFormPage />)} />
+            <Route path="/employees/:id" element={guard(NAV_ACCESS.employees, <EmployeeDetailPage />)} />
+            <Route path="/employees/:id/edit" element={guard(NAV_ACCESS.employees, <EmployeeFormPage />)} />
+            <Route path="/departments" element={guard(NAV_ACCESS.departments, <DepartmentListPage />)} />
+            <Route path="/designations" element={guard(NAV_ACCESS.designations, <DesignationListPage />)} />
+            <Route path="/shifts" element={guard(NAV_ACCESS.shifts, <ShiftListPage />)} />
+            <Route path="/holidays" element={guard(NAV_ACCESS.holidays, <HolidayListPage />)} />
 
             {/* Timesheets */}
             <Route path="/timesheets" element={<TimesheetPage />} />
 
             {/* Leaves */}
             <Route path="/leaves" element={<MyLeavesPage />} />
-            <Route path="/leaves/requests" element={<LeaveListPage />} />
+            <Route path="/leaves/requests" element={guard(NAV_ACCESS.leaveRequests, <LeaveListPage />)} />
             <Route path="/leaves/calendar" element={<LeaveCalendarPage />} />
-            <Route path="/leaves/balances" element={<LeaveBalancePage />} />
-            <Route path="/leaves/types" element={<LeaveTypesPage />} />
+            <Route path="/leaves/balances" element={guard(NAV_ACCESS.leaveBalances, <LeaveBalancePage />)} />
+            <Route path="/leaves/types" element={guard(NAV_ACCESS.leaveTypes, <LeaveTypesPage />)} />
 
             {/* Expense Claims (HR) */}
             <Route path="/expense-claims" element={<MyExpensesPage />} />
-            <Route path="/expense-claims/requests" element={<ExpenseClaimListPage />} />
-            <Route path="/expense-claims/categories" element={<ExpenseCategoryPage />} />
-            <Route path="/expense-claims/reports" element={<ExpenseReportPage />} />
+            <Route path="/expense-claims/requests" element={guard(NAV_ACCESS.expensesManage, <ExpenseClaimListPage />)} />
+            <Route path="/expense-claims/categories" element={guard(NAV_ACCESS.expensesManage, <ExpenseCategoryPage />)} />
+            <Route path="/expense-claims/reports" element={guard(NAV_ACCESS.expensesManage, <ExpenseReportPage />)} />
 
             {/* Attendance */}
             <Route path="/attendance" element={<AttendanceDashboardPage />} />
-            <Route path="/attendance/records" element={<AttendanceListPage />} />
+            <Route path="/attendance/records" element={guard(NAV_ACCESS.attendanceView, <AttendanceListPage />)} />
             <Route path="/attendance/my" element={<EmployeeAttendancePage />} />
             <Route path="/attendance/timesheet" element={<AttendanceTimesheetPage />} />
             <Route path="/attendance/employee/:id" element={<EmployeeAttendancePage />} />
-            <Route path="/attendance/settings" element={<AttendanceConfigPage />} />
-            <Route path="/attendance/sites" element={<AttendanceSitesPage />} />
-            <Route path="/attendance/geofences" element={<GeofencePage />} />
-            <Route path="/attendance/qr-codes" element={<QRCodesPage />} />
-            <Route path="/attendance/allowed-ips" element={<AllowedIPsPage />} />
-            <Route path="/attendance/live-tracking" element={<AttendanceLiveTrackingPage />} />
+            <Route path="/attendance/settings" element={guard(NAV_ACCESS.attendanceConfig, <AttendanceConfigPage />)} />
+            <Route path="/attendance/sites" element={guard(NAV_ACCESS.attendanceConfig, <AttendanceSitesPage />)} />
+            <Route path="/attendance/geofences" element={guard(NAV_ACCESS.attendanceConfig, <GeofencePage />)} />
+            <Route path="/attendance/qr-codes" element={guard(NAV_ACCESS.attendanceConfig, <QRCodesPage />)} />
+            <Route path="/attendance/allowed-ips" element={guard(NAV_ACCESS.attendanceConfig, <AllowedIPsPage />)} />
+            <Route path="/attendance/live-tracking" element={guard(NAV_ACCESS.attendanceView, <AttendanceLiveTrackingPage />)} />
 
             {/* Field Sales */}
             <Route path="/field" element={<FieldDashboardPage />} />
@@ -222,10 +227,11 @@ export function AppRouter(): ReactElement {
             <Route path="/field/tracking" element={<LiveTrackingPage />} />
 
             {/* Payroll */}
-            <Route path="/payroll" element={<PayrollDashboardPage />} />
-            <Route path="/payroll/cycles/:id" element={<PayrollCycleDetailPage />} />
-            <Route path="/payroll/components" element={<SalaryComponentsPage />} />
-            <Route path="/payroll/structures" element={<SalaryStructuresPage />} />
+            <Route path="/payroll" element={guard(NAV_ACCESS.payrollAdmin, <PayrollDashboardPage />)} />
+            <Route path="/payroll/cycles/:id" element={guard(NAV_ACCESS.payrollAdmin, <PayrollCycleDetailPage />)} />
+            <Route path="/payroll/components" element={guard(NAV_ACCESS.payrollAdmin, <SalaryComponentsPage />)} />
+            <Route path="/payroll/structures" element={guard(NAV_ACCESS.payrollAdmin, <SalaryStructuresPage />)} />
+            {/* Self-service — every employee, their own payslips only. */}
             <Route path="/payroll/my-payslips" element={<MyPayslipsPage />} />
 
             {/* Tools */}
@@ -233,7 +239,7 @@ export function AppRouter(): ReactElement {
             <Route path="/id-cards" element={<IDCardPage />} />
             {/* Self-service — every employee, their own card only. */}
             <Route path="/my-id-card" element={<MyIDCardPage />} />
-            <Route path="/backups" element={<BackupsPage />} />
+            <Route path="/backups" element={guard(NAV_ACCESS.backups, <BackupsPage />)} />
             <Route path="/calendar" element={<CalendarPage />} />
             <Route path="/notices" element={<NoticeBoardPage />} />
             {/* Notice notifications link here — the board highlights the one asked for. */}
@@ -245,9 +251,10 @@ export function AppRouter(): ReactElement {
             <Route path="/notice-board" element={<Navigate to="/notices" replace />} />
 
             {/* Settings */}
-            <Route path="/settings" element={<SettingsHomePage />} />
-            <Route path="/settings/roles" element={<RolesPage />} />
-            <Route path="/settings/audit" element={<AuditLogsPage />} />
+            <Route path="/settings" element={guard(NAV_ACCESS.settings, <SettingsHomePage />)} />
+            <Route path="/settings/roles" element={guard(NAV_ACCESS.roles, <RolesPage />)} />
+            <Route path="/settings/audit" element={guard(NAV_ACCESS.audit, <AuditLogsPage />)} />
+            {/* Self-service — the user's own cookie choices and privacy history. */}
             <Route path="/settings/privacy" element={<PrivacyPage />} />
             <Route path="/settings/backup" element={<Navigate to="/backups" replace />} />
 

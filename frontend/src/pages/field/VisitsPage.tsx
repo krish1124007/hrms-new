@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from 'react';
-import { LogIn, LogOut, MapPin, Plus, Trash2 } from 'lucide-react';
+import { LogIn, LogOut, MapPin, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';

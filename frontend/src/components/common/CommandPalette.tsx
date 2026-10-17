@@ -11,14 +11,12 @@ import {
   Search,
   Users,
   Briefcase,
-  Package,
-  DollarSign,
-  MessageSquare,
-  Bot,
   ClipboardList,
   MapPin,
 } from 'lucide-react';
-import { NAV_GROUPS } from '@/config/navigation';
+import { visibleNavLeaves } from '@/config/navigation';
+import { useAuthStore } from '@/stores/auth.store';
+import { usePermissions } from '@/hooks/use-permissions';
 
 interface CommandPaletteProps {
   open: boolean;
@@ -34,23 +32,6 @@ interface SearchResult {
   to: string;
 }
 
-const CATEGORY_ICONS: Record<string, typeof Search> = {
-  Pages: LayoutDashboard,
-  Employees: Users,
-  Customers: Building2,
-  Projects: Briefcase,
-};
-
-const MOCK_ENTITIES: SearchResult[] = [
-  { id: 'e1', label: 'Priya Sharma', description: 'Engineering - Senior Developer', category: 'Employees', icon: Users, to: '/employees/1' },
-  { id: 'e2', label: 'Rahul Verma', description: 'Design - UI/UX Lead', category: 'Employees', icon: Users, to: '/employees/2' },
-  { id: 'e3', label: 'Amit Patel', description: 'Sales - Account Manager', category: 'Employees', icon: Users, to: '/employees/3' },
-  { id: 'c1', label: 'Acme Corp', description: 'Enterprise - Active', category: 'Customers', icon: Building2, to: '/crm/customers' },
-  { id: 'c2', label: 'TechStart Solutions', description: 'SMB - Lead', category: 'Customers', icon: Building2, to: '/crm/leads/1' },
-  { id: 'p1', label: 'Project Atlas', description: 'In Progress - 8 tasks', category: 'Projects', icon: Briefcase, to: '/projects/1' },
-  { id: 'p2', label: 'Mobile App Redesign', description: 'Planning - 3 tasks', category: 'Projects', icon: Briefcase, to: '/projects/2' },
-];
-
 const QUICK_ACTION_ICONS: Record<string, typeof Search> = {
   Dashboard: LayoutDashboard,
   Employees: Users,
@@ -58,15 +39,13 @@ const QUICK_ACTION_ICONS: Record<string, typeof Search> = {
   Attendance: Clock,
   Leaves: Calendar,
   Projects: Briefcase,
-  Inventory: Package,
-  Accounting: DollarSign,
-  CRM: Building2,
   Documents: FileText,
-  Messaging: MessageSquare,
-  AI: Bot,
   Tasks: ClipboardList,
   Locations: MapPin,
 };
+
+/** Shortcuts shown before the user types — only those they can open are listed. */
+const QUICK_LINKS = ['/dashboard', '/employees', '/attendance'];
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): ReactElement | null {
   const navigate = useNavigate();
@@ -87,27 +66,35 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
     return () => window.removeEventListener('keydown', handler);
   }, [open, onOpenChange]);
 
-  // Build page results from nav config
-  const pageResults = useMemo(() => {
-    const results: SearchResult[] = [];
-    for (const group of NAV_GROUPS) {
-      for (const item of group.items) {
+  const roleSlug = useAuthStore((st) => st.user?.role?.slug);
+  const { hasAny } = usePermissions();
+
+  // Page results: exactly the sidebar destinations this user can see.
+  const pageResults = useMemo<SearchResult[]>(
+    () =>
+      visibleNavLeaves({ roleSlug, hasAny }).map(({ item, parentLabel }) => {
         const iconKey = Object.keys(QUICK_ACTION_ICONS).find((k) =>
           item.label.toLowerCase().includes(k.toLowerCase()),
         );
-        results.push({
+        return {
           id: `page-${item.to}`,
           label: item.label,
+          description: parentLabel,
           category: 'Pages',
           icon: iconKey ? QUICK_ACTION_ICONS[iconKey] : item.icon,
           to: item.to,
-        });
-      }
-    }
-    return results;
-  }, []);
+        };
+      }),
+    [roleSlug, hasAny],
+  );
 
-  const allResults = useMemo(() => [...pageResults, ...MOCK_ENTITIES], [pageResults]);
+  const quickLinks = useMemo(
+    () =>
+      QUICK_LINKS.map((to) => pageResults.find((r) => r.to === to)).filter(
+        (r): r is SearchResult => r !== undefined,
+      ),
+    [pageResults],
+  );
 
   const handleSelect = (to: string): void => {
     navigate(to);
@@ -117,12 +104,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
   // Group results by category
   const grouped = useMemo(() => {
     const groups: Record<string, SearchResult[]> = {};
-    for (const item of allResults) {
+    for (const item of pageResults) {
       if (!groups[item.category]) groups[item.category] = [];
       groups[item.category].push(item);
     }
     return groups;
-  }, [allResults]);
+  }, [pageResults]);
 
   return (
     <AnimatePresence>
@@ -150,7 +137,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
                   autoFocus
                   value={query}
                   onValueChange={setQuery}
-                  placeholder="Search pages, employees, customers, projects..."
+                  placeholder="Search pages..."
                   className="flex h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 />
                 <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-flex">
@@ -163,24 +150,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
                   No results found.
                 </Command.Empty>
 
-                {!query && (
+                {!query && quickLinks.length > 0 && (
                   <Command.Group
                     heading="Recent"
                     className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground"
                   >
-                    {[
-                      { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
-                      { label: 'Employees', to: '/employees', icon: Users },
-                      { label: 'Attendance', to: '/attendance', icon: Clock },
-                    ].map((item) => (
+                    {quickLinks.map((item) => (
                       <Command.Item
-                        key={item.to}
-                        value={item.label}
+                        key={`recent-${item.to}`}
+                        value={`recent ${item.to}`}
                         onSelect={() => handleSelect(item.to)}
                         className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm aria-selected:bg-accent aria-selected:text-foreground"
                       >
                         <item.icon className="size-4 text-muted-foreground" />
-                        <span>{item.label}</span>
+                        {/* Section name ("Attendance") reads better than the leaf ("Dashboard"). */}
+                        <span>{item.description ?? item.label}</span>
                         <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                           Recent
                         </span>

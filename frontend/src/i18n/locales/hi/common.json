@@ -30,7 +30,6 @@
   "auth": {
     "signIn": "साइन इन करें",
     "signOut": "साइन आउट करें",
-    "signUp": "वर्कस्पेस बनाएँ",
     "email": "ईमेल",
     "password": "पासवर्ड",
     "forgotPassword": "पासवर्ड भूल गए?",
