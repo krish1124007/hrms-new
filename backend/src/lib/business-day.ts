@@ -56,3 +56,46 @@ export function endOfBusinessDay(d: Date = new Date()): Date {
 export function isSameBusinessDay(a: Date, b: Date): boolean {
   return startOfBusinessDay(a).getTime() === startOfBusinessDay(b).getTime();
 }
+
+/**
+ * How far `BUSINESS_TZ` is ahead of UTC at instant `at`, in minutes
+ * (+330 for Asia/Kolkata).
+ */
+function businessOffsetMinutes(at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TZ,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(at);
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? '0');
+  const wallAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const wholeSeconds = Math.floor(at.getTime() / 1000) * 1000;
+  return Math.round((wallAsUtc - wholeSeconds) / 60_000);
+}
+
+/**
+ * The instant at which the business-timezone wall clock reads `hhmm`
+ * (`"HH:mm"`) on the day `dayLabel` names. `dayLabel` is a day label as
+ * returned by `startOfBusinessDay` (UTC midnight of the calendar date).
+ *
+ * `atBusinessTime(2026-10-12T00:00Z, '19:00')` → `2026-10-12T13:30Z` in IST.
+ */
+export function atBusinessTime(dayLabel: Date, hhmm: string): Date {
+  const [h, m] = hhmm.split(':').map(Number);
+  const wall = Date.UTC(
+    dayLabel.getUTCFullYear(),
+    dayLabel.getUTCMonth(),
+    dayLabel.getUTCDate(),
+    h || 0,
+    m || 0,
+  );
+  // Read the offset at the first guess, then once more at the result so a
+  // zone with DST lands on the right side of a transition. IST is fixed.
+  const guess = wall - businessOffsetMinutes(new Date(wall)) * 60_000;
+  return new Date(wall - businessOffsetMinutes(new Date(guess)) * 60_000);
+}

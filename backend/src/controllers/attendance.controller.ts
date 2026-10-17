@@ -14,7 +14,9 @@ import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { isWeekOff, toKey } from '../lib/week-off.js';
 import { startOfBusinessDay } from '../lib/business-day.js';
+import { applyShiftRules, computeHours, type WorkedHoursSource } from '../lib/attendance-hours.js';
 import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
+import { closeBusinessDay, type DayCloseCounts } from '../services/day-close.service.js';
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
@@ -413,46 +415,10 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
 /* ── Worked-hours maths ─────────────────────────────────────────────
  * `totalWorkingHours` is only persisted at check-out, so an in-progress day
  * reads back as 0 and every "hours today" tile showed 0h 0m until the employee
- * checked out. These helpers compute the figure from the timestamps instead,
- * so a day in progress reports the hours worked so far.
+ * checked out. `computeHours` (lib/attendance-hours.ts) computes the figure
+ * from the timestamps instead, so a day in progress reports the hours worked
+ * so far.
  * ─────────────────────────────────────────────────────────────────── */
-
-interface BreakLike {
-  startTime?: Date | string | null;
-  endTime?: Date | string | null;
-}
-interface WorkedHoursSource {
-  date?: Date | string | null;
-  checkIn?: { time?: Date | string | null } | null;
-  checkOut?: { time?: Date | string | null } | null;
-  breaks?: BreakLike[];
-  totalWorkingHours?: number;
-}
-
-
-const ms = (v?: Date | string | null): number | null =>
-  v ? new Date(v).getTime() : null;
-
-/** Worked milliseconds between check-in and `until`, minus break time. */
-function workedMs(att: WorkedHoursSource, until: Date): number {
-  const inMs = ms(att.checkIn?.time);
-  if (inMs === null) return 0;
-  const outMs = ms(att.checkOut?.time) ?? until.getTime();
-  const breakMs = (att.breaks ?? []).reduce((acc, b) => {
-    const start = ms(b.startTime);
-    if (start === null) return acc;
-    // An open break is still running — count it up to `until`, otherwise a
-    // check-out taken mid-break silently credited the whole break as work.
-    const end = ms(b.endTime) ?? Math.min(outMs, until.getTime());
-    return acc + Math.max(0, end - start);
-  }, 0);
-  return Math.max(0, outMs - inMs - breakMs);
-}
-
-/** Worked hours, rounded to 2 decimals — the unit `totalWorkingHours` uses. */
-function workedHours(att: WorkedHoursSource, until: Date = new Date()): number {
-  return +(workedMs(att, until) / 3_600_000).toFixed(2);
-}
 
 /**
  * Fill in `totalWorkingHours` for a day that is still running. Finished days
@@ -477,7 +443,7 @@ function withLiveHours<T extends WorkedHoursSource>(att: T, now: Date = new Date
   // convert first.
   const asDoc = att as unknown as { toObject?: () => T };
   const plain = typeof asDoc.toObject === 'function' ? asDoc.toObject() : att;
-  return { ...plain, totalWorkingHours: workedHours(att, now) };
+  return { ...plain, totalWorkingHours: computeHours(att, now) };
 }
 
 export async function checkOut(req: Request, res: Response): Promise<void> {
@@ -537,19 +503,10 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
 
   // total working hours = (out - in) - break time, including a break that is
   // still open at check-out (previously such a break was never deducted).
-  att.totalWorkingHours = workedHours(att, now);
-  const workMs = att.totalWorkingHours * 3_600_000;
-
-  const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
-  const halfDayHours = cfg?.settings.halfDayThresholdHours ?? 4;
-
-  const workMin = workMs / 60_000;
-  if (workMin > otThresholdMin) {
-    att.overtimeHours = +((workMin - otThresholdMin) / 60).toFixed(2);
-  }
-  if (att.totalWorkingHours < halfDayHours) {
-    att.status = 'half_day';
-  }
+  att.totalWorkingHours = computeHours(att, now);
+  // Overtime and half-day from the configured thresholds (no shift passed:
+  // check-out has always judged the day on the config values).
+  applyShiftRules(att, null, cfg);
 
   await att.save();
   void audit({ action: 'update', entity: 'Attendance', entityId: String(att._id), after: { checkOut: now } });
@@ -983,7 +940,7 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
   }
 
   if (outTime) {
-    att.totalWorkingHours = workedHours(att, outTime);
+    att.totalWorkingHours = computeHours(att, outTime);
     const cfg = await AttendanceConfig.findOne({}).exec();
     const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
     const halfDayHours = cfg?.settings.halfDayThresholdHours ?? 4;
@@ -1021,6 +978,99 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
     },
   });
   res.json({ success: true, data: att });
+}
+
+// ============================================================================
+// DAY CLOSE — replay the nightly job for past days
+// ============================================================================
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** `to − from` in days: at most 62 days per backfill call. */
+const MAX_CLOSE_DAYS_SPAN = 61;
+
+const isoDay = (label: Date): string => label.toISOString().slice(0, 10);
+
+export const closeDaySchema = z.object({
+  date: z.coerce.date(),
+});
+
+export const closeDaysSchema = z
+  .object({
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+  })
+  .refine((v) => startOfBusinessDay(v.to) >= startOfBusinessDay(v.from), {
+    message: '`to` must be on or after `from`',
+    path: ['to'],
+  })
+  .refine(
+    (v) =>
+      (startOfBusinessDay(v.to).getTime() - startOfBusinessDay(v.from).getTime()) / DAY_MS <=
+      MAX_CLOSE_DAYS_SPAN,
+    { message: `At most ${MAX_CLOSE_DAYS_SPAN + 1} days per request`, path: ['to'] },
+  );
+
+/**
+ * Only a day that is over can be closed. Closing today would mark everyone
+ * not yet in as absent; the nightly job closes it at 23:59.
+ */
+function assertPastDay(label: Date): void {
+  if (label.getTime() >= startOfBusinessDay(new Date()).getTime()) {
+    throw new ValidationAppError(
+      `${isoDay(label)} is not over yet — only past days can be closed; today closes automatically at 23:59`,
+    );
+  }
+}
+
+const sumCounts = (all: DayCloseCounts[]): DayCloseCounts =>
+  all.reduce(
+    (acc, c) => ({
+      absentCreated: acc.absentCreated + c.absentCreated,
+      leaveStamped: acc.leaveStamped + c.leaveStamped,
+      autoCheckedOut: acc.autoCheckedOut + c.autoCheckedOut,
+      skipped: acc.skipped + c.skipped,
+    }),
+    { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
+  );
+
+/** POST /api/v1/attendance/close-day — run the day-close for one past day. */
+export async function closeDay(req: Request, res: Response): Promise<void> {
+  const body = req.body as z.infer<typeof closeDaySchema>;
+  const day = startOfBusinessDay(body.date);
+  assertPastDay(day);
+
+  const counts = await closeBusinessDay(day);
+  const date = isoDay(day);
+  void audit({ action: 'update', entity: 'Attendance', metadata: { event: 'day-close', date, counts } });
+  res.json({ success: true, data: { date, ...counts } });
+}
+
+/**
+ * POST /api/v1/attendance/close-days — run the day-close for every day in
+ * `[from, to]` (at most 62), oldest first, and report each day's counts.
+ */
+export async function closeDays(req: Request, res: Response): Promise<void> {
+  const body = req.body as z.infer<typeof closeDaysSchema>;
+  const fromDay = startOfBusinessDay(body.from);
+  const toDay = startOfBusinessDay(body.to);
+  assertPastDay(toDay);
+
+  const days: (DayCloseCounts & { date: string })[] = [];
+  for (let t = fromDay.getTime(); t <= toDay.getTime(); t += DAY_MS) {
+    // Sequential on purpose: one day's rows are settled before the next.
+    // eslint-disable-next-line no-await-in-loop
+    const counts = await closeBusinessDay(new Date(t));
+    days.push({ date: isoDay(new Date(t)), ...counts });
+  }
+  const totals = sumCounts(days);
+  const from = isoDay(fromDay);
+  const to = isoDay(toDay);
+  void audit({
+    action: 'update',
+    entity: 'Attendance',
+    metadata: { event: 'day-close', from, to, counts: totals },
+  });
+  res.json({ success: true, data: { from, to, days, totals } });
 }
 
 export const reportQuerySchema = z.object({

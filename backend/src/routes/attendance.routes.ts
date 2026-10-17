@@ -58,6 +58,20 @@ router.patch(
   validate(ctrl.correctRecordSchema),
   asyncHandler(ctrl.correctRecord),
 );
+// Replay the nightly day-close (auto-absent, leave rows, auto-checkout) for
+// past days — a missed night, or history from before the job existed.
+router.post(
+  '/close-day',
+  requirePermission('attendance.manage'),
+  validate(ctrl.closeDaySchema),
+  asyncHandler(ctrl.closeDay),
+);
+router.post(
+  '/close-days',
+  requirePermission('attendance.manage'),
+  validate(ctrl.closeDaysSchema),
+  asyncHandler(ctrl.closeDays),
+);
 router.get('/my', asyncHandler(ctrl.myAttendance));
 router.get('/my-shift', asyncHandler(ctrl.myShift));
 router.get('/today', asyncHandler(ctrl.todayAttendance));

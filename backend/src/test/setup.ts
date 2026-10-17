@@ -3,8 +3,9 @@
  *
  *  - Pins a deterministic, valid environment BEFORE any app module is loaded
  *    (config/env.ts parses process.env at import time and exits on failure).
- *  - Replaces Redis with ioredis-mock and stubs the BullMQ backup jobs, so no
- *    test ever needs a Redis server or opens a queue connection.
+ *  - Replaces Redis with ioredis-mock and stubs the BullMQ backup and
+ *    attendance jobs, so no test ever needs a Redis server or opens a queue
+ *    connection.
  *  - Boots an in-memory MongoDB and connects mongoose to it for the file's
  *    lifetime, wiping every collection (and the fake Redis) after each test.
  */
@@ -72,6 +73,12 @@ vi.mock('../jobs/backup.jobs.js', () => ({
   getMonthlyBackupSchedule: vi.fn(),
   setMonthlyBackupSchedule: vi.fn(),
   startBackupWorker: vi.fn(),
+}));
+
+vi.mock('../jobs/attendance.jobs.js', () => ({
+  attendanceQueue: {},
+  startAttendanceWorker: vi.fn(),
+  ensureAttendanceSchedules: vi.fn(),
 }));
 
 let mongod: MongoMemoryServer | undefined;

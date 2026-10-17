@@ -57,6 +57,10 @@ export interface ICheckinMetadata {
   geofenceId?: string;
   deviceId?: string;
   faceConfidence?: number;
+  /** Check-out written by the nightly day-close, not by the employee. */
+  autoCheckout?: boolean;
+  /** Punch times set by an approved regularization request. */
+  regularized?: boolean;
 }
 
 export interface ICheckinRecord {
@@ -135,6 +139,8 @@ const metadataSchema = new Schema<ICheckinMetadata>(
     geofenceId: String,
     deviceId: String,
     faceConfidence: Number,
+    autoCheckout: { type: Boolean },
+    regularized: { type: Boolean },
   },
   { _id: false },
 );
