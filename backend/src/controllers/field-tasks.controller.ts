@@ -1,10 +1,12 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { FieldTask } from '../models/field-task.model.js';
-import { Employee } from '../models/employee.model.js';
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+
+/** Field managers see and edit every task; reps only those assigned to them. */
+const MANAGE = 'field-sales.manage';
 
 export const createTaskSchema = z.object({
   title: z.string().min(1),
@@ -41,11 +43,11 @@ export const listQuerySchema = z.object({
   sort: z.string().optional(),
 });
 
-async function resolveEmployeeId(): Promise<string | null> {
-  const userId = getUserId();
-  if (!userId) return null;
-  const emp = await Employee.findOne({ userId }).select('_id').exec();
-  return emp ? String(emp._id) : null;
+/** 404 if the task does not exist; 403 unless it is assigned to the caller or they manage. */
+async function assertTaskAccess(req: Request, id: string): Promise<void> {
+  const task = await FieldTask.findById(id).select('assignedTo').lean().exec();
+  if (!task) throw new NotFoundError('Task not found');
+  await assertOwnOrPermission(req, task.assignedTo, MANAGE);
 }
 
 export async function listTasks(req: Request, res: Response): Promise<void> {
@@ -54,6 +56,8 @@ export async function listTasks(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
   if (q.assignedTo) filter.assignedTo = q.assignedTo;
+  // Reps only ever see their own (`null` — no employee record — matches nothing).
+  if (!hasPermission(req.user, MANAGE)) filter.assignedTo = await currentEmployeeId(req);
   if (q.status) filter.status = q.status;
   if (q.priority) filter.priority = q.priority;
   const result = await FieldTask.paginate(filter, {
@@ -68,8 +72,8 @@ export async function listTasks(req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
-export async function myTasks(_req: Request, res: Response): Promise<void> {
-  const empId = await resolveEmployeeId();
+export async function myTasks(req: Request, res: Response): Promise<void> {
+  const empId = await currentEmployeeId(req);
   if (!empId) throw new ValidationAppError('Employee profile not found');
   const docs = await FieldTask.find({ assignedTo: empId })
     .populate('clientId', 'name address')
@@ -78,8 +82,10 @@ export async function myTasks(_req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: docs });
 }
 
-export async function teamTasks(_req: Request, res: Response): Promise<void> {
-  const docs = await FieldTask.find({})
+export async function teamTasks(req: Request, res: Response): Promise<void> {
+  const filter: Record<string, unknown> = {};
+  if (!hasPermission(req.user, MANAGE)) filter.assignedTo = await currentEmployeeId(req);
+  const docs = await FieldTask.find(filter)
     .populate('assignedTo', 'firstName lastName')
     .populate('clientId', 'name')
     .sort({ createdAt: -1 })
@@ -93,6 +99,7 @@ export async function getTask(req: Request, res: Response): Promise<void> {
     .populate('clientId', 'name address')
     .exec();
   if (!doc) throw new NotFoundError('Task not found');
+  await assertOwnOrPermission(req, doc.assignedTo, MANAGE);
   res.json({ success: true, data: doc });
 }
 
@@ -104,7 +111,11 @@ export async function createTask(req: Request, res: Response): Promise<void> {
 }
 
 export async function updateTask(req: Request, res: Response): Promise<void> {
-  const doc = await FieldTask.findByIdAndUpdate(String(req.params.id), req.body, {
+  await assertTaskAccess(req, String(req.params.id));
+  const update: Record<string, unknown> = { ...req.body };
+  // Only a manager may reassign a task.
+  if (!hasPermission(req.user, MANAGE)) delete update.assignedTo;
+  const doc = await FieldTask.findByIdAndUpdate(String(req.params.id), update, {
     new: true,
   }).exec();
   if (!doc) throw new NotFoundError('Task not found');
@@ -120,6 +131,7 @@ export async function deleteTask(req: Request, res: Response): Promise<void> {
 }
 
 export async function acceptTask(req: Request, res: Response): Promise<void> {
+  await assertTaskAccess(req, String(req.params.id));
   const doc = await FieldTask.findByIdAndUpdate(
     String(req.params.id),
     { status: 'accepted' },
@@ -131,6 +143,7 @@ export async function acceptTask(req: Request, res: Response): Promise<void> {
 
 export async function completeTask(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof completeSchema>;
+  await assertTaskAccess(req, String(req.params.id));
   const doc = await FieldTask.findByIdAndUpdate(
     String(req.params.id),
     {

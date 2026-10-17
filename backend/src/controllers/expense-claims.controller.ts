@@ -5,6 +5,16 @@ import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import {
+  assertNotSelfApproval,
+  assertOwnOrPermission,
+  currentEmployeeId,
+  hasPermission,
+} from '../lib/access.js';
+
+/** Approvers see and act on everyone's claims; others only on their own. */
+const APPROVE = 'expenses.approve';
+const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
 
 async function getCurrentEmployee(): Promise<typeof Employee.prototype | null> {
   const userId = getUserId();
@@ -140,7 +150,12 @@ export async function listClaims(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = { amount: { $gt: 0 } };
   if (q.status) filter.status = q.status;
-  if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  if (hasPermission(req.user, APPROVE)) {
+    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  } else {
+    // `null` (no employee record) matches nothing — employeeId is required.
+    filter.employeeId = await currentEmployeeId(req);
+  }
   if (q.category) filter.category = new Types.ObjectId(q.category);
   if (q.from || q.to) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -203,13 +218,15 @@ export async function teamClaims(req: Request, res: Response): Promise<void> {
 
 export async function createClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createClaimSchema>;
+  // Only an approver may file a claim on someone else's behalf; for anyone
+  // else a body `employeeId` is ignored and the claim is theirs.
   let employeeId: Types.ObjectId;
-  if (body.employeeId) {
+  if (body.employeeId && hasPermission(req.user, APPROVE)) {
     employeeId = new Types.ObjectId(body.employeeId);
   } else {
-    const me = await getCurrentEmployee();
+    const me = await currentEmployeeId(req);
     if (!me) throw new NotFoundError('Employee profile not found');
-    employeeId = me._id as Types.ObjectId;
+    employeeId = me;
   }
 
   // Validate against category limit + receipt requirement
@@ -248,12 +265,14 @@ export async function getClaim(req: Request, res: Response): Promise<void> {
     .populate('approvedBy', 'firstName lastName email')
     .exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
   res.json({ success: true, data: doc });
 }
 
 export async function updateClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
   if (doc.status !== 'draft' && doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
   }
@@ -272,6 +291,12 @@ export async function updateClaim(req: Request, res: Response): Promise<void> {
 export async function deleteClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+  // Once decided (approved / rejected / reimbursed) a claim is part of the
+  // money trail and can no longer be withdrawn.
+  if (doc.status !== 'draft' && doc.status !== 'pending') {
+    throw new ValidationAppError(`Cannot delete a ${doc.status} claim`);
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (doc as any).softDelete();
   void audit({ action: 'delete', entity: 'ExpenseClaim', entityId: String(doc._id) });
@@ -286,6 +311,7 @@ export async function approveClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof approveClaimSchema>;
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a ${doc.status} claim`);
   }
@@ -305,6 +331,7 @@ export async function rejectClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof rejectClaimSchema>;
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a ${doc.status} claim`);
   }

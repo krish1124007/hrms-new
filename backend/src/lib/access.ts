@@ -1,0 +1,93 @@
+/**
+ * Record-level access helpers shared by the self-service controllers.
+ *
+ * Route middleware (`requirePermission`) answers "may this user call this
+ * endpoint at all?". These answer the per-record question that follows:
+ * "is this *their* record, or do they hold the permission that lets them act
+ * on anybody's?". Ownership is always by Employee — every owner field these
+ * modules store (`employeeId`, `employee`, `assignedTo`) references Employee.
+ */
+import type { Request } from 'express';
+import { Types } from 'mongoose';
+import { Employee } from '../models/employee.model.js';
+import { AppError, ForbiddenError } from './errors.js';
+
+/** Same rule as `requirePermission`: role permissions + customPermissions, `*` passes. */
+export function hasPermission(user: Express.Request['user'], perm: string): boolean {
+  if (!user) return false;
+  const role = user.role as unknown as { permissions?: string[] } | undefined;
+  const perms = [...(role?.permissions ?? []), ...(user.customPermissions ?? [])];
+  return perms.includes('*') || perms.includes(perm);
+}
+
+const EMPLOYEE_ID = Symbol('currentEmployeeId');
+type WithCachedEmployee = Request & {
+  [EMPLOYEE_ID]?: Promise<Types.ObjectId | null>;
+};
+
+/**
+ * The caller's Employee `_id`, or `null` when the user has no employee record
+ * (or the request is unauthenticated). Looked up once per request — the
+ * promise is cached on `req`, so concurrent callers share the one query.
+ */
+export function currentEmployeeId(req: Request): Promise<Types.ObjectId | null> {
+  const r = req as WithCachedEmployee;
+  if (!r[EMPLOYEE_ID]) {
+    const userId = req.user?._id;
+    r[EMPLOYEE_ID] = userId
+      ? Employee.findOne({ userId })
+          .select('_id')
+          .lean()
+          .exec()
+          .then((emp) => (emp ? (emp._id as Types.ObjectId) : null))
+      : Promise.resolve(null);
+  }
+  return r[EMPLOYEE_ID];
+}
+
+/** Hex id of an owner field: an ObjectId, a string id, or a populated document. */
+function idOf(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Types.ObjectId) return value.toHexString();
+  if (typeof value === 'object' && '_id' in value) {
+    const inner = (value as { _id: unknown })._id;
+    return inner === value ? String(value) : idOf(inner);
+  }
+  return String(value);
+}
+
+/** True when `ownerEmployeeId` is the caller's own employee record. */
+async function isOwnRecord(req: Request, ownerEmployeeId: unknown): Promise<boolean> {
+  const owner = idOf(ownerEmployeeId);
+  if (!owner) return false;
+  const own = await currentEmployeeId(req);
+  return own !== null && own.toHexString() === owner;
+}
+
+/**
+ * Allow the record's owner, or anyone holding `perm`; otherwise 403.
+ * A caller with no employee record is never the owner.
+ */
+export async function assertOwnOrPermission(
+  req: Request,
+  ownerEmployeeId: unknown,
+  perm: string,
+): Promise<void> {
+  if (hasPermission(req.user, perm)) return;
+  if (await isOwnRecord(req, ownerEmployeeId)) return;
+  throw new ForbiddenError('You can only access your own records');
+}
+
+/**
+ * Approvers decide other people's requests, never their own: 403
+ * `SELF_APPROVAL` when `ownerEmployeeId` is the caller's employee record.
+ */
+export async function assertNotSelfApproval(
+  req: Request,
+  ownerEmployeeId: unknown,
+  message: string,
+): Promise<void> {
+  if (await isOwnRecord(req, ownerEmployeeId)) {
+    throw new AppError(message, 403, 'SELF_APPROVAL');
+  }
+}

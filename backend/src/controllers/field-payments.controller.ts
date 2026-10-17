@@ -3,10 +3,13 @@ import { z } from 'zod';
 import { PaymentCollection } from '../models/payment-collection.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { Client } from '../models/client.model.js';
-import { Employee } from '../models/employee.model.js';
 import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+
+/** Field managers see every rep's collections; reps only their own. */
+const MANAGE = 'field-sales.manage';
 
 export const createPaymentSchema = z.object({
   clientId: z.string().min(1),
@@ -34,13 +37,6 @@ export const listQuerySchema = z.object({
   sort: z.string().optional(),
 });
 
-async function resolveEmployeeId(): Promise<string | null> {
-  const userId = getUserId();
-  if (!userId) return null;
-  const emp = await Employee.findOne({ userId }).select('_id').exec();
-  return emp ? String(emp._id) : null;
-}
-
 async function nextReceiptNumber(): Promise<string> {
   const last = await PaymentCollection.findOne({})
     .sort({ createdAt: -1 })
@@ -60,6 +56,8 @@ export async function listPayments(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
   if (q.employeeId) filter.employeeId = q.employeeId;
+  // Reps only ever see their own (`null` — no employee record — matches nothing).
+  if (!hasPermission(req.user, MANAGE)) filter.employeeId = await currentEmployeeId(req);
   if (q.clientId) filter.clientId = q.clientId;
   if (q.method) filter.method = q.method;
   if (q.status) filter.status = q.status;
@@ -80,8 +78,8 @@ export async function listPayments(req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
-export async function myPayments(_req: Request, res: Response): Promise<void> {
-  const empId = await resolveEmployeeId();
+export async function myPayments(req: Request, res: Response): Promise<void> {
+  const empId = await currentEmployeeId(req);
   if (!empId) throw new ValidationAppError('Employee profile not found');
   const docs = await PaymentCollection.find({ employeeId: empId })
     .populate('clientId', 'name')
@@ -97,16 +95,18 @@ export async function getPayment(req: Request, res: Response): Promise<void> {
     .populate('orderId', 'orderNumber totalAmount')
     .exec();
   if (!doc) throw new NotFoundError('Payment not found');
+  await assertOwnOrPermission(req, doc.employeeId, MANAGE);
   res.json({ success: true, data: doc });
 }
 
 export async function createPayment(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createPaymentSchema>;
-  let employeeId = body.employeeId;
+  // Only a manager may record a collection against another rep.
+  let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
   if (!employeeId) {
-    const resolved = await resolveEmployeeId();
-    if (!resolved) throw new ValidationAppError('employeeId required');
-    employeeId = resolved;
+    const own = await currentEmployeeId(req);
+    if (!own) throw new ValidationAppError('employeeId required');
+    employeeId = String(own);
   }
   const receiptNumber = await nextReceiptNumber();
   const doc = await PaymentCollection.create({
@@ -177,13 +177,16 @@ export async function dailyReport(req: Request, res: Response): Promise<void> {
   start.setHours(0, 0, 0, 0);
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
+  const match: Record<string, unknown> = { collectedAt: { $gte: start, $lte: end } };
+  // A rep's report covers their own collections only.
+  if (!hasPermission(req.user, MANAGE)) match.employeeId = await currentEmployeeId(req);
   const [byMethod, totals] = await Promise.all([
     PaymentCollection.aggregate([
-      { $match: { collectedAt: { $gte: start, $lte: end } } },
+      { $match: match },
       { $group: { _id: '$method', count: { $sum: 1 }, total: { $sum: '$amount' } } },
     ]),
     PaymentCollection.aggregate([
-      { $match: { collectedAt: { $gte: start, $lte: end } } },
+      { $match: match },
       { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
     ]),
   ]);

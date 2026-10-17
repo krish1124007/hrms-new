@@ -18,6 +18,7 @@ import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.serv
 import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { currentEmployeeId, hasPermission } from '../lib/access.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
 
@@ -822,13 +823,15 @@ export const monthlyQuerySchema = z.object({
 
 export async function monthlyAttendance(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof monthlyQuerySchema>;
+  // `?employeeId=` is for HR looking at someone's month; everyone else always
+  // gets their own, whatever they pass.
   let employeeId: Types.ObjectId;
-  if (q.employeeId) {
+  if (q.employeeId && hasPermission(req.user, 'attendance.view')) {
     employeeId = new Types.ObjectId(q.employeeId);
   } else {
-    const emp = await getCurrentEmployee();
-    if (!emp) throw new ForbiddenError('No employee profile found for current user');
-    employeeId = emp.id;
+    const own = await currentEmployeeId(req);
+    if (!own) throw new ForbiddenError('No employee profile found for current user');
+    employeeId = own;
   }
   const from = new Date(q.year, q.month - 1, 1);
   const to = new Date(q.year, q.month, 0, 23, 59, 59);

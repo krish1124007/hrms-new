@@ -3,7 +3,14 @@ import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import { HrPolicy } from '../models/hr-policy.model.js';
 import { Employee } from '../models/employee.model.js';
-import { ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
+import {
+  AppError,
+  ConflictError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationAppError,
+} from '../lib/errors.js';
+import { currentEmployeeId } from '../lib/access.js';
 import { audit } from '../services/audit.service.js';
 import { saveFile, deleteFile } from '../lib/local-storage.js';
 
@@ -73,7 +80,9 @@ export const publishSchema = z.object({
 });
 
 export const acknowledgeSchema = z.object({
-  employee: objectId,
+  // Accepted for backwards compatibility but ignored: an acknowledgement is
+  // always recorded for the caller's own employee record.
+  employee: objectId.optional(),
   comment: z.string().max(1000).optional(),
 });
 
@@ -347,6 +356,10 @@ export async function remove(req: Request, res: Response): Promise<void> {
 /** POST /api/v1/hr-policies/:id/acknowledge */
 export async function acknowledge(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof acknowledgeSchema>;
+  const employee = await currentEmployeeId(req);
+  if (!employee) {
+    throw new AppError('No employee profile found for current user', 404, 'NO_EMPLOYEE_PROFILE');
+  }
   const policy = await HrPolicy.findById(String(req.params.id)).exec();
   if (!policy) throw new NotFoundError('Policy not found');
   if (policy.status !== 'published') {
@@ -356,11 +369,10 @@ export async function acknowledge(req: Request, res: Response): Promise<void> {
   // Replace the employee's previous acknowledgement (so we always reflect
   // the latest version they saw, rather than keeping a row per old version).
   policy.acknowledgements = policy.acknowledgements.filter(
-    (a) => String(a.employee) !== body.employee,
+    (a) => !employee.equals(a.employee),
   );
   policy.acknowledgements.push({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    employee: body.employee as any,
+    employee,
     versionNumber: policy.currentVersion,
     acknowledgedAt: new Date(),
     comment: body.comment,

@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from '../models/index.js';
 import { NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
+import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
@@ -25,6 +26,8 @@ async function getCurrentEmployee(): Promise<typeof Employee.prototype | null> {
   if (!userId) return null;
   return Employee.findOne({ userId: new Types.ObjectId(userId) }).exec();
 }
+
+const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
 
 /**
  * Compute working days between startDate..endDate inclusive, excluding
@@ -409,14 +412,18 @@ export async function leaveCalendar(req: Request, res: Response): Promise<void> 
 export async function applyLeave(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createLeaveRequestSchema>;
 
-  // Resolve employee
+  // Resolve employee — the caller's own, unless a `leaves.update` holder
+  // (HR) is applying on someone else's behalf.
+  const me = await currentEmployeeId(req);
   let employeeId: Types.ObjectId;
-  if (body.employeeId) {
+  if (body.employeeId && !(me && me.equals(body.employeeId))) {
+    if (!hasPermission(req.user, 'leaves.update')) {
+      throw new ForbiddenError('You can only apply for your own leave');
+    }
     employeeId = new Types.ObjectId(body.employeeId);
   } else {
-    const me = await getCurrentEmployee();
     if (!me) throw new NotFoundError('Employee profile not found');
-    employeeId = me._id as Types.ObjectId;
+    employeeId = me;
   }
 
   // Validate dates
@@ -526,6 +533,7 @@ export async function getLeaveRequest(req: Request, res: Response): Promise<void
 export async function approveLeaveRequest(req: Request, res: Response): Promise<void> {
   const doc = await LeaveRequest.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Leave request not found');
+  await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a ${doc.status} request`);
   }
@@ -551,6 +559,7 @@ export async function rejectLeaveRequest(req: Request, res: Response): Promise<v
   const body = req.body as z.infer<typeof rejectLeaveSchema>;
   const doc = await LeaveRequest.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Leave request not found');
+  await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a ${doc.status} request`);
   }
