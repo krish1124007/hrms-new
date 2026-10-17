@@ -22,8 +22,10 @@ import { createApp } from '../app.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
 import { sendMail } from '../services/email.service.js';
 import { invalidateWeekOffRule } from '../services/week-off.service.js';
+import { logger } from '../config/logger.js';
 import { Attendance } from '../models/attendance.model.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
+import { Holiday } from '../models/holiday.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
@@ -399,5 +401,146 @@ describe('notifications', () => {
     expect(mails).toHaveLength(1);
     expect(mails[0]!.to).toBe(emp.user.email);
     expect(mails[0]!.html).toContain('Quarter-end close');
+  });
+});
+
+describe('races and partial failures', () => {
+  async function pending(type: ILeaveType, startDate: string, endDate: string, days: number) {
+    return LeaveRequest.create({
+      employeeId: emp.employee._id,
+      leaveTypeId: type._id,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      days,
+      reason: 'Family function',
+      status: 'pending',
+    });
+  }
+
+  it('two concurrent approvals that together overdraw the balance: exactly one wins', async () => {
+    const type = await leaveType({ daysAllowed: 3 });
+    await LeaveBalance.create({ employeeId: emp.employee._id, leaveTypeId: type._id, year: 2026, allocated: 3 });
+    const a = await pending(type, '2026-10-19', '2026-10-20', 2);
+    const b = await pending(type, '2026-10-21', '2026-10-22', 2);
+
+    const [resA, resB] = await Promise.all([approve(String(a._id)), approve(String(b._id))]);
+
+    expect([resA.status, resB.status].sort()).toEqual([200, 400]);
+    const [winner, loser] = resA.status === 200 ? [a, b] : [b, a];
+    expect((resA.status === 400 ? resA : resB).body.error.code).toBe('INSUFFICIENT_BALANCE');
+    expect(await usedOf(type)).toBe(2);
+    expect(await Attendance.countDocuments({ leaveRequestId: winner._id })).toBe(2);
+    expect(await Attendance.countDocuments({ leaveRequestId: loser._id })).toBe(0);
+    expect((await LeaveRequest.findById(loser._id).lean())!.status).toBe('pending');
+  });
+
+  it('two concurrent deletes of an approved leave refund it once', async () => {
+    const type = await leaveType();
+    const id = await appliedAndApproved(type, '2026-10-23', '2026-10-27');
+    const other = await appliedAndApproved(type, '2026-10-19', '2026-10-20');
+    expect(await usedOf(type)).toBe(5);
+
+    const results = await Promise.all([
+      request(app).delete(`/api/v1/leaves/requests/${id}`).set(auth(hr.token)),
+      request(app).delete(`/api/v1/leaves/requests/${id}`).set(auth(hr.token)),
+    ]);
+
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses[0]).toBe(200);
+    expect([400, 404]).toContain(statuses[1]);
+    expect(await usedOf(type)).toBe(2);
+    expect(await Attendance.countDocuments({ leaveRequestId: id })).toBe(0);
+    expect(await Attendance.countDocuments({ leaveRequestId: other })).toBe(2);
+  });
+
+  it('a cancel whose release fails leaves the request approved, and a retry completes it', async () => {
+    const type = await leaveType();
+    const id = await appliedAndApproved(type, '2026-10-23', '2026-10-27');
+    const refund = vi
+      .spyOn(LeaveBalance, 'updateOne')
+      .mockImplementationOnce((() => ({ exec: () => Promise.reject(new Error('db unavailable')) })) as never);
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    try {
+      const failed = await request(app).patch(`/api/v1/leaves/requests/${id}/cancel`).set(auth(emp.token));
+      expect(failed.status).toBe(500);
+      expect((await LeaveRequest.findById(id).lean())!.status).toBe('approved');
+      expect(await usedOf(type)).toBe(3);
+    } finally {
+      refund.mockRestore();
+      logged.mockRestore();
+    }
+
+    const retry = await request(app).patch(`/api/v1/leaves/requests/${id}/cancel`).set(auth(emp.token));
+    expect(retry.status).toBe(200);
+    expect(retry.body.data.status).toBe('cancelled');
+    expect(await usedOf(type)).toBe(0);
+    expect(await Attendance.countDocuments({ employeeId: emp.employee._id })).toBe(0);
+  });
+
+  it('a cancel landing while approval is stamping: approve → 400 and no rows stay tagged to the request', async () => {
+    const type = await leaveType();
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
+    const id = applied.body.data._id as string;
+    const realCreate = Attendance.create.bind(Attendance) as (...args: unknown[]) => Promise<unknown>;
+    const create = vi.spyOn(Attendance, 'create').mockImplementationOnce((async (...args: unknown[]) => {
+      // The employee withdraws between the approval's claim and its first row.
+      await LeaveRequest.updateOne({ _id: id }, { $set: { status: 'cancelled' } });
+      return realCreate(...args);
+    }) as never);
+
+    try {
+      const res = await approve(id);
+      expect(res.status).toBe(400);
+    } finally {
+      create.mockRestore();
+    }
+    expect(await Attendance.countDocuments({ leaveRequestId: id })).toBe(0);
+    expect(await Attendance.countDocuments({ employeeId: emp.employee._id })).toBe(0);
+  });
+
+  it('when stamping fails and so does the rollback, the stamping error is what surfaces; both are logged', async () => {
+    const type = await leaveType();
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
+    const id = applied.body.data._id as string;
+    const create = vi.spyOn(Attendance, 'create').mockRejectedValueOnce(new Error('stamp failed'));
+    const revert = vi
+      .spyOn(LeaveRequest, 'updateOne')
+      .mockImplementationOnce((() => ({ exec: () => Promise.reject(new Error('revert failed')) })) as never);
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    try {
+      const res = await approve(id);
+
+      expect(res.status).toBe(500);
+      const logs = logged.mock.calls.map(([obj]) => obj as { err?: Error; cause?: Error });
+      expect(logs.some((l) => l.err?.message === 'revert failed' && l.cause?.message === 'stamp failed')).toBe(true);
+      // The request's own error handler saw the original error, not the rollback's.
+      expect(logs.some((l) => l.err?.message === 'stamp failed')).toBe(true);
+    } finally {
+      create.mockRestore();
+      revert.mockRestore();
+      logged.mockRestore();
+    }
+  });
+
+  it('warns (and still approves) when the days stamped differ from the days charged', async () => {
+    const type = await leaveType();
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
+    // A holiday declared after the application was counted.
+    await Holiday.create({ name: 'Declared later', date: new Date('2026-10-26'), type: 'public' });
+    const warned = vi.spyOn(logger, 'warn');
+
+    try {
+      const res = await approve(applied.body.data._id);
+
+      expect(res.status).toBe(200);
+      expect(warned).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: applied.body.data._id, expected: 3, stamped: 2 }),
+        expect.any(String),
+      );
+    } finally {
+      warned.mockRestore();
+    }
   });
 });

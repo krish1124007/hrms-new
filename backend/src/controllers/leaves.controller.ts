@@ -67,7 +67,7 @@ export function validateLeaveTypeRules(
     ILeaveType,
     'name' | 'isActive' | 'applicableGender' | 'probationAllowed' | 'halfDayAllowed' | 'attachmentRequired'
   >,
-  employee: Pick<IEmployee, 'gender' | 'probationEndDate' | 'confirmationDate'>,
+  employee: Pick<IEmployee, 'gender' | 'probationEndDate' | 'confirmationDate' | 'joiningDate'>,
   body: { isHalfDay?: boolean; attachments?: unknown[] },
   today: Date = new Date(),
 ): void {
@@ -628,6 +628,34 @@ function decidedNow(): { approvedBy?: Types.ObjectId; approvedAt: Date } {
 }
 
 /**
+ * Undo an approval whose attendance stamping failed: take the rows back, and
+ * return the request to `pending` with its days refunded. Only the side that
+ * moves the request back refunds — a cancel that won meanwhile already did.
+ * A rollback step that fails is logged with the stamping error that caused
+ * it; the caller rethrows that original error.
+ */
+async function rollBackApproval(approved: ILeaveRequest, cause: unknown): Promise<void> {
+  const requestId = String(approved._id);
+  try {
+    await unstampLeaveDays(approved);
+  } catch (err) {
+    logger.error({ err, cause, requestId }, 'leave approve rollback: unstamping failed');
+  }
+  try {
+    const reverted = await LeaveRequest.updateOne(
+      { _id: approved._id, status: 'approved' },
+      { $set: { status: 'pending' }, $unset: { approvedBy: 1, approvedAt: 1 } },
+    ).exec();
+    if (reverted.modifiedCount > 0) await refundLeaveBalance(approved);
+  } catch (err) {
+    logger.error(
+      { err, cause, requestId },
+      'leave approve rollback: reverting to pending / refunding failed — the request may stay approved and charged',
+    );
+  }
+}
+
+/**
  * Approve: charge the balance, then the request, then its attendance — each
  * step undone if a later one fails, since there is no transaction to roll
  * back.
@@ -661,16 +689,29 @@ export async function approveLeaveRequest(req: Request, res: Response): Promise<
   }
 
   // 3. The attendance payroll reads.
+  let stamped: number;
   try {
-    await stampLeaveDays(approved, leaveType, employee);
+    stamped = await stampLeaveDays(approved, leaveType, employee);
   } catch (err) {
-    await unstampLeaveDays(approved).catch(() => 0);
-    await refundLeaveBalance(approved);
-    await LeaveRequest.updateOne(
-      { _id: approved._id, status: 'approved' },
-      { $set: { status: 'pending' }, $unset: { approvedBy: 1, approvedAt: 1 } },
-    ).exec();
+    await rollBackApproval(approved, err);
     throw err;
+  }
+
+  // A cancel or delete may have landed while the rows were being written,
+  // and its unstamping may have run before ours finished: take back anything
+  // still tagged to the request. (Its refund is the canceller's to make.)
+  const current = await LeaveRequest.findById(approved._id).select('status').lean().exec();
+  if (current?.status !== 'approved') {
+    await unstampLeaveDays(approved);
+    throw new ValidationAppError(DECIDED_MEANWHILE);
+  }
+  // The calendar or shift changed since the request was counted.
+  const expected = Math.ceil(approved.days);
+  if (stamped !== expected) {
+    logger.warn(
+      { requestId: String(approved._id), expected, stamped },
+      'leave approve: stamped days differ from the days charged',
+    );
   }
 
   void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'approved' } });
@@ -700,6 +741,44 @@ export async function rejectLeaveRequest(req: Request, res: Response): Promise<v
 }
 
 /**
+ * Move a request `from` its current status to `cancelled` — a conditional
+ * write, so of two concurrent cancels/deletes only one gets past here — and,
+ * if it was approved, release its attendance rows and charged days. If the
+ * release fails the request goes back to `approved`, so the cancel can simply
+ * be retried (releasing is idempotent until its last step, the refund).
+ */
+async function cancelAndRelease(
+  doc: ILeaveRequest,
+  set: { cancelReason?: string } = {},
+): Promise<ILeaveRequest> {
+  const from = doc.status;
+  const cancelled = await LeaveRequest.findOneAndUpdate(
+    { _id: doc._id, status: from },
+    { $set: { status: 'cancelled', ...set } },
+    { new: true },
+  ).exec();
+  if (!cancelled) throw new ValidationAppError(DECIDED_MEANWHILE);
+  if (from !== 'approved') return cancelled;
+  try {
+    await releaseApprovedLeave(doc);
+  } catch (err) {
+    try {
+      await LeaveRequest.updateOne(
+        { _id: doc._id, status: 'cancelled' },
+        { $set: { status: 'approved' }, $unset: { cancelReason: 1 } },
+      ).exec();
+    } catch (revertErr) {
+      logger.error(
+        { err: revertErr, cause: err, requestId: String(doc._id) },
+        'leave cancel: release failed and the request could not be put back to approved',
+      );
+    }
+    throw err;
+  }
+  return cancelled;
+}
+
+/**
  * Cancel. The owner may withdraw a pending request at any time, and an
  * approved one only until the day it starts — taken leave is not refundable
  * on the employee's say-so. HR (`leaves.update`) may cancel anyone else's
@@ -725,13 +804,7 @@ export async function cancelLeaveRequest(req: Request, res: Response): Promise<v
     throw new ValidationAppError("A reason (at least 3 characters) is required to cancel someone else's leave");
   }
 
-  const cancelled = await LeaveRequest.findOneAndUpdate(
-    { _id: doc._id, status: doc.status },
-    { $set: { status: 'cancelled', ...(body.reason ? { cancelReason: body.reason } : {}) } },
-    { new: true },
-  ).exec();
-  if (!cancelled) throw new ValidationAppError(DECIDED_MEANWHILE);
-  if (doc.status === 'approved') await releaseApprovedLeave(doc);
+  const cancelled = await cancelAndRelease(doc, body.reason ? { cancelReason: body.reason } : {});
 
   void audit({
     action: 'update',
@@ -747,7 +820,8 @@ export async function deleteLeaveRequest(req: Request, res: Response): Promise<v
   if (!doc) throw new NotFoundError('Leave request not found');
 
   // An approved request takes its attendance rows and charged days with it.
-  if (doc.status === 'approved') await releaseApprovedLeave(doc);
+  // Claiming it first means two concurrent deletes refund once.
+  if (doc.status === 'approved') await cancelAndRelease(doc);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (doc as any).softDelete();
