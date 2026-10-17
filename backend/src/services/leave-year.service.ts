@@ -22,8 +22,10 @@
  *     Balances are allocated lazily, so an employee who never applied for a
  *     type has no row for it: their previous-year allocation was never
  *     materialised, but it was theirs and entirely unused, so `remaining` is
- *     then `proRataAllocation(daysAllowed, joiningDate, year − 1)` (0 if they
- *     joined after that year). A row that exists always wins over that figure.
+ *     then `proRataAllocation(daysAllowed, from, year − 1)`, where `from` is
+ *     the later of their joining date and the leave type's creation date
+ *     (a type that did not exist yet allocated nothing; 0 if either is after
+ *     that year). A row that exists always wins over that figure.
  *     It is set only while `carried` is still 0, so it is applied once.
  *   • `openLeaveYear` is idempotent and safe to repeat — by the 1 Jan job, by
  *     HR from the UI, or to finish a run that failed part way.
@@ -50,7 +52,7 @@ export interface AllocatableEmployee {
   joiningDate: Date;
 }
 
-type AllocatableType = Pick<ILeaveType, '_id' | 'daysAllowed' | 'carryForward'>;
+type AllocatableType = Pick<ILeaveType, '_id' | 'daysAllowed' | 'carryForward'> & { createdAt?: Date };
 
 export interface OpenLeaveYearCounts {
   /** Balance rows created. */
@@ -146,6 +148,18 @@ export async function allocateForEmployee(employee: AllocatableEmployee, year: n
 }
 
 /**
+ * What `employee` was due of `type` in `year` when no balance row was ever
+ * made: the pro-rated allowance from the later of their joining and the type
+ * being created, so a type that did not exist yet (or was created in or
+ * after `year`) allocated nothing.
+ */
+function impliedAllocation(type: AllocatableType, employee: AllocatableEmployee, year: number): number {
+  const createdAt = type.createdAt;
+  const from = createdAt && createdAt > employee.joiningDate ? createdAt : employee.joiningDate;
+  return proRataAllocation(type.daysAllowed ?? 0, from, year);
+}
+
+/**
  * Carry the previous year's remainder into `year` for the given
  * carry-forward types, adding to `counts.carried` for each balance that
  * receives one.
@@ -171,7 +185,7 @@ async function carryForward(
     // with the first application), so all of what they were due is left.
     const remaining = before
       ? (before.allocated ?? 0) + (before.carried ?? 0) + (before.adjusted ?? 0) - (before.used ?? 0)
-      : proRataAllocation(type.daysAllowed ?? 0, employee.joiningDate, year - 1);
+      : impliedAllocation(type, employee, year - 1);
     const amount = Math.min(Math.max(remaining, 0), type.carryForward?.maxDays ?? 0);
     if (!(amount > 0)) continue;
     // Only while nothing has been carried yet, so a re-run leaves it be.

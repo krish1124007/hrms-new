@@ -36,6 +36,9 @@ async function makeType(fields: Partial<Record<keyof ILeaveType, unknown>> = {})
     name: 'Casual Leave',
     code: `T${new Types.ObjectId().toHexString().slice(-6)}`,
     daysAllowed: 12,
+    // Long-standing unless a test says otherwise: a type created "today" only
+    // allocated from this month, which matters to the implied carry-forward.
+    createdAt: new Date('2025-01-01T00:00:00.000Z'),
     ...fields,
   });
 }
@@ -261,6 +264,64 @@ describe('openLeaveYear', () => {
       await openLeaveYear(2027);
 
       expect(await balanceOf(joiner, el, 2027)).toMatchObject({ allocated: 14, carried: 0 });
+    });
+
+    describe('for a leave type created recently', () => {
+      // `createdAt` is immutable through Mongoose, so write it with the driver.
+      const createdOn = (type: ILeaveType, iso: string) =>
+        LeaveType.collection.updateOne({ _id: type._id }, { $set: { createdAt: new Date(iso) } });
+
+      it('counts the previous-year allocation only from the month the type was created', async () => {
+        const { el, alice } = await company();
+        // Created 1 Nov 2026: two months (Nov, Dec) of a 12-day allowance existed → 2 days.
+        await LeaveType.updateOne({ _id: el._id }, { $set: { daysAllowed: 12, 'carryForward.maxDays': 5 } });
+        await createdOn(el, '2026-11-01T00:00:00.000Z');
+
+        await openLeaveYear(2027);
+
+        expect((await balanceOf(alice, el, 2027))?.carried).toBe(2);
+      });
+
+      it('uses the later of joining and creation: a joiner after the type was created is pro-rated from joining', async () => {
+        const { el } = await company();
+        await LeaveType.updateOne({ _id: el._id }, { $set: { daysAllowed: 12 } });
+        await createdOn(el, '2026-03-01T00:00:00.000Z');
+        // Joined December 2026, after the type existed: 1/12 of 12 = 1 day.
+        const joiner = await makeEmployee({ joiningDate: new Date('2026-12-10') });
+
+        await openLeaveYear(2027);
+
+        expect((await balanceOf(joiner, el, 2027))?.carried).toBe(1);
+      });
+
+      it('carries nothing from a type created in the year being opened', async () => {
+        const { el, alice } = await company();
+        await createdOn(el, '2027-01-05T00:00:00.000Z');
+
+        await openLeaveYear(2027);
+
+        expect(await balanceOf(alice, el, 2027)).toMatchObject({ allocated: 15, carried: 0 });
+      });
+
+      it('reads "created in the new year" in the business timezone', async () => {
+        const { el, alice } = await company();
+        // 00:30 IST on 1 Jan 2027 — still 31 Dec 2026 in UTC.
+        await createdOn(el, '2026-12-31T19:00:00.000Z');
+
+        await openLeaveYear(2027);
+
+        expect((await balanceOf(alice, el, 2027))?.carried).toBe(0);
+      });
+
+      it('does not override a previous-year row, however new the type', async () => {
+        const { el, alice } = await company();
+        await createdOn(el, '2027-01-05T00:00:00.000Z');
+        await seedBalance(alice, el, 2026, { allocated: 15, used: 10 });
+
+        await openLeaveYear(2027);
+
+        expect((await balanceOf(alice, el, 2027))?.carried).toBe(5);
+      });
     });
 
     it('is overruled by a previous-year row that exists, whatever it says', async () => {
