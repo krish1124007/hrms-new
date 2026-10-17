@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createApp } from '../app.js';
 import { User } from '../models/user.model.js';
 import { sendMail } from '../services/email.service.js';
-import { createRole, createUser } from '../test/factories.js';
+import { createRole, createUser, DEFAULT_TEST_PASSWORD } from '../test/factories.js';
 
 vi.mock('../services/email.service.js', () => ({
   sendMail: vi.fn(async () => true),
@@ -226,5 +226,94 @@ describe('forgot-password link', () => {
 
     const reset = await request(app).post('/api/v1/auth/reset-password').send({ token, password: STRONG });
     expect(reset.status).toBe(200);
+  });
+});
+
+describe('invited users who never used their invitation link', () => {
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 200 }));
+  });
+
+  it('can activate through "Forgot password": the reset token proves the mailbox', async () => {
+    const { email } = await inviteEmployee('stranded@test.local');
+    const app = createApp();
+
+    const forgot = await request(app).post('/api/v1/auth/forgot-password').send({ email });
+    expect(forgot.status).toBe(200);
+    const token = new URL(lastMailedLink()).searchParams.get('token');
+
+    const reset = await request(app).post('/api/v1/auth/reset-password').send({ token, password: STRONG });
+    expect(reset.status).toBe(200);
+
+    const stored = await User.findOne({ email }).select('+emailVerificationToken').lean();
+    expect(stored?.status).toBe('active');
+    expect(stored?.emailVerified).toBe(true);
+    expect(stored?.emailVerificationToken).toBeUndefined();
+
+    const login = await request(app).post('/api/v1/auth/login').send({ email, password: STRONG });
+    expect(login.status).toBe(200);
+    expect(login.body.data.accessToken).toEqual(expect.any(String));
+  });
+
+  it('can sign in after an admin sets their password', async () => {
+    const { email } = await inviteEmployee('adminset@test.local');
+    const app = createApp();
+    const invited = await User.findOne({ email }).orFail();
+    const { token: adminToken } = await createUser({ roleSlug: 'admin' });
+
+    const set = await request(app)
+      .patch(`/api/v1/users/${invited._id}/password`)
+      .set(auth(adminToken))
+      .send({ password: STRONG });
+    expect(set.status).toBe(200);
+
+    const stored = await User.findOne({ email }).select('+emailVerificationToken').lean();
+    expect(stored?.status).toBe('active');
+    expect(stored?.emailVerified).toBe(true);
+    expect(stored?.emailVerificationToken).toBeUndefined();
+
+    const login = await request(app).post('/api/v1/auth/login').send({ email, password: STRONG });
+    expect(login.status).toBe(200);
+  });
+
+  it('a password reset leaves an inactive (deactivated) user inactive', async () => {
+    const { user } = await createUser({ roleSlug: 'employee', email: 'gone@test.local' });
+    await User.updateOne({ _id: user._id }, { $set: { status: 'inactive' } });
+    const app = createApp();
+
+    await request(app).post('/api/v1/auth/forgot-password').send({ email: user.email }).expect(200);
+    const token = new URL(lastMailedLink()).searchParams.get('token');
+    await request(app).post('/api/v1/auth/reset-password').send({ token, password: STRONG }).expect(200);
+
+    expect((await User.findById(user._id).lean())?.status).toBe('inactive');
+    const login = await request(app).post('/api/v1/auth/login').send({ email: user.email, password: STRONG });
+    expect(login.status).toBe(403);
+  });
+});
+
+describe('GET /auth/me', () => {
+  it('returns the role with its current permissions and the user’s customPermissions', async () => {
+    const { user, token } = await createUser({ roleSlug: 'employee' });
+    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['assets.view'] } });
+
+    const res = await request(createApp()).get('/api/v1/auth/me').set(auth(token));
+    expect(res.status).toBe(200);
+    const me = res.body.data.user;
+    expect(me.role).toMatchObject({ slug: 'employee' });
+    expect(me.role.permissions).toEqual(expect.arrayContaining(['leaves.view', 'expenses.create']));
+    expect(me.customPermissions).toEqual(['assets.view']);
+    expect(JSON.stringify(res.body)).not.toMatch(/password|emailVerificationToken|passwordReset/i);
+  });
+
+  it('login returns customPermissions too, so the SPA starts with the full set', async () => {
+    const { user } = await createUser({ roleSlug: 'employee', email: 'perms@test.local' });
+    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['loans.view'] } });
+
+    const res = await request(createApp())
+      .post('/api/v1/auth/login')
+      .send({ email: user.email, password: DEFAULT_TEST_PASSWORD });
+    expect(res.status).toBe(200);
+    expect(res.body.data.user.customPermissions).toEqual(['loans.view']);
+    expect(res.body.data.user.role.permissions).toEqual(expect.arrayContaining(['leaves.view']));
   });
 });

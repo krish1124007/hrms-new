@@ -11,13 +11,13 @@ export declare const updateDocumentSchema: z.ZodObject<{
     tags?: string[] | undefined;
     category?: string | undefined;
     folder?: string | undefined;
-    accessLevel?: "department" | "private" | "all" | undefined;
+    accessLevel?: "all" | "department" | "private" | undefined;
 }, {
     name?: string | undefined;
     tags?: string[] | undefined;
     category?: string | undefined;
     folder?: string | undefined;
-    accessLevel?: "department" | "private" | "all" | undefined;
+    accessLevel?: "all" | "department" | "private" | undefined;
 }>;
 export declare const listDocumentsQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;

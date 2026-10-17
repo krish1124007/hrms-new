@@ -20,10 +20,10 @@ export declare const createVisitSchema: z.ZodObject<{
     clientId: string;
     status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     employeeId?: string | undefined;
-    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
-    isPlanned?: boolean | undefined;
     notes?: string | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     meetingWith?: string | undefined;
+    isPlanned?: boolean | undefined;
 }>;
 export declare const updateVisitSchema: z.ZodObject<{
     purpose: z.ZodOptional<z.ZodEnum<["sales", "service", "collection", "followup", "other"]>>;
@@ -36,16 +36,16 @@ export declare const updateVisitSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
-    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     notes?: string | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     nextFollowUpDate?: Date | undefined;
     photos?: string[] | undefined;
     productsDiscussed?: string[] | undefined;
 }, {
     status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
-    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     notes?: string | undefined;
+    purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     nextFollowUpDate?: Date | undefined;
     photos?: string[] | undefined;
     productsDiscussed?: string[] | undefined;
@@ -72,35 +72,35 @@ export declare const checkInSchema: z.ZodObject<{
         address: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     }, {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     }>;
     isPlanned: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     clientId: string;
     checkIn: {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     };
     purpose: "collection" | "service" | "other" | "sales" | "followup";
     isPlanned: boolean;
@@ -108,13 +108,13 @@ export declare const checkInSchema: z.ZodObject<{
     clientId: string;
     checkIn: {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     };
     purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
     isPlanned?: boolean | undefined;
@@ -139,22 +139,22 @@ export declare const checkOutSchema: z.ZodObject<{
         address: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     }, {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     }>;
     notes: z.ZodOptional<z.ZodString>;
     outcome: z.ZodOptional<z.ZodEnum<["positive", "negative", "neutral", "followup_required"]>>;
@@ -162,13 +162,13 @@ export declare const checkOutSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     checkOut: {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     };
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
     notes?: string | undefined;
@@ -176,13 +176,13 @@ export declare const checkOutSchema: z.ZodObject<{
 }, {
     checkOut: {
         address?: string | undefined;
+        time?: Date | undefined;
         location?: {
             lat: number;
             lng: number;
             accuracy?: number | undefined;
         } | undefined;
         photo?: string | undefined;
-        time?: Date | undefined;
     };
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
     notes?: string | undefined;

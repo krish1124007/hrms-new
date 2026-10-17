@@ -14,22 +14,22 @@ export declare const listAuditLogsQuerySchema: z.ZodObject<{
     page: number;
     limit: number;
     search?: string | undefined;
-    action?: "create" | "failure" | "update" | "delete" | "login" | "logout" | "export" | "import" | undefined;
+    action?: "create" | "delete" | "update" | "login" | "logout" | "export" | "import" | "failure" | undefined;
     userId?: string | undefined;
-    from?: string | undefined;
-    to?: string | undefined;
     entity?: string | undefined;
     entityId?: string | undefined;
+    from?: string | undefined;
+    to?: string | undefined;
 }, {
     page?: number | undefined;
     limit?: number | undefined;
     search?: string | undefined;
-    action?: "create" | "failure" | "update" | "delete" | "login" | "logout" | "export" | "import" | undefined;
+    action?: "create" | "delete" | "update" | "login" | "logout" | "export" | "import" | "failure" | undefined;
     userId?: string | undefined;
-    from?: string | undefined;
-    to?: string | undefined;
     entity?: string | undefined;
     entityId?: string | undefined;
+    from?: string | undefined;
+    to?: string | undefined;
 }>;
 export declare function listAuditLogs(req: Request, res: Response): Promise<void>;
 export declare function getAuditLog(req: Request, res: Response): Promise<void>;

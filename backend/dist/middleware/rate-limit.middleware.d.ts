@@ -1,8 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
 export declare const userRateLimit: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 /**
- * Strict rate limit for auth endpoints.
- * Blocks after 20 tries in 15 minutes per IP.
+ * Rate limit for auth endpoints: 100 tries in 15 minutes per IP. Per IP, not
+ * per person — a whole office behind one NAT address shares the budget, so it
+ * is sized for a morning of colleagues signing in. Password guessing against
+ * one account is stopped separately by the per email+IP lockout below.
  */
 export declare const authRateLimit: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 export declare function trackLoginFailure(email: string, ip: string): Promise<number>;

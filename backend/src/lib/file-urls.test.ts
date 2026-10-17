@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { signFileUrl, verifyFileSignature, storedFormOfSignedUrl } from './file-urls.js';
+import {
+  signFileUrl,
+  verifyFileSignature,
+  storedFormOfSignedUrl,
+  isStaleSignedUrl,
+} from './file-urls.js';
 
 /** Pull `{ key, exp, sig }` back out of a URL produced by signFileUrl. */
 function parts(signed: string): { key: string; exp: string; sig: string } {
@@ -64,15 +69,43 @@ describe('signFileUrl / verifyFileSignature', () => {
 });
 
 describe('storedFormOfSignedUrl', () => {
-  it('turns an authentic signed URL back into its /uploads/ stored form, even after expiry', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A link signed at T with a 60 s TTL, read back `minutesPastExpiry` after it expired. */
+  function signedThenAged(minutesPastExpiry: number): string {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     const signed = signFileUrl('/uploads/docs/my file.pdf', 60);
-    vi.useRealTimers(); // back to "now", long after the 60 s expiry
+    vi.setSystemTime(new Date(Date.parse('2026-01-01T00:01:00Z') + minutesPastExpiry * 60_000));
+    return signed;
+  }
 
+  it('turns an authentic signed URL back into its /uploads/ stored form within its lifetime', () => {
+    const signed = signFileUrl('/uploads/docs/my file.pdf');
+    expect(storedFormOfSignedUrl(signed)).toBe('/uploads/docs/my file.pdf');
+  });
+
+  it('still converts a link that expired less than an hour ago (form held open past the TTL)', () => {
+    const signed = signedThenAged(30);
     const { key, exp, sig } = parts(signed);
     expect(verifyFileSignature(key, exp, sig)).toBe(false);
     expect(storedFormOfSignedUrl(signed)).toBe('/uploads/docs/my file.pdf');
+  });
+
+  it('refuses a link that expired more than an hour ago (no resurrecting old links)', () => {
+    const signed = signedThenAged(120);
+    expect(storedFormOfSignedUrl(signed)).toBeNull();
+    expect(isStaleSignedUrl(signed)).toBe(true);
+  });
+
+  it('isStaleSignedUrl is false for live, in-grace, forged and unrelated strings', () => {
+    expect(isStaleSignedUrl(signFileUrl('/uploads/docs/a.pdf'))).toBe(false);
+    expect(isStaleSignedUrl(signedThenAged(30))).toBe(false);
+    const old = signedThenAged(120);
+    expect(isStaleSignedUrl(old.replace('my%20file.pdf', 'other.pdf'))).toBe(false);
+    expect(isStaleSignedUrl('plain text')).toBe(false);
   });
 
   it('returns null for forged, unsigned or unrelated strings', () => {

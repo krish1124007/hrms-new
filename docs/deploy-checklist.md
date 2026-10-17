@@ -14,7 +14,8 @@ the server's `git pull` only deploys what that branch contains.
 > contains a mail transport, or the explicit opt-out `ALLOW_NO_MAIL=true`. pm2 would then loop
 > restarting a process that never comes up, and the site would show 502s. Do section 3 first.
 
-Suggested order: **3 → 4 → 6 → 1 → 2 → 5 → 7 → 9** (8 only on a fresh install). The new API
+Suggested order: **3 → 4 → 6 → 1 → 2 → 5 → 7 → 9** (8 only on a fresh install). Section 7 includes
+SSH hardening; do its last step only after you have proved a key login works. The new API
 hands out signed `/api/v1/files/...` links, so `/uploads/` can be switched off in nginx (section 1)
 once the new code is running, not before.
 
@@ -74,11 +75,33 @@ cp /etc/nginx/sites-enabled/hrms /root/hrms.nginx.$(date +%F).bak
    `proxy_hide_header Strict-Transport-Security; proxy_hide_header X-Frame-Options;
    proxy_hide_header X-Content-Type-Options;` inside `location /api/v1/`.
 
-3. **Keep** `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in `location /api/v1/`.
-   The login rate limits, account lockout and the metrics guard all identify the caller from it
-   (the API trusts exactly one proxy hop). Do not remove or hard-code it. Keep
-   `proxy_pass http://127.0.0.1:4000;` as is: with `HOST=127.0.0.1` the API listens on IPv4
-   loopback only, so do not change it to `localhost`, which may resolve to `::1`.
+3. **The API location.** Make it a `^~` prefix match, so no regex `location` (a static-file rule
+   such as `location ~* \.(png|jpg|pdf)$`) can capture signed file links like
+   `/api/v1/files/documents/…/x.pdf` and answer 404 from disk instead of passing them to the API:
+
+   ```nginx
+   location ^~ /api/v1/ {
+       proxy_pass http://127.0.0.1:4000;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       # …keep the other proxy_set_header / proxy_* lines you already have
+   }
+   ```
+
+   **Ensure** the `X-Forwarded-For` line is present in that block:
+
+   ```bash
+   sudo nginx -T | grep -n X-Forwarded-For
+   ```
+
+   It must print `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` inside the
+   `/api/v1/` location (a server-level one counts only if that location sets no
+   `proxy_set_header` of its own — nginx does not merge them). Without it every request reaches
+   the API from nginx's own address, so all users share **one** IP and therefore one set of
+   limits: the sign-in rate limit (100 tries per 15 minutes per IP) runs out for everybody at
+   once, anyone can trigger the 15-minute lockout of someone else's account by mistyping its
+   password five times, and the metrics guard treats every proxied caller as local. The API
+   trusts exactly one proxy hop; do not hard-code the header. Keep `proxy_pass http://127.0.0.1:4000;` as is: with `HOST=127.0.0.1` the API
+   listens on IPv4 loopback only, so do not change it to `localhost`, which may resolve to `::1`.
 
 4. **Optional:** refuse source maps. Put it before any other regex `location` (the first matching
    regex wins):
@@ -181,6 +204,9 @@ pm2 restart all
   from custom roles and from users' `customPermissions`. No route ever checked those names, so
   removing them changes nobody's access. It never touches credentials or a user's role. It prints
   `Roles: N created, N refreshed; retired permissions stripped from N custom role(s) and N user(s)`.
+- **Roles — read before assigning Manager.** The seeded **Manager** role sees and approves
+  company-wide expenses, overtime and leave (not only its own team's). Assign it only to HR-level
+  staff until the manager-chain scoping phase ships. Nobody can approve their own request.
 - **Why `node dist/scripts/seed.js` and not `npm run seed`:** `npm run seed` runs through `tsx`, a
   dev dependency, and `npm ci --omit=dev` does not install it (`tsx: command not found`). The
   compiled script does the same thing. If you ran a plain `npm install` instead, `npm run seed` works too.
@@ -189,6 +215,10 @@ pm2 restart all
   created once. It is safe to repeat. Use the database name from `MONGODB_URI` if it is not `hrms`.
 - Check the log: `pm2 logs backend --lines 30 --nostream` should show
   `API listening on http://127.0.0.1:4000`. If it shows the "No mail transport" line, go back to section 3.
+- **`LOG_LEVEL`.** "API listening…" and the `email sent` lines used in section 9 are **info**-level.
+  `grep -E '^LOG_LEVEL' backend/.env` must print nothing (the default is `info`) or `LOG_LEVEL=info`.
+  With `warn` or `error` those lines are never written, so their absence proves nothing; errors
+  (such as `sendMail failed`) are logged at every level.
 
 > **If something fails**
 >
@@ -230,7 +260,7 @@ Treat any backup that was downloadable before this deploy as exposed. Delete the
 need, and decide whether the tokens they hold warrant rotating `JWT_SECRET` and `JWT_REFRESH_SECRET`
 (rotating signs everyone out).
 
-## 7. fail2ban
+## 7. fail2ban and SSH hardening
 
 ```bash
 apt install fail2ban && systemctl enable --now fail2ban
@@ -238,6 +268,48 @@ fail2ban-client status sshd
 ```
 
 On Ubuntu the `sshd` jail is on by default.
+
+**System updates.** Install pending security updates:
+
+```bash
+apt update && apt upgrade
+ls /var/run/reboot-required 2>/dev/null   # printed → a reboot is needed
+```
+
+Before rebooting, make sure pm2 comes back by itself: `pm2 save`, then
+`systemctl is-enabled pm2-root` must print `enabled` (if not, run `pm2 startup` and the command it
+prints). After the reboot re-run the checks in section 9.
+
+**Disable password logins over SSH — only after a key login is proven.** Doing this first would
+lock you out.
+
+1. From your own machine, prove a key login works (it must print `key-ok` without asking for a
+   password):
+
+   ```bash
+   ssh -o PreferredAuthentications=publickey -o PasswordAuthentication=no root@31.97.221.226 echo key-ok
+   ```
+
+   If it asks for a password or fails, set up a key first (`ssh-copy-id root@31.97.221.226`) and
+   repeat. Do not continue until it prints `key-ok`.
+
+2. On the server, put the settings in their own file. Ubuntu reads `/etc/ssh/sshd_config.d/*.conf`
+   first and the **first** value wins (cloud images ship a `50-cloud-init.conf` with
+   `PasswordAuthentication yes`), so the file name starts with `00-`:
+
+   ```bash
+   printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+     > /etc/ssh/sshd_config.d/00-hardening.conf
+   sshd -t && systemctl reload ssh
+   sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication)'
+   ```
+
+   Expect `permitrootlogin without-password` (the same as `prohibit-password`) and
+   `passwordauthentication no`.
+
+3. **Keep your current session open** and, from a second terminal, log in again with the key. Only
+   close the first session once the second one works. To undo:
+   `rm /etc/ssh/sshd_config.d/00-hardening.conf && systemctl reload ssh`.
 
 ## 8. First admin (fresh install only)
 
@@ -286,6 +358,14 @@ ufw status verbose                           # Status: active
 ls /var/www/hrms-new/backend/uploads/backups # empty (or missing)
 ```
 
+**Signed file links** (proves nginx passes `/api/v1/files/…` to the API): sign in, open a document
+on the Documents page (or a payslip on My Payslips) and let it open or download. In the browser's
+developer tools (Network tab) the request to `https://hrms.ddipl.org/api/v1/files/…` must answer
+**200**. A 404 means an nginx regex `location` captured it — apply the `^~ /api/v1/` change in
+section 1 item 3. A 401 `INVALID_FILE_SIGNATURE` on a link opened within a few minutes points at the
+server clock (`timedatectl` should show `System clock synchronized: yes`). Links are meant to expire
+after 10 minutes; an old link answering 401 is correct.
+
 **Invite e-mail round trip** (proves the mail transport and `PUBLIC_BASE_URL`): sign in as an
 admin, invite a user whose mailbox you control, and confirm the e-mail arrives with a link that starts
 with `https://hrms.ddipl.org/accept-invite?token=`. Open it, set a password, sign in. Optionally
@@ -295,6 +375,71 @@ no mail arrives: `pm2 logs backend --lines 100 --nostream | grep -i mail`, then 
 
 Also open the Backups page, create a backup and download it. The browser should save it under its
 real filename.
+
+**Account audit** (on the server; use the database name from `MONGODB_URI` if it is not `hrms`).
+
+1. Who can administer the system. List the active users holding the admin role, plus anyone given
+   the `*` wildcard another way:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     const admin = db.roles.findOne({ slug: "admin" })._id;
+     db.users.find(
+       { role: admin, status: "active", isDeleted: { $ne: true } },
+       { email: 1, firstName: 1, lastName: 1, lastLogin: 1 }
+     ).forEach(printjson);
+     print("-- custom roles with *:");
+     db.roles.find({ permissions: "*", slug: { $ne: "admin" } }, { slug: 1, name: 1 }).forEach(printjson);
+     print("-- users with * in customPermissions:");
+     db.users.find({ customPermissions: "*", isDeleted: { $ne: true } }, { email: 1 }).forEach(printjson);'
+   ```
+
+   Every address must be someone you know should be an administrator. To shut out one you do not
+   recognise (takes effect on their next request; their tokens stop working):
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.users.updateOne(
+     { email: "unknown@example.com" },
+     { $set: { status: "inactive" }, $inc: { sessionVersion: 1 } })'
+   ```
+
+   Then look up how the account came about (`db.auditlogs.find({ entityId: "<user _id>" })`)
+   before deleting anything.
+
+2. Invited users who never activated. Older versions mailed invitation links that did not work,
+   so some people may still be stuck as `invited`:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.users.find({ status: "invited", isDeleted: { $ne: true } }, { email: 1 }).forEach(printjson)'
+   ```
+
+   Tell each of them to open `https://hrms.ddipl.org/forgot-password`, enter their address and set
+   a password from the e-mailed link: completing a password reset now activates an invited account.
+
+3. Payslips from before random file names:
+
+   ```bash
+   ls /var/www/hrms-new/backend/uploads/payslips 2>/dev/null
+   find /var/www/hrms-new/backend/uploads/payslips -name '*.pdf' ! -name '*-????????????.pdf' 2>/dev/null
+   ```
+
+   Expected: nothing (the folder does not exist yet). Payslips generated by the new code also land
+   there, but as `<employee id>-<12 random characters>.pdf`; the `find` lists only the old,
+   guessable `<employee id>.pdf` files and must print nothing. If it lists files, they are no longer
+   publicly served, but regenerate them: generating a cycle's payslips again re-creates every one
+   under a random name and deletes the old file. On the Payroll page the **Payslips** button does
+   this for a processed cycle that has none yet; for any other cycle, signed in as an admin, run
+   this in the browser's developer console with the cycle's id:
+
+   ```js
+   await fetch('/api/v1/payroll/cycles/<cycle id>/generate-payslips', {
+     method: 'POST',
+     headers: { Authorization: 'Bearer ' + localStorage.getItem('opencore.accessToken') },
+   }).then((r) => r.json())   // → { success: true, data: { generated: N, total: N } }
+   ```
+
+   Find the ids with `mongosh hrms --quiet --eval 'db.payrollcycles.find({}, { month: 1, year: 1, status: 1 }).forEach(printjson)'`.
+   Afterwards the files named `<employee id>.pdf` are gone (files named `<employee id>-<random>.pdf` are the new ones).
 
 ## 10. Rollback
 

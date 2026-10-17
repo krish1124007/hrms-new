@@ -105,4 +105,19 @@ userSchema.methods.generateRefreshToken = function () {
     }, env.JWT_REFRESH_SECRET, { expiresIn: env.JWT_REFRESH_TTL });
 };
 export const User = model('User', userSchema);
+/**
+ * Activates a still-`invited` account in place (status, verified e-mail, spent
+ * invitation token) and reports whether it did. For flows that already prove
+ * the user may hold the account — a password-reset token sent to their
+ * mailbox, an admin setting the password. The caller saves; the document must
+ * have been loaded with `+emailVerificationToken` for the token to be cleared.
+ */
+export function activateIfInvited(user) {
+    if (user.status !== 'invited')
+        return false;
+    user.status = 'active';
+    user.emailVerified = true;
+    user.emailVerificationToken = undefined;
+    return true;
+}
 //# sourceMappingURL=user.model.js.map

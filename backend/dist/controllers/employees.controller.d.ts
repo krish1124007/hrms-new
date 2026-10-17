@@ -20,17 +20,17 @@ export declare const createEmployeeSchema: z.ZodObject<{
             zip: z.ZodOptional<z.ZodOptional<z.ZodString>>;
         }, "strip", z.ZodTypeAny, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }>>;
         permanent: z.ZodOptional<z.ZodObject<{
@@ -42,51 +42,51 @@ export declare const createEmployeeSchema: z.ZodObject<{
             zip: z.ZodOptional<z.ZodOptional<z.ZodString>>;
         }, "strip", z.ZodTypeAny, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }>>;
     }, "strip", z.ZodTypeAny, {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     }, {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     }>>;
@@ -141,12 +141,12 @@ export declare const createEmployeeSchema: z.ZodObject<{
         phone: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     }, "strip", z.ZodTypeAny, {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     }, {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     }>>;
     probationEndDate: z.ZodOptional<z.ZodDate>;
     noticePeriod: z.ZodOptional<z.ZodNumber>;
@@ -166,18 +166,18 @@ export declare const createEmployeeSchema: z.ZodObject<{
     address?: {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     } | undefined;
@@ -208,8 +208,8 @@ export declare const createEmployeeSchema: z.ZodObject<{
     } | undefined;
     emergencyContact?: {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     } | undefined;
     probationEndDate?: Date | undefined;
     noticePeriod?: number | undefined;
@@ -224,18 +224,18 @@ export declare const createEmployeeSchema: z.ZodObject<{
     address?: {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     } | undefined;
@@ -267,8 +267,8 @@ export declare const createEmployeeSchema: z.ZodObject<{
     } | undefined;
     emergencyContact?: {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     } | undefined;
     probationEndDate?: Date | undefined;
     noticePeriod?: number | undefined;
@@ -294,17 +294,17 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
             zip: z.ZodOptional<z.ZodOptional<z.ZodString>>;
         }, "strip", z.ZodTypeAny, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }>>;
         permanent: z.ZodOptional<z.ZodObject<{
@@ -316,51 +316,51 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
             zip: z.ZodOptional<z.ZodOptional<z.ZodString>>;
         }, "strip", z.ZodTypeAny, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }, {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         }>>;
     }, "strip", z.ZodTypeAny, {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     }, {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     }>>>;
@@ -414,12 +414,12 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
         phone: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     }, "strip", z.ZodTypeAny, {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     }, {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     }>>>;
     probationEndDate: z.ZodOptional<z.ZodOptional<z.ZodDate>>;
     noticePeriod: z.ZodOptional<z.ZodOptional<z.ZodNumber>>;
@@ -433,18 +433,18 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     address?: {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     } | undefined;
@@ -479,8 +479,8 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     } | undefined;
     emergencyContact?: {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     } | undefined;
     probationEndDate?: Date | undefined;
     noticePeriod?: number | undefined;
@@ -491,18 +491,18 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     address?: {
         current?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
         permanent?: {
             country?: string | undefined;
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             zip?: string | undefined;
         } | undefined;
     } | undefined;
@@ -537,8 +537,8 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     } | undefined;
     emergencyContact?: {
         name?: string | undefined;
-        phone?: string | undefined;
         relation?: string | undefined;
+        phone?: string | undefined;
     } | undefined;
     probationEndDate?: Date | undefined;
     noticePeriod?: number | undefined;

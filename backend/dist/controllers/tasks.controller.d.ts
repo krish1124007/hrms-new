@@ -18,11 +18,11 @@ export declare const createTaskSchema: z.ZodObject<{
     description?: string | undefined;
     dueDate?: Date | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
-    order?: number | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
     labels?: string[] | undefined;
+    order?: number | undefined;
     parentTask?: string | undefined;
 }, {
     title: string;
@@ -30,11 +30,11 @@ export declare const createTaskSchema: z.ZodObject<{
     description?: string | undefined;
     dueDate?: Date | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
-    order?: number | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
     labels?: string[] | undefined;
+    order?: number | undefined;
     parentTask?: string | undefined;
 }>;
 export declare const updateTaskSchema: z.ZodObject<{
@@ -55,11 +55,11 @@ export declare const updateTaskSchema: z.ZodObject<{
     title?: string | undefined;
     dueDate?: Date | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
-    order?: number | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
     labels?: string[] | undefined;
+    order?: number | undefined;
     parentTask?: string | undefined;
 }, {
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
@@ -67,11 +67,11 @@ export declare const updateTaskSchema: z.ZodObject<{
     title?: string | undefined;
     dueDate?: Date | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
-    order?: number | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
     assignee?: string | undefined;
     labels?: string[] | undefined;
+    order?: number | undefined;
     parentTask?: string | undefined;
 }>;
 export declare const updateStatusSchema: z.ZodObject<{

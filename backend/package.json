@@ -20,7 +20,7 @@
     "type-check": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vitest run",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist tsconfig.build.tsbuildinfo"
   },
   "engines": {
     "node": ">=22.0.0",

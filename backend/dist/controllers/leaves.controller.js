@@ -382,20 +382,35 @@ export async function teamLeaveRequests(req, res) {
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
+/**
+ * Fields of other people's leave that every employee may see on the shared
+ * calendar: who is off, when and for how long. The reason, attachments
+ * (often medical certificates) and approval trail are for approvers only.
+ */
+const CALENDAR_PUBLIC_FIELDS = '_id employeeId leaveTypeId startDate endDate days isHalfDay status';
 export async function leaveCalendar(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
     const from = q.from ? new Date(q.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const to = q.to ? new Date(q.to) : new Date(from.getFullYear(), from.getMonth() + 1, 0);
-    const list = await LeaveRequest.find({
+    const query = LeaveRequest.find({
         status: { $in: ['approved', 'pending'] },
         startDate: { $lte: to },
         endDate: { $gte: from },
-    })
-        .populate('employeeId', 'firstName lastName employeeId')
-        .populate('leaveTypeId', 'name code color')
-        .lean()
-        .exec();
+    });
+    if (SEE_ALL_LEAVES.some((p) => hasPermission(req.user, p))) {
+        query
+            .populate('employeeId', 'firstName lastName employeeId')
+            .populate('leaveTypeId', 'name code color');
+    }
+    else {
+        // `color` is presentation only — the calendar paints each leave type with it.
+        query
+            .select(CALENDAR_PUBLIC_FIELDS)
+            .populate('employeeId', 'firstName lastName')
+            .populate('leaveTypeId', 'name color');
+    }
+    const list = await query.lean().exec();
     res.json({ success: true, data: list });
 }
 export async function applyLeave(req, res) {

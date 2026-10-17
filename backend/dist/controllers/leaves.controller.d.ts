@@ -31,6 +31,7 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     code: string;
     name: string;
     isActive: boolean;
+    color: string;
     daysAllowed: number;
     carryForward: {
         enabled: boolean;
@@ -38,27 +39,26 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     };
     encashable: boolean;
     paidLeave: boolean;
-    applicableGender: "male" | "female" | "all";
+    applicableGender: "all" | "male" | "female";
     probationAllowed: boolean;
     halfDayAllowed: boolean;
     attachmentRequired: boolean;
-    color: string;
 }, {
     code: string;
     name: string;
     daysAllowed: number;
     isActive?: boolean | undefined;
+    color?: string | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
         maxDays?: number | undefined;
     } | undefined;
     encashable?: boolean | undefined;
     paidLeave?: boolean | undefined;
-    applicableGender?: "male" | "female" | "all" | undefined;
+    applicableGender?: "all" | "male" | "female" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const updateLeaveTypeSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -86,6 +86,7 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     code?: string | undefined;
     name?: string | undefined;
     isActive?: boolean | undefined;
+    color?: string | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled: boolean;
@@ -93,15 +94,15 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     } | undefined;
     encashable?: boolean | undefined;
     paidLeave?: boolean | undefined;
-    applicableGender?: "male" | "female" | "all" | undefined;
+    applicableGender?: "all" | "male" | "female" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
-    color?: string | undefined;
 }, {
     code?: string | undefined;
     name?: string | undefined;
     isActive?: boolean | undefined;
+    color?: string | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
@@ -109,11 +110,10 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     } | undefined;
     encashable?: boolean | undefined;
     paidLeave?: boolean | undefined;
-    applicableGender?: "male" | "female" | "all" | undefined;
+    applicableGender?: "all" | "male" | "female" | undefined;
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const leaveTypeQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;

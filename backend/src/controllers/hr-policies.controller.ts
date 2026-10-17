@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import type { Types } from 'mongoose';
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import { HrPolicy } from '../models/hr-policy.model.js';
@@ -10,7 +11,7 @@ import {
   UnauthorizedError,
   ValidationAppError,
 } from '../lib/errors.js';
-import { currentEmployeeId } from '../lib/access.js';
+import { currentEmployeeId, hasPermission } from '../lib/access.js';
 import { audit } from '../services/audit.service.js';
 import { saveFile, deleteFile } from '../lib/local-storage.js';
 
@@ -80,8 +81,9 @@ export const publishSchema = z.object({
 });
 
 export const acknowledgeSchema = z.object({
-  // Accepted for backwards compatibility but ignored: an acknowledgement is
-  // always recorded for the caller's own employee record.
+  // Honoured only for `policies.manage` holders (HR recording a paper
+  // sign-off on someone's behalf); for everyone else it is ignored and the
+  // acknowledgement is recorded for the caller's own employee record.
   employee: objectId.optional(),
   comment: z.string().max(1000).optional(),
 });
@@ -353,10 +355,20 @@ export async function remove(req: Request, res: Response): Promise<void> {
   res.json({ success: true, message: 'Policy deleted' });
 }
 
+/** The `_id` of the employee an HR user names in the body; 404 if there is none. */
+async function namedEmployee(id: string): Promise<Types.ObjectId> {
+  const target = await Employee.findById(id).select('_id').lean().exec();
+  if (!target) throw new NotFoundError('Employee not found');
+  return target._id as Types.ObjectId;
+}
+
 /** POST /api/v1/hr-policies/:id/acknowledge */
 export async function acknowledge(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof acknowledgeSchema>;
-  const employee = await currentEmployeeId(req);
+  const onBehalf = Boolean(body.employee) && hasPermission(req.user, 'policies.manage');
+  const employee = onBehalf
+    ? await namedEmployee(String(body.employee))
+    : await currentEmployeeId(req);
   if (!employee) {
     throw new AppError('No employee profile found for current user', 404, 'NO_EMPLOYEE_PROFILE');
   }
@@ -378,6 +390,18 @@ export async function acknowledge(req: Request, res: Response): Promise<void> {
     comment: body.comment,
   });
   await policy.save();
+  if (onBehalf) {
+    void audit({
+      action: 'update',
+      entity: 'HrPolicy',
+      entityId: String(policy._id),
+      metadata: {
+        event: 'policy.acknowledged-on-behalf',
+        employee: String(employee),
+        versionNumber: policy.currentVersion,
+      },
+    });
+  }
   await policy.populate(
     'acknowledgements.employee',
     'firstName lastName employeeId email profileImage',

@@ -17,10 +17,10 @@ export declare const componentSchema: z.ZodObject<{
     name: string;
     calculationType: "fixed" | "percentage_of_basic" | "percentage_of_gross";
     isActive: boolean;
+    order: number;
     defaultValue: number;
     isTaxable: boolean;
     isStatutory: boolean;
-    order: number;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
 }, {
     code: string;
@@ -28,11 +28,11 @@ export declare const componentSchema: z.ZodObject<{
     name: string;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
-    order?: number | undefined;
 }>;
 export declare const updateComponentSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -51,22 +51,22 @@ export declare const updateComponentSchema: z.ZodObject<{
     name?: string | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
-    order?: number | undefined;
 }, {
     code?: string | undefined;
     type?: "earning" | "deduction" | "employer_contribution" | undefined;
     name?: string | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
     statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
-    order?: number | undefined;
 }>;
 export declare const componentQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -189,10 +189,10 @@ export declare const cycleQuerySchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     page: number;
     limit: number;
-    status?: "locked" | "draft" | "processing" | "processed" | "paid" | undefined;
+    status?: "draft" | "processing" | "processed" | "locked" | "paid" | undefined;
     year?: number | undefined;
 }, {
-    status?: "locked" | "draft" | "processing" | "processed" | "paid" | undefined;
+    status?: "draft" | "processing" | "processed" | "locked" | "paid" | undefined;
     page?: number | undefined;
     limit?: number | undefined;
     year?: number | undefined;
@@ -243,13 +243,13 @@ export declare const updateRecordSchema: z.ZodObject<{
         name: string;
         amount: number;
     }[] | undefined;
-    arrears?: number | undefined;
-    reimbursements?: number | undefined;
-    loanDeduction?: number | undefined;
+    paidLeaveBalance?: number | undefined;
     overtimeAmount?: number | undefined;
     advance?: number | undefined;
     lateDeduction?: number | undefined;
-    paidLeaveBalance?: number | undefined;
+    arrears?: number | undefined;
+    reimbursements?: number | undefined;
+    loanDeduction?: number | undefined;
 }, {
     expense?: number | undefined;
     overtimeHours?: number | undefined;
@@ -261,13 +261,13 @@ export declare const updateRecordSchema: z.ZodObject<{
         name: string;
         amount: number;
     }[] | undefined;
-    arrears?: number | undefined;
-    reimbursements?: number | undefined;
-    loanDeduction?: number | undefined;
+    paidLeaveBalance?: number | undefined;
     overtimeAmount?: number | undefined;
     advance?: number | undefined;
     lateDeduction?: number | undefined;
-    paidLeaveBalance?: number | undefined;
+    arrears?: number | undefined;
+    reimbursements?: number | undefined;
+    loanDeduction?: number | undefined;
 }>;
 export declare function updateRecord(req: Request, res: Response): Promise<void>;
 export declare function generatePayslips(req: Request, res: Response): Promise<void>;

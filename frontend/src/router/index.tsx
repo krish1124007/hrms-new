@@ -1,16 +1,10 @@
 import { lazy, Suspense, type ReactElement } from 'react';
-import {
-  Navigate,
-  Route,
-  BrowserRouter as Router,
-  Routes,
-  useLocation,
-} from 'react-router-dom';
+import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { AuthLayout } from '@/layouts/AuthLayout';
 import { DashboardLayout } from '@/layouts/DashboardLayout';
-import { useAuthStore } from '@/stores/auth.store';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
+import { RequireAuth } from '@/components/common/RequireAuth';
 import { RequirePermission } from '@/components/common/RequirePermission';
 import { NAV_ACCESS } from '@/config/navigation';
 
@@ -128,16 +122,6 @@ function RouteFallback(): ReactElement {
   );
 }
 
-function RequireAuth({ children }: { children: ReactElement }): ReactElement {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const location = useLocation();
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
-  return children;
-}
-
 /** Wraps an element in a permission guard using the same list as its sidebar entry. */
 function guard(anyOf: string[], element: ReactElement): ReactElement {
   return <RequirePermission anyOf={anyOf}>{element}</RequirePermission>;
@@ -166,7 +150,7 @@ export function AppRouter(): ReactElement {
           {/* Protected dashboard routes */}
           <Route
             element={
-              <RequireAuth>
+              <RequireAuth fallback={<RouteFallback />}>
                 <ErrorBoundary>
                   <DashboardLayout />
                 </ErrorBoundary>
@@ -204,7 +188,7 @@ export function AppRouter(): ReactElement {
             <Route path="/expense-claims/reports" element={guard(NAV_ACCESS.expensesManage, <ExpenseReportPage />)} />
 
             {/* Attendance */}
-            <Route path="/attendance" element={<AttendanceDashboardPage />} />
+            <Route path="/attendance" element={guard(NAV_ACCESS.attendanceView, <AttendanceDashboardPage />)} />
             <Route path="/attendance/records" element={guard(NAV_ACCESS.attendanceView, <AttendanceListPage />)} />
             <Route path="/attendance/my" element={<EmployeeAttendancePage />} />
             <Route path="/attendance/timesheet" element={<AttendanceTimesheetPage />} />
@@ -236,7 +220,7 @@ export function AppRouter(): ReactElement {
 
             {/* Tools */}
             <Route path="/documents" element={<DocumentsPage />} />
-            <Route path="/id-cards" element={<IDCardPage />} />
+            <Route path="/id-cards" element={guard(NAV_ACCESS.idCards, <IDCardPage />)} />
             {/* Self-service — every employee, their own card only. */}
             <Route path="/my-id-card" element={<MyIDCardPage />} />
             <Route path="/backups" element={guard(NAV_ACCESS.backups, <BackupsPage />)} />
@@ -244,6 +228,8 @@ export function AppRouter(): ReactElement {
             <Route path="/notices" element={<NoticeBoardPage />} />
             {/* Notice notifications link here — the board highlights the one asked for. */}
             <Route path="/notices/:id" element={<NoticeBoardPage />} />
+            {/* Open to every signed-in user (the list is read-only for them); the
+                API gates create/edit/delete on locations.manage. */}
             <Route path="/locations" element={<LocationsPage />} />
 
             {/* Analytics Overview — deep insights beyond the dashboard snapshot */}
@@ -259,16 +245,16 @@ export function AppRouter(): ReactElement {
             <Route path="/settings/backup" element={<Navigate to="/backups" replace />} />
 
             {/* Assets */}
-            <Route path="/assets" element={<AssetListPage />} />
-            <Route path="/assets/new" element={<AssetFormPage />} />
-            <Route path="/assets/:id" element={<AssetDetailPage />} />
-            <Route path="/assets/:id/edit" element={<AssetFormPage />} />
+            <Route path="/assets" element={guard(NAV_ACCESS.assets, <AssetListPage />)} />
+            <Route path="/assets/new" element={guard(NAV_ACCESS.assets, <AssetFormPage />)} />
+            <Route path="/assets/:id" element={guard(NAV_ACCESS.assets, <AssetDetailPage />)} />
+            <Route path="/assets/:id/edit" element={guard(NAV_ACCESS.assets, <AssetFormPage />)} />
 
             {/* Loans */}
-            <Route path="/loans" element={<LoanListPage />} />
-            <Route path="/loans/new" element={<LoanFormPage />} />
-            <Route path="/loans/:id" element={<LoanDetailPage />} />
-            <Route path="/loans/:id/edit" element={<LoanFormPage />} />
+            <Route path="/loans" element={guard(NAV_ACCESS.loans, <LoanListPage />)} />
+            <Route path="/loans/new" element={guard(NAV_ACCESS.loans, <LoanFormPage />)} />
+            <Route path="/loans/:id" element={guard(NAV_ACCESS.loans, <LoanDetailPage />)} />
+            <Route path="/loans/:id/edit" element={guard(NAV_ACCESS.loans, <LoanFormPage />)} />
 
             {/* Disciplinary */}
             <Route path="/disciplinary" element={<DisciplinaryListPage />} />

@@ -87,6 +87,8 @@ export const NAV_ACCESS = {
   expensesManage: ['expenses.approve'],
   assets: ['assets.view'],
   loans: ['loans.view'],
+  /** The ID card generator lists and prints other employees' cards. */
+  idCards: ['employees.view'],
   policies: ['policies.view'],
   roles: ['roles.view'],
   audit: ['audit.view'],
@@ -208,7 +210,7 @@ export const NAV_GROUPS: NavGroup[] = [
       // Everyone has an ID card of their own; only HR generates other people's.
       { label: 'My ID Card', to: '/my-id-card', icon: BadgeCheck },
       // ID Card generator + Locations are admin tools — employees don't manage either.
-      { label: 'ID Cards', to: '/id-cards', icon: BadgeCheck, excludeRoles: ['employee'] },
+      { label: 'ID Cards', to: '/id-cards', icon: BadgeCheck, permissions: P.idCards, excludeRoles: ['employee'] },
       { label: 'Locations', to: '/locations', icon: MapPin, excludeRoles: ['employee'] },
     ],
   },

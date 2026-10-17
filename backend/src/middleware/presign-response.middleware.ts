@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { signFileUrl, storedFormOfSignedUrl } from '../lib/file-urls.js';
+import { isStaleSignedUrl, signFileUrl, storedFormOfSignedUrl } from '../lib/file-urls.js';
 import { AppError } from '../lib/errors.js';
 
 const UPLOADS_PREFIX = '/uploads/';
@@ -17,8 +17,6 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
 }
 
 const signIfStored = (s: string): string => (s.startsWith(UPLOADS_PREFIX) ? signFileUrl(s) : s);
-const unsignIfSigned = (s: string): string =>
-  s.includes(FILES_PATH) ? (storedFormOfSignedUrl(s) ?? s) : s;
 
 /**
  * Rewrites every stored `/uploads/<key>` reference in a JSON response into a
@@ -50,8 +48,13 @@ const RAW_UPLOAD_REF = /^[\s\\/]*uploads[\\/]/;
  * issued:
  *  - a signed link this server issued (an upload's URL attached to an
  *    employee or an expense claim) is turned back into its stored
- *    `/uploads/<key>` form, so what lands in the database never expires;
- *    links whose signature does not check out are left exactly as sent;
+ *    `/uploads/<key>` form, so what lands in the database never expires —
+ *    as long as it is no more than an hour past its expiry;
+ *  - an authentic link older than that is refused with 400
+ *    INVALID_FILE_REFERENCE: converting it would re-grant access to an old
+ *    link, and storing it verbatim would silently replace the file
+ *    reference with a dead URL. The client reloads and gets fresh links;
+ *  - links whose signature does not check out are left exactly as sent;
  *  - a raw `/uploads/…` reference is refused with 400 INVALID_FILE_REFERENCE:
  *    echoed back, it would be signed into a download grant for any key.
  * The raw check runs on the strings as the client sent them, before any
@@ -69,15 +72,30 @@ export function unsignRequestBody(req: Request, _res: Response, next: NextFuncti
     return;
   }
   let raw = false;
+  let stale = false;
   const normalised = mapStrings(body, (s) => {
     if (RAW_UPLOAD_REF.test(s)) {
       raw = true;
       return s;
     }
-    return unsignIfSigned(s);
+    if (!s.includes(FILES_PATH)) return s;
+    const stored = storedFormOfSignedUrl(s);
+    if (stored) return stored;
+    if (isStaleSignedUrl(s)) stale = true;
+    return s;
   });
   if (raw) {
     next(new AppError('File references must be links issued by the API', 400, 'INVALID_FILE_REFERENCE'));
+    return;
+  }
+  if (stale) {
+    next(
+      new AppError(
+        'A file link in this request has expired. Reload the page and try again.',
+        400,
+        'INVALID_FILE_REFERENCE',
+      ),
+    );
     return;
   }
   req.body = normalised;

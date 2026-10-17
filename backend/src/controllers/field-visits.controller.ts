@@ -156,7 +156,11 @@ export async function createVisit(req: Request, res: Response): Promise<void> {
 
 export async function updateVisit(req: Request, res: Response): Promise<void> {
   await assertVisitAccess(req, String(req.params.id));
-  const doc = await Visit.findByIdAndUpdate(String(req.params.id), req.body, {
+  const update: Record<string, unknown> = { ...(req.body as z.infer<typeof updateVisitSchema>) };
+  // A rep can't hand their visit to someone else (the schema does not accept
+  // employeeId today; this keeps it so if the schema ever grows one).
+  if (!hasPermission(req.user, MANAGE)) delete update.employeeId;
+  const doc = await Visit.findByIdAndUpdate(String(req.params.id), update, {
     new: true,
   }).exec();
   if (!doc) throw new NotFoundError('Visit not found');

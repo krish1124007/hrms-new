@@ -7,11 +7,15 @@ import { asyncHandler } from '../lib/async-handler.js';
 const router = Router();
 router.use(authMiddleware);
 // ---------- Categories ----------
+// Everyone filing a claim reads the list; the categories themselves (names,
+// limits, receipt rules) are company-wide configuration. Employees hold
+// expenses.create/update/delete for their *own claims*, so writes here are
+// gated on the approver permission instead.
 router.get('/categories', requirePermission('expenses.view'), validate(ctrl.categoryQuerySchema, 'query'), asyncHandler(ctrl.listCategories));
-router.post('/categories', requirePermission('expenses.create'), validate(ctrl.createCategorySchema), asyncHandler(ctrl.createCategory));
+router.post('/categories', requirePermission('expenses.approve'), validate(ctrl.createCategorySchema), asyncHandler(ctrl.createCategory));
 router.get('/categories/:id', requirePermission('expenses.view'), asyncHandler(ctrl.getCategory));
-router.patch('/categories/:id', requirePermission('expenses.update'), validate(ctrl.updateCategorySchema), asyncHandler(ctrl.updateCategory));
-router.delete('/categories/:id', requirePermission('expenses.delete'), asyncHandler(ctrl.deleteCategory));
+router.patch('/categories/:id', requirePermission('expenses.approve'), validate(ctrl.updateCategorySchema), asyncHandler(ctrl.updateCategory));
+router.delete('/categories/:id', requirePermission('expenses.approve'), asyncHandler(ctrl.deleteCategory));
 // ---------- Reports ----------
 router.get('/reports', requirePermission('expenses.view'), asyncHandler(ctrl.expenseReports));
 // ---------- Claims ----------

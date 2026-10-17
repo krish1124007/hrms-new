@@ -9,6 +9,10 @@ const router = Router();
 router.use(authMiddleware);
 
 // ---------- Categories ----------
+// Everyone filing a claim reads the list; the categories themselves (names,
+// limits, receipt rules) are company-wide configuration. Employees hold
+// expenses.create/update/delete for their *own claims*, so writes here are
+// gated on the approver permission instead.
 router.get(
   '/categories',
   requirePermission('expenses.view'),
@@ -17,7 +21,7 @@ router.get(
 );
 router.post(
   '/categories',
-  requirePermission('expenses.create'),
+  requirePermission('expenses.approve'),
   validate(ctrl.createCategorySchema),
   asyncHandler(ctrl.createCategory),
 );
@@ -28,13 +32,13 @@ router.get(
 );
 router.patch(
   '/categories/:id',
-  requirePermission('expenses.update'),
+  requirePermission('expenses.approve'),
   validate(ctrl.updateCategorySchema),
   asyncHandler(ctrl.updateCategory),
 );
 router.delete(
   '/categories/:id',
-  requirePermission('expenses.delete'),
+  requirePermission('expenses.approve'),
   asyncHandler(ctrl.deleteCategory),
 );
 

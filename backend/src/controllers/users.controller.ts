@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { User } from '../models/user.model.js';
+import { User, activateIfInvited } from '../models/user.model.js';
 import { Role } from '../models/role.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
 import { sendMail } from '../services/email.service.js';
@@ -164,7 +164,7 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
  */
 async function loadManageableUser(req: Request, opts: { withPassword?: boolean } = {}) {
   const query = User.findById(String(req.params.id)).populate('role');
-  if (opts.withPassword) query.select('+password');
+  if (opts.withPassword) query.select('+password +emailVerificationToken');
   const user = await query.exec();
   if (!user) throw new NotFoundError('User not found');
   assertCanManageUser(req.user, user);
@@ -199,6 +199,9 @@ export async function setUserPassword(req: Request, res: Response): Promise<void
   user.password = password;
   user.passwordChangedAt = new Date();
   user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  // An admin handing an invited user a password is activating the account:
+  // otherwise login keeps refusing it as "invited".
+  const activated = activateIfInvited(user);
   await user.save();
 
   const { Session } = await import('../models/session.model.js');
@@ -211,7 +214,11 @@ export async function setUserPassword(req: Request, res: Response): Promise<void
     action: 'update',
     entity: 'User',
     entityId: String(user._id),
-    metadata: { event: 'password.admin-reset', sessionVersion: user.sessionVersion },
+    metadata: {
+      event: 'password.admin-reset',
+      sessionVersion: user.sessionVersion,
+      ...(activated ? { activated: true } : {}),
+    },
   });
 
   res.json({ success: true, message: 'Password updated. The user must sign in again.' });

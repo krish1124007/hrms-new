@@ -51,11 +51,15 @@ export function verifyFileSignature(key: string, exp: string, sig: string): bool
 }
 
 /**
- * The stored `/uploads/<key>` form of a signed link this server issued, or
- * null for anything else. Expiry is ignored: a client that held a form open
- * past the TTL is still posting back a reference it was legitimately given.
+ * How long after `exp` a signed link may still be posted back and turned into
+ * its stored form: covers a form held open past the TTL, without letting an
+ * old link (from history, a log, a forwarded e-mail) be re-attached to a
+ * record — which would have the API sign it afresh — indefinitely.
  */
-export function storedFormOfSignedUrl(value: string): string | null {
+const POSTBACK_GRACE_SECONDS = 60 * 60;
+
+/** `{ key, exp }` of an authentic signed link this server issued, or null. */
+function authenticLink(value: string): { key: string; exp: number } | null {
   const match = SIGNED_URL_RE.exec(value);
   if (!match) return null;
   const query = new URLSearchParams(match[2]);
@@ -68,5 +72,25 @@ export function storedFormOfSignedUrl(value: string): string | null {
   } catch {
     return null;
   }
-  return isAuthentic(key, exp, sig) ? `${UPLOADS_PREFIX}${key}` : null;
+  return isAuthentic(key, exp, sig) ? { key, exp: Number(exp) } : null;
+}
+
+const withinGrace = (exp: number): boolean =>
+  exp + POSTBACK_GRACE_SECONDS >= Math.floor(Date.now() / 1000);
+
+/**
+ * The stored `/uploads/<key>` form of a signed link this server issued, or
+ * null for anything else. A link up to an hour past its expiry still converts
+ * (a client that held a form open past the TTL is posting back a reference it
+ * was legitimately given); an older one does not.
+ */
+export function storedFormOfSignedUrl(value: string): string | null {
+  const link = authenticLink(value);
+  return link && withinGrace(link.exp) ? `${UPLOADS_PREFIX}${link.key}` : null;
+}
+
+/** True for an authentic signed link that is past the post-back grace period. */
+export function isStaleSignedUrl(value: string): boolean {
+  const link = authenticLink(value);
+  return link !== null && !withinGrace(link.exp);
 }

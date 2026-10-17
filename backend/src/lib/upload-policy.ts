@@ -9,10 +9,14 @@ import { AppError } from './errors.js';
 
 const ALLOWED_EXTENSIONS = new Set([
   '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  // iPhone camera photos (receipts, check-in photos from the mobile app).
+  '.heic', '.heif',
   '.doc', '.docx', '.xls', '.xlsx', '.csv',
 ]);
 
 const ALLOWED_MIME_PREFIXES = [
+  // Covers image/heic and image/heif; the extension list above is what keeps
+  // out other image/* types such as SVG.
   'image/',
   'application/pdf',
   'application/msword',

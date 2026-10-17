@@ -15,9 +15,11 @@ router.get(
   validate(ctrl.leaveTypeQuerySchema, 'query'),
   asyncHandler(ctrl.listLeaveTypes),
 );
+// Leave types are company-wide configuration; `leaves.create` only lets an
+// employee apply for their own leave.
 router.post(
   '/types',
-  requirePermission('leaves.create'),
+  requirePermission('leaves.update'),
   validate(ctrl.createLeaveTypeSchema),
   asyncHandler(ctrl.createLeaveType),
 );

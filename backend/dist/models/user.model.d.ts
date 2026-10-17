@@ -56,4 +56,12 @@ export declare const User: PaginateModel<IUser> & Model<IUser, {}, {}, {}, Docum
 }> & {
     __v: number;
 }, any>;
+/**
+ * Activates a still-`invited` account in place (status, verified e-mail, spent
+ * invitation token) and reports whether it did. For flows that already prove
+ * the user may hold the account — a password-reset token sent to their
+ * mailbox, an admin setting the password. The caller saves; the document must
+ * have been loaded with `+emailVerificationToken` for the token to be cleared.
+ */
+export declare function activateIfInvited(user: IUser): boolean;
 //# sourceMappingURL=user.model.d.ts.map

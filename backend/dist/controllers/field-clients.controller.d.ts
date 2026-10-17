@@ -15,16 +15,16 @@ export declare const createClientSchema: z.ZodObject<{
         state: z.ZodOptional<z.ZodString>;
         pincode: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     }, {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     }>>;
     location: z.ZodOptional<z.ZodEffects<z.ZodObject<{
@@ -53,10 +53,10 @@ export declare const createClientSchema: z.ZodObject<{
     category: "A" | "B" | "C";
     email?: string | undefined;
     address?: {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
@@ -75,10 +75,10 @@ export declare const createClientSchema: z.ZodObject<{
     status?: "active" | "inactive" | undefined;
     email?: string | undefined;
     address?: {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
@@ -109,16 +109,16 @@ export declare const updateClientSchema: z.ZodObject<{
         state: z.ZodOptional<z.ZodString>;
         pincode: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     }, {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     }>>>;
     location: z.ZodOptional<z.ZodOptional<z.ZodEffects<z.ZodObject<{
@@ -146,10 +146,10 @@ export declare const updateClientSchema: z.ZodObject<{
     email?: string | undefined;
     name?: string | undefined;
     address?: {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
@@ -169,10 +169,10 @@ export declare const updateClientSchema: z.ZodObject<{
     email?: string | undefined;
     name?: string | undefined;
     address?: {
+        state?: string | undefined;
         line1?: string | undefined;
         line2?: string | undefined;
         city?: string | undefined;
-        state?: string | undefined;
         pincode?: string | undefined;
     } | undefined;
     tags?: string[] | undefined;
@@ -263,16 +263,16 @@ export declare const importSchema: z.ZodObject<{
             state: z.ZodOptional<z.ZodString>;
             pincode: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         }, {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         }>>;
         location: z.ZodOptional<z.ZodEffects<z.ZodObject<{
@@ -301,10 +301,10 @@ export declare const importSchema: z.ZodObject<{
         category: "A" | "B" | "C";
         email?: string | undefined;
         address?: {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
@@ -323,10 +323,10 @@ export declare const importSchema: z.ZodObject<{
         status?: "active" | "inactive" | undefined;
         email?: string | undefined;
         address?: {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
@@ -349,10 +349,10 @@ export declare const importSchema: z.ZodObject<{
         category: "A" | "B" | "C";
         email?: string | undefined;
         address?: {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;
@@ -373,10 +373,10 @@ export declare const importSchema: z.ZodObject<{
         status?: "active" | "inactive" | undefined;
         email?: string | undefined;
         address?: {
+            state?: string | undefined;
             line1?: string | undefined;
             line2?: string | undefined;
             city?: string | undefined;
-            state?: string | undefined;
             pincode?: string | undefined;
         } | undefined;
         tags?: string[] | undefined;

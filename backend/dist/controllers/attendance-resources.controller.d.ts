@@ -278,29 +278,29 @@ export declare const createAllowedIPSchema: z.ZodEffects<z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     label: string;
     isActive: boolean;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }, {
     label: string;
     isActive?: boolean | undefined;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }>, {
     label: string;
     isActive: boolean;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }, {
     label: string;
     isActive?: boolean | undefined;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }>;
@@ -314,15 +314,15 @@ export declare const updateAllowedIPSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     label?: string | undefined;
     isActive?: boolean | undefined;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }, {
     label?: string | undefined;
     isActive?: boolean | undefined;
-    locationId?: string | undefined;
     ipAddress?: string | undefined;
+    locationId?: string | undefined;
     ipRangeStart?: string | undefined;
     ipRangeEnd?: string | undefined;
 }>;

@@ -12,8 +12,13 @@ export declare function presignResponse(_req: Request, res: Response, next: Next
  * issued:
  *  - a signed link this server issued (an upload's URL attached to an
  *    employee or an expense claim) is turned back into its stored
- *    `/uploads/<key>` form, so what lands in the database never expires;
- *    links whose signature does not check out are left exactly as sent;
+ *    `/uploads/<key>` form, so what lands in the database never expires —
+ *    as long as it is no more than an hour past its expiry;
+ *  - an authentic link older than that is refused with 400
+ *    INVALID_FILE_REFERENCE: converting it would re-grant access to an old
+ *    link, and storing it verbatim would silently replace the file
+ *    reference with a dead URL. The client reloads and gets fresh links;
+ *  - links whose signature does not check out are left exactly as sent;
  *  - a raw `/uploads/…` reference is refused with 400 INVALID_FILE_REFERENCE:
  *    echoed back, it would be signed into a download grant for any key.
  * The raw check runs on the strings as the client sent them, before any

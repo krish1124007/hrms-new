@@ -5,7 +5,14 @@ import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
 import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+import {
+  assertNotSelfApproval,
+  assertOwnOrPermission,
+  currentEmployeeId,
+  hasPermission,
+} from '../lib/access.js';
+
+const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own overtime request';
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
@@ -206,6 +213,7 @@ export async function approve(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof approveSchema>;
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
+  await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a request with status "${otReq.status}"`);
   }
@@ -229,6 +237,7 @@ export async function reject(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof rejectSchema>;
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
+  await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a request with status "${otReq.status}"`);
   }

@@ -149,6 +149,97 @@ describe('overtime', () => {
       .set(auth(A.token));
     expect(own.status).toBe(200);
   });
+
+  it('403 SELF_APPROVAL when an approver approves or rejects their own overtime', async () => {
+    const manager = await actorWithRole('manager');
+    const filed = await request(app)
+      .post('/api/v1/overtime')
+      .set(auth(manager.token))
+      .send({ date: '2026-03-12', hours: 2, reason: 'Release night' });
+    expect(filed.status).toBe(201);
+    const ownId = filed.body.data._id;
+
+    const approve = await request(app)
+      .post(`/api/v1/overtime/${ownId}/approve`)
+      .set(auth(manager.token))
+      .send({});
+    expect(approve.status).toBe(403);
+    expect(approve.body.error?.code).toBe('SELF_APPROVAL');
+
+    const reject = await request(app)
+      .post(`/api/v1/overtime/${ownId}/reject`)
+      .set(auth(manager.token))
+      .send({ reason: 'no' });
+    expect(reject.status).toBe(403);
+    expect(reject.body.error?.code).toBe('SELF_APPROVAL');
+    expect((await OvertimeRequest.findById(ownId))?.status).toBe('pending');
+
+    // Somebody else's request is still approvable.
+    const theirs = await OvertimeRequest.create({
+      employee: A.employee._id,
+      date: new Date('2026-03-13'),
+      hours: 1,
+      reason: 'Support',
+    });
+    const ok = await request(app)
+      .post(`/api/v1/overtime/${theirs._id}/approve`)
+      .set(auth(manager.token))
+      .send({});
+    expect(ok.status).toBe(200);
+    expect(ok.body.data.status).toBe('approved');
+  });
+});
+
+describe('company-wide configuration (expense categories, leave types)', () => {
+  it('403 for an employee creating, editing or deleting an expense category', async () => {
+    const post = await request(app)
+      .post('/api/v1/expense-claims/categories')
+      .set(auth(A.token))
+      .send({ name: 'Bonus', code: 'BNS', requiresReceipt: false });
+    expect(post.status).toBe(403);
+    expect(await ExpenseCategory.countDocuments({ code: 'BNS' })).toBe(0);
+
+    const existing = await ExpenseCategory.create({ name: 'Travel', code: 'TRV' });
+    const patch = await request(app)
+      .patch(`/api/v1/expense-claims/categories/${existing._id}`)
+      .set(auth(A.token))
+      .send({ limit: 999999 });
+    expect(patch.status).toBe(403);
+    const del = await request(app)
+      .delete(`/api/v1/expense-claims/categories/${existing._id}`)
+      .set(auth(A.token));
+    expect(del.status).toBe(403);
+    expect(await ExpenseCategory.findById(existing._id)).not.toBeNull();
+
+    // Reading the list (to file a claim) still works.
+    const list = await request(app).get('/api/v1/expense-claims/categories').set(auth(A.token));
+    expect(list.status).toBe(200);
+  });
+
+  it('an hr_manager can create an expense category', async () => {
+    const hr = await actorWithRole('hr_manager');
+    const res = await request(app)
+      .post('/api/v1/expense-claims/categories')
+      .set(auth(hr.token))
+      .send({ name: 'Meals', code: 'MEAL', requiresReceipt: false });
+    expect(res.status).toBe(201);
+  });
+
+  it('403 for an employee creating a leave type; an hr_manager can', async () => {
+    const denied = await request(app)
+      .post('/api/v1/leaves/types')
+      .set(auth(A.token))
+      .send({ name: 'Unlimited', code: 'UL', daysAllowed: 365 });
+    expect(denied.status).toBe(403);
+    expect(await LeaveType.countDocuments({ code: 'UL' })).toBe(0);
+
+    const hr = await actorWithRole('hr_manager');
+    const ok = await request(app)
+      .post('/api/v1/leaves/types')
+      .set(auth(hr.token))
+      .send({ name: 'Casual', code: 'CL', daysAllowed: 12 });
+    expect(ok.status).toBe(201);
+  });
 });
 
 describe('attendance monthly', () => {
@@ -497,6 +588,96 @@ describe('hr policy acknowledgement', () => {
     const ackedBy = (stored?.acknowledgements ?? []).map((a) => String(a.employee));
     expect(ackedBy).toEqual([String(A.employee._id)]);
   });
+
+  it('a policies.manage holder (hr_manager) records an acknowledgement on behalf of body.employee', async () => {
+    const hr = await actorWithRole('hr_manager');
+    const policy = await HrPolicy.create({
+      policyCode: 'POL-0002',
+      title: 'Leave policy',
+      status: 'published',
+    });
+    const res = await request(app)
+      .post(`/api/v1/hr-policies/${policy._id}/acknowledge`)
+      .set(auth(hr.token))
+      .send({ employee: String(B.employee._id), comment: 'Signed paper copy' });
+    expect(res.status).toBe(200);
+
+    const stored = await HrPolicy.findById(policy._id).lean();
+    const ackedBy = (stored?.acknowledgements ?? []).map((a) => String(a.employee));
+    expect(ackedBy).toEqual([String(B.employee._id)]);
+
+    // Without body.employee the same caller acknowledges for themselves.
+    const self = await request(app)
+      .post(`/api/v1/hr-policies/${policy._id}/acknowledge`)
+      .set(auth(hr.token))
+      .send({});
+    expect(self.status).toBe(200);
+    const after = await HrPolicy.findById(policy._id).lean();
+    expect((after?.acknowledgements ?? []).map((a) => String(a.employee)).sort()).toEqual(
+      [String(B.employee._id), String(hr.employee._id)].sort(),
+    );
+  });
+
+  it('404 when a policies.manage holder names an employee that does not exist', async () => {
+    const hr = await actorWithRole('hr_manager');
+    const policy = await HrPolicy.create({
+      policyCode: 'POL-0003',
+      title: 'Travel policy',
+      status: 'published',
+    });
+    const res = await request(app)
+      .post(`/api/v1/hr-policies/${policy._id}/acknowledge`)
+      .set(auth(hr.token))
+      .send({ employee: '0123456789abcdef01234567' });
+    expect(res.status).toBe(404);
+    expect((await HrPolicy.findById(policy._id).lean())?.acknowledgements ?? []).toHaveLength(0);
+  });
+});
+
+describe('leave calendar', () => {
+  it('shows an employee who is off, but not the reason, attachments or comments', async () => {
+    const type = await LeaveType.create({ name: 'Sick', code: 'SL', daysAllowed: 10, color: '#ff0000' });
+    await LeaveRequest.create({
+      employeeId: B.employee._id,
+      leaveTypeId: type._id,
+      startDate: new Date('2026-03-10'),
+      endDate: new Date('2026-03-11'),
+      days: 2,
+      reason: 'Hospital appointment — chemotherapy',
+      attachments: [{ name: 'certificate.pdf', fileUrl: '/uploads/documents/medical-certificate.pdf' }],
+      rejectedReason: 'n/a',
+      status: 'approved',
+    });
+    const range = { from: '2026-03-01', to: '2026-03-31' };
+
+    const res = await request(app)
+      .get('/api/v1/leaves/requests/calendar')
+      .query(range)
+      .set(auth(A.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    const row = res.body.data[0];
+    expect(row).not.toHaveProperty('reason');
+    expect(row).not.toHaveProperty('attachments');
+    expect(row).not.toHaveProperty('comments');
+    expect(row).not.toHaveProperty('rejectedReason');
+    expect(row).not.toHaveProperty('approvedBy');
+    expect(JSON.stringify(res.body)).not.toContain('chemotherapy');
+    expect(row).toMatchObject({ days: 2, isHalfDay: false, status: 'approved' });
+    expect(row.employeeId).toMatchObject({ firstName: 'Test' });
+    expect(row.employeeId).not.toHaveProperty('email');
+    expect(row.leaveTypeId).toMatchObject({ name: 'Sick' });
+
+    // HR still sees the full request.
+    const hr = await actorWithRole('hr_manager');
+    const full = await request(app)
+      .get('/api/v1/leaves/requests/calendar')
+      .query(range)
+      .set(auth(hr.token));
+    expect(full.status).toBe(200);
+    expect(full.body.data[0].reason).toBe('Hospital appointment — chemotherapy');
+    expect(full.body.data[0]).toHaveProperty('attachments');
+  });
 });
 
 describe('field module', () => {
@@ -534,6 +715,19 @@ describe('field module', () => {
     expect(
       (await request(app).get(`/api/v1/field/visits/${mine._id}`).set(auth(A.token))).status,
     ).toBe(200);
+  });
+
+  it('updateVisit ignores a body employeeId from a rep (cannot hand a visit to someone else)', async () => {
+    const mine = await visitFor(A.employee);
+    const res = await request(app)
+      .patch(`/api/v1/field/visits/${mine._id}`)
+      .set(auth(A.token))
+      .send({ employeeId: String(B.employee._id), notes: 'moved?' });
+    expect(res.status).toBe(200);
+    expect(String(res.body.data.employeeId)).toBe(String(A.employee._id));
+    const stored = await Visit.findById(mine._id).lean();
+    expect(String(stored?.employeeId)).toBe(String(A.employee._id));
+    expect(stored?.notes).toBe('moved?');
   });
 
   it('lists only the caller’s own visits and ignores ?employeeId=', async () => {

@@ -20,7 +20,7 @@ export declare const loginAttempts: Counter<"outcome">;
 export declare const activeSessions: Gauge<string>;
 export declare const tenantCount: Gauge<"status">;
 export declare const subscriptionCount: Gauge<"status">;
-export declare const webhooksProcessed: Counter<"outcome" | "event">;
+export declare const webhooksProcessed: Counter<"event" | "outcome">;
 export declare const circuitBreakerState: Gauge<"name">;
 export declare const jobQueueSize: Gauge<"queue" | "state">;
 export declare const cacheHits: Counter<"outcome" | "key_prefix">;

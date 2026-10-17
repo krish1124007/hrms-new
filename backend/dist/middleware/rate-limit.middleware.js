@@ -20,6 +20,10 @@ function buildLimiter(opts) {
             res.setHeader('X-RateLimit-Remaining', String(Math.max(0, opts.max - count)));
             if (count > opts.max) {
                 const retryAfter = await redisApp.ttl(key);
+                // INCR and EXPIRE are separate round trips: if the process died between
+                // them the counter has no TTL (-1) and would block this caller forever.
+                if (retryAfter === -1)
+                    await redisApp.expire(key, ttlSeconds);
                 res.setHeader('Retry-After', String(retryAfter > 0 ? retryAfter : ttlSeconds));
                 res.status(429).json({
                     success: false,
@@ -46,12 +50,14 @@ export const userRateLimit = buildLimiter({
     scope: 'user',
 });
 /**
- * Strict rate limit for auth endpoints.
- * Blocks after 20 tries in 15 minutes per IP.
+ * Rate limit for auth endpoints: 100 tries in 15 minutes per IP. Per IP, not
+ * per person — a whole office behind one NAT address shares the budget, so it
+ * is sized for a morning of colleagues signing in. Password guessing against
+ * one account is stopped separately by the per email+IP lockout below.
  */
 export const authRateLimit = buildLimiter({
     windowMs: 15 * 60_000,
-    max: 20,
+    max: 100,
     keyPrefix: 'auth',
     scope: 'ip',
 });

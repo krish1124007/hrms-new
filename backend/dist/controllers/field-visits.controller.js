@@ -153,7 +153,12 @@ export async function createVisit(req, res) {
 }
 export async function updateVisit(req, res) {
     await assertVisitAccess(req, String(req.params.id));
-    const doc = await Visit.findByIdAndUpdate(String(req.params.id), req.body, {
+    const update = { ...req.body };
+    // A rep can't hand their visit to someone else (the schema does not accept
+    // employeeId today; this keeps it so if the schema ever grows one).
+    if (!hasPermission(req.user, MANAGE))
+        delete update.employeeId;
+    const doc = await Visit.findByIdAndUpdate(String(req.params.id), update, {
         new: true,
     }).exec();
     if (!doc)

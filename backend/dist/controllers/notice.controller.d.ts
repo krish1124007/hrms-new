@@ -27,19 +27,20 @@ export declare const createNoticeSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     title: string;
     content: string;
+    isPinned: boolean;
     attachments: {
         name: string;
         size: number;
         url: string;
         mimeType: string;
     }[];
-    isPinned: boolean;
     priority: "urgent" | "normal" | "important";
     departments: string[];
     expiresAt?: Date | undefined;
 }, {
     title: string;
     content: string;
+    isPinned?: boolean | undefined;
     attachments?: {
         name: string;
         url: string;
@@ -47,7 +48,6 @@ export declare const createNoticeSchema: z.ZodObject<{
         mimeType?: string | undefined;
     }[] | undefined;
     expiresAt?: Date | undefined;
-    isPinned?: boolean | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
     departments?: string[] | undefined;
 }>;
@@ -77,6 +77,7 @@ export declare const updateNoticeSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     title?: string | undefined;
     content?: string | undefined;
+    isPinned?: boolean | undefined;
     attachments?: {
         name: string;
         size: number;
@@ -84,12 +85,12 @@ export declare const updateNoticeSchema: z.ZodObject<{
         mimeType: string;
     }[] | undefined;
     expiresAt?: Date | undefined;
-    isPinned?: boolean | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
     departments?: string[] | undefined;
 }, {
     title?: string | undefined;
     content?: string | undefined;
+    isPinned?: boolean | undefined;
     attachments?: {
         name: string;
         url: string;
@@ -97,7 +98,6 @@ export declare const updateNoticeSchema: z.ZodObject<{
         mimeType?: string | undefined;
     }[] | undefined;
     expiresAt?: Date | undefined;
-    isPinned?: boolean | undefined;
     priority?: "urgent" | "normal" | "important" | undefined;
     departments?: string[] | undefined;
 }>;

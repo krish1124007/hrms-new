@@ -11,6 +11,11 @@ export declare function resetPassword(req: Request, res: Response): Promise<void
  * payload as `login`, so the SPA can drop the user straight into the app.
  */
 export declare function acceptInvite(req: Request, res: Response): Promise<void>;
+/**
+ * The signed-in user as stored now — role populated with its current
+ * `permissions`, plus `customPermissions` (authMiddleware loads both). The SPA
+ * re-reads this on start-up, so a role change reaches a persisted session.
+ */
 export declare function me(req: Request, res: Response): Promise<void>;
 /**
  * Update the currently logged-in user's own profile (name + avatar).

@@ -8,7 +8,9 @@ const router = Router();
 router.use(authMiddleware);
 // ---------- Leave Types ----------
 router.get('/types', requirePermission('leaves.view'), validate(ctrl.leaveTypeQuerySchema, 'query'), asyncHandler(ctrl.listLeaveTypes));
-router.post('/types', requirePermission('leaves.create'), validate(ctrl.createLeaveTypeSchema), asyncHandler(ctrl.createLeaveType));
+// Leave types are company-wide configuration; `leaves.create` only lets an
+// employee apply for their own leave.
+router.post('/types', requirePermission('leaves.update'), validate(ctrl.createLeaveTypeSchema), asyncHandler(ctrl.createLeaveType));
 router.get('/types/:id', requirePermission('leaves.view'), asyncHandler(ctrl.getLeaveType));
 router.patch('/types/:id', requirePermission('leaves.update'), validate(ctrl.updateLeaveTypeSchema), asyncHandler(ctrl.updateLeaveType));
 router.delete('/types/:id', requirePermission('leaves.delete'), asyncHandler(ctrl.deleteLeaveType));

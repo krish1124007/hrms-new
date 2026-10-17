@@ -184,3 +184,18 @@ userSchema.methods.generateRefreshToken = function (): string {
 };
 
 export const User = model<IUser, PaginateModel<IUser> & Model<IUser>>('User', userSchema);
+
+/**
+ * Activates a still-`invited` account in place (status, verified e-mail, spent
+ * invitation token) and reports whether it did. For flows that already prove
+ * the user may hold the account — a password-reset token sent to their
+ * mailbox, an admin setting the password. The caller saves; the document must
+ * have been loaded with `+emailVerificationToken` for the token to be cleared.
+ */
+export function activateIfInvited(user: IUser): boolean {
+  if (user.status !== 'invited') return false;
+  user.status = 'active';
+  user.emailVerified = true;
+  user.emailVerificationToken = undefined;
+  return true;
+}

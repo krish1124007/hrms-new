@@ -1,6 +1,6 @@
 import express from 'express';
 import request from 'supertest';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { presignResponse, unsignRequestBody } from './presign-response.middleware.js';
 import { signFileUrl, verifyFileSignature } from '../lib/file-urls.js';
 import { errorMiddleware } from './error.middleware.js';
@@ -134,6 +134,30 @@ describe('unsignRequestBody', () => {
     for (const folder of [' /uploads/backups', 'uploads/backups', '\\uploads\\backups']) {
       const res = await request(app).post('/t').send({ folder });
       expect(res.status, JSON.stringify(folder)).toBe(400);
+    }
+  });
+
+  it('400 INVALID_FILE_REFERENCE for an authentic link that expired more than an hour ago', async () => {
+    const { app, seen } = appRecordingBody();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const old = signFileUrl('/uploads/documents/a.pdf', 60);
+      vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+      const res = await request(app).post('/t').send({ fileUrl: old });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_FILE_REFERENCE');
+      expect(seen.body).toBeUndefined();
+
+      // Within the one-hour grace it is still converted.
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const recent = signFileUrl('/uploads/documents/b.pdf', 60);
+      vi.setSystemTime(new Date('2026-01-01T00:31:00Z'));
+      await request(app).post('/t').send({ fileUrl: recent }).expect(204);
+      expect(seen.body).toEqual({ fileUrl: '/uploads/documents/b.pdf' });
+    } finally {
+      vi.useRealTimers();
     }
   });
 

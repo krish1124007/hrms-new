@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'node:crypto';
-import { User } from '../models/user.model.js';
+import { User, activateIfInvited } from '../models/user.model.js';
 import { Session } from '../models/session.model.js';
 
 import { env } from '../config/env.js';
@@ -109,6 +109,7 @@ export async function login(req: Request, res: Response): Promise<void> {
         firstName: validUser.firstName,
         lastName: validUser.lastName,
         role: validUser.role,
+        customPermissions: validUser.customPermissions ?? [],
       },
       accessToken,
       refreshToken,
@@ -235,7 +236,9 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
     passwordResetToken: token,
     passwordResetExpires: { $gt: new Date() },
   })
-    .select('+passwordHistory +password +passwordResetToken +passwordResetExpires')
+    .select(
+      '+passwordHistory +password +passwordResetToken +passwordResetExpires +emailVerificationToken',
+    )
     .exec();
   if (!user) throw new UnauthorizedError('Invalid or expired reset token');
 
@@ -256,6 +259,9 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
   user.passwordResetExpires = undefined;
   user.passwordChangedAt = new Date();
   user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  // The e-mailed reset token proves the mailbox just as an invitation does,
+  // so an invited user who lost (or never got) the invite activates here.
+  const activated = activateIfInvited(user);
   await user.save();
 
   await revokeAllUserTokens(String(user._id), user.sessionVersion);
@@ -265,7 +271,11 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
     action: 'update',
     entity: 'User',
     entityId: String(user._id),
-    metadata: { event: 'password.reset', sessionVersion: user.sessionVersion },
+    metadata: {
+      event: 'password.reset',
+      sessionVersion: user.sessionVersion,
+      ...(activated ? { activated: true } : {}),
+    },
   });
 
   res.json({
@@ -329,6 +339,7 @@ export async function acceptInvite(req: Request, res: Response): Promise<void> {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
+        customPermissions: user.customPermissions ?? [],
       },
       accessToken,
       refreshToken,
@@ -336,6 +347,11 @@ export async function acceptInvite(req: Request, res: Response): Promise<void> {
   });
 }
 
+/**
+ * The signed-in user as stored now — role populated with its current
+ * `permissions`, plus `customPermissions` (authMiddleware loads both). The SPA
+ * re-reads this on start-up, so a role change reaches a persisted session.
+ */
 export async function me(req: Request, res: Response): Promise<void> {
   if (!req.user) throw new UnauthorizedError();
   res.json({
