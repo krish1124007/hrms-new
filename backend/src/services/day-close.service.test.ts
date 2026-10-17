@@ -396,6 +396,85 @@ describe('closeBusinessDay — auto-checkout', () => {
   });
 });
 
+describe('closeBusinessDay — overnight sweep of the previous day', () => {
+  async function nightOwl() {
+    const night = await Shift.create({
+      name: 'Night',
+      startTime: '22:00',
+      endTime: '06:00',
+      isNightShift: true,
+      graceMinutes: 15,
+    });
+    return makeEmployee({ shift: night._id });
+  }
+  async function openRow(emp: IEmployee, day: string, inAt: string) {
+    return Attendance.create({
+      employeeId: emp._id,
+      date: label(day),
+      checkIn: { time: ist(day, inAt), method: 'manual' },
+      status: 'present',
+    });
+  }
+
+  it("closes yesterday's open overnight row at shift end + grace on the closed day", async () => {
+    const owl = await nightOwl();
+    const row = await openRow(owl, '2026-10-12', '22:00');
+
+    const counts = await closeBusinessDay(ist('2026-10-13', '23:59'));
+
+    expect(counts.autoCheckedOut).toBe(1);
+    const after = await Attendance.findById(row._id).lean().exec();
+    // 06:00 + 15 min on Tue 13 IST = 00:45Z.
+    expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-13T00:45:00.000Z');
+    expect(after!.checkOut!.metadata).toMatchObject({ autoCheckout: true });
+    expect(after!.source).toBe('auto_checkout');
+    expect(after!.totalWorkingHours).toBe(8.25);
+    expect(after!.overtimeHours).toBe(0);
+    expect(after!.earlyLeaveBy).toBe(0);
+    expect(after!.status).toBe('present');
+  });
+
+  it('leaves a previous-day day-shift row to its own day (not touched, not counted)', async () => {
+    const worker = await makeEmployee();
+    const row = await openRow(worker, '2026-10-12', '09:30');
+    await Attendance.create({ employeeId: worker._id, date: label('2026-10-13'), status: 'absent', source: 'auto_absent' });
+
+    const counts = await closeBusinessDay(ist('2026-10-13', '23:59'));
+
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
+  });
+
+  it('is idempotent, and dryRun counts without writing', async () => {
+    const owl = await nightOwl();
+    const row = await openRow(owl, '2026-10-12', '22:00');
+    await Attendance.create({ employeeId: owl._id, date: label('2026-10-13'), status: 'absent', source: 'auto_absent' });
+
+    const dry = await closeBusinessDay(ist('2026-10-13', '23:59'), { dryRun: true });
+    expect(dry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
+
+    const first = await closeBusinessDay(ist('2026-10-13', '23:59'));
+    expect(first).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    const second = await closeBusinessDay(ist('2026-10-13', '23:59'));
+    expect(second).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+  });
+
+  it("the overnight row left open on its own day is closed by the next day's run", async () => {
+    const owl = await nightOwl();
+    const row = await openRow(owl, '2026-10-12', '22:10');
+
+    const day12 = await closeBusinessDay(ist('2026-10-12', '23:59'));
+    expect(day12.skipped).toBe(1);
+    expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
+
+    await closeBusinessDay(ist('2026-10-13', '23:59'));
+    const after = await Attendance.findById(row._id).lean().exec();
+    expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-13T00:45:00.000Z');
+    expect(after!.totalWorkingHours).toBe(8.08);
+  });
+});
+
 describe('closeBusinessDay — one bad row does not stop the day', () => {
   it('closes the valid open row, rejects naming the bad one, and succeeds once it is fixed', async () => {
     await AttendanceConfig.create({ settings: { autoCheckoutTime: '19:00' } });
@@ -405,7 +484,8 @@ describe('closeBusinessDay — one bad row does not stop the day', () => {
     const goodRow = await Attendance.create({ employeeId: good._id, date: label('2026-10-12'), checkIn, status: 'present' });
     const badRow = await Attendance.create({ employeeId: bad._id, date: label('2026-10-12'), checkIn, status: 'present' });
     // A value the schema rejects, written behind Mongoose's back: save() fails.
-    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { status: 'bogus' } });
+    // (Not `status`: the day rules recompute that from scratch.)
+    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { 'checkIn.method': 'bogus' } });
     const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 
     const err = await closeBusinessDay(ist('2026-10-12', '23:59')).then(
@@ -432,7 +512,7 @@ describe('closeBusinessDay — one bad row does not stop the day', () => {
     );
     expect((await Attendance.collection.findOne({ _id: badRow._id }))!.checkOut).toBeUndefined();
 
-    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { status: 'present' } });
+    await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { 'checkIn.method': 'manual' } });
     const retry = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
     expect(retry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });

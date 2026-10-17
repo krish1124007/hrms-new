@@ -15,8 +15,13 @@
  *   2. closes every check-in of that day that has no check-out, at the
  *      configured `autoCheckoutTime` (23:59 when unset), and recomputes the
  *      hours with the same rules a real check-out uses — except rows on an
- *      overnight shift, whose day ends tomorrow. Auto-checkout never grants
- *      overtime.
+ *      overnight shift, whose day ends tomorrow;
+ *   3. closes the PREVIOUS day's check-ins still open on an overnight shift
+ *      (22:00 → 06:00) at that shift's end + `graceMinutes` — the check-out
+ *      the employee forgot after midnight. Previous-day rows on a day shift
+ *      belong to the previous day's run and are not touched.
+ *   Auto-checkout never grants overtime. The shift is the employee's own,
+ *   else the company default shift (`resolveShift`).
  *
  * Idempotent: a second run for the same day finds every row already there
  * and every check-in already closed, and returns all-zero counts.
@@ -36,11 +41,17 @@ import { AttendanceConfig, type IAttendanceConfig } from '../models/attendance-c
 import { Employee } from '../models/employee.model.js';
 import { LeaveRequest, type ILeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
-import type { IShift } from '../models/shift.model.js';
+import { Shift, type IShift } from '../models/shift.model.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
 import { atBusinessTime, endOfBusinessDay, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
-import { applyShiftRules, computeHours, isOvernightShift } from '../lib/attendance-hours.js';
+import {
+  applyShiftRules,
+  computeHours,
+  isOvernightShift,
+  resolveShift,
+  shiftWindow,
+} from '../lib/attendance-hours.js';
 import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
 import { stampLeaveDay } from './leave-attendance.service.js';
@@ -50,7 +61,10 @@ export interface DayCloseCounts {
   absentCreated: number;
   /** Leave rows written for days an approved leave covers. */
   leaveStamped: number;
-  /** Open check-ins closed at the auto-checkout time. */
+  /**
+   * Open check-ins closed: the day's own at the auto-checkout time, and the
+   * previous day's overnight-shift ones at shift end + grace.
+   */
   autoCheckedOut: number;
   /**
    * Nothing written although the employee/row was in scope: a non-working
@@ -257,12 +271,12 @@ export async function closeBusinessDay(
   counts.absentCreated += inserted;
   counts.skipped += absentRows.length - inserted;
 
-  // ── 2. Close check-ins left open ───────────────────────────────────────
-  // Hook: the overnight-shift sweep belongs here — closing the *previous*
-  // day's still-open overnight rows at shift end + grace, which this run
-  // deliberately leaves open (below).
+  // ── 2 + 3. Close check-ins left open ───────────────────────────────────
+  // The day's own open rows, plus the previous day's: an overnight shift
+  // that began then ends on this day.
+  const prevDay = new Date(day.getTime() - DAY_MS);
   const openRows = await Attendance.find({
-    date: { $gte: day, $lte: dayEnd },
+    date: { $gte: prevDay, $lte: dayEnd },
     'checkIn.time': { $ne: null },
     'checkOut.time': null,
   }).exec();
@@ -271,24 +285,46 @@ export async function closeBusinessDay(
     const autoCheckoutTime = HHMM.test(cfg?.settings.autoCheckoutTime ?? '')
       ? cfg!.settings.autoCheckoutTime!
       : DEFAULT_AUTO_CHECKOUT_TIME;
-    const owners = await Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
-      .setOptions({ withDeleted: true })
-      .select('_id shift')
-      .populate('shift')
-      .exec();
-    const ownerShift = new Map(owners.map((e) => [String(e._id), shiftOf(e)]));
+    const [owners, defaultShift] = await Promise.all([
+      Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
+        .setOptions({ withDeleted: true })
+        .select('_id shift')
+        .populate('shift')
+        .exec(),
+      Shift.findOne({ isDefault: true }).exec(),
+    ]);
+    // Owners are populated and the default is preloaded: no further queries.
+    const ownerShift = new Map<string, IShift | null>(
+      await Promise.all(
+        owners.map(async (e) => [String(e._id), await resolveShift(e, { defaultShift })] as const),
+      ),
+    );
 
     for (const row of openRows) {
-      const shift = ownerShift.get(String(row.employeeId)) ?? null;
-      if (isOvernightShift(shift)) {
-        // The shift ends tomorrow: closing a 22:00 check-in at 23:59 would
-        // record under 2 h and a half day. Left open for the overnight sweep.
-        counts.skipped += 1;
-        continue;
+      const shift = ownerShift.get(String(row.employeeId)) ?? defaultShift;
+      const overnight = isOvernightShift(shift);
+      let out: Date;
+      if (dayOf(row.date) < day.getTime()) {
+        // Previous day: only an overnight shift's row is this run's to close.
+        if (!overnight) continue;
+        const window = shiftWindow(startOfBusinessDay(row.date), shift);
+        if (!window) {
+          counts.skipped += 1;
+          continue;
+        }
+        const end = new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * 60_000);
+        out = end.getTime() >= row.checkIn!.time!.getTime() ? end : row.checkIn!.time!;
+      } else {
+        if (overnight) {
+          // The shift ends tomorrow: closing a 22:00 check-in at 23:59 would
+          // record under 2 h and a half day. Tomorrow's run sweeps it (3).
+          counts.skipped += 1;
+          continue;
+        }
+        out = autoCheckoutInstant(day, row.checkIn!.time!, autoCheckoutTime);
       }
-      const out = autoCheckoutInstant(day, row.checkIn!.time!, autoCheckoutTime);
       if (out.getTime() > now.getTime()) {
-        // The day is still running (a run before 23:59); leave it open.
+        // That check-out time has not come yet (a run before it); leave it open.
         counts.skipped += 1;
         continue;
       }

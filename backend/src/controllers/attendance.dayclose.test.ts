@@ -166,14 +166,15 @@ describe('POST /api/v1/attendance/close-days', () => {
   it('a failing day stops the run but every day reached is audited, the failing one with partial counts', async () => {
     const emp = await worker();
     const other = await worker();
-    // An open row on Mon 12 that cannot be saved (schema-invalid status).
+    // An open row on Mon 12 that cannot be saved (schema-invalid check-in
+    // method — a path auto-checkout does not rewrite, unlike the status).
     const bad = await Attendance.create({
       employeeId: other._id,
       date: label('2026-10-12'),
       checkIn: { time: new Date('2026-10-12T04:00:00.000Z'), method: 'manual' },
       status: 'present',
     });
-    await Attendance.collection.updateOne({ _id: bad._id }, { $set: { status: 'bogus' } });
+    await Attendance.collection.updateOne({ _id: bad._id }, { $set: { 'checkIn.method': 'bogus' } });
     const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 
     const res = await request(app)

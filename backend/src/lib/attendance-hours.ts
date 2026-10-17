@@ -1,15 +1,17 @@
 /**
- * Worked-hours maths and the rules derived from it, shared by self-service
- * check-out, HR corrections and the nightly day-close so all of them judge a
- * day the same way.
+ * Worked-hours maths, the shift that governs a day and the rules derived
+ * from both — shared by check-in, check-out, HR corrections and the nightly
+ * day-close so all of them judge a day the same way.
  *
  * `totalWorkingHours` is only persisted at check-out, so an in-progress day
  * reads back as 0. `computeHours` derives the figure from the timestamps
  * instead, so a day in progress reports the hours worked so far.
  */
+import { Types } from 'mongoose';
 import type { IAttendance } from '../models/attendance.model.js';
 import type { IAttendanceConfig } from '../models/attendance-config.model.js';
-import type { IShift } from '../models/shift.model.js';
+import { Shift, type IShift } from '../models/shift.model.js';
+import { atBusinessTime, startOfBusinessDay } from './business-day.js';
 
 interface BreakLike {
   startTime?: Date | string | null;
@@ -50,37 +52,151 @@ export function computeHours(att: WorkedHoursSource, at: Date): number {
   return +(workedMs(att, at) / 3_600_000).toFixed(2);
 }
 
-/**
- * Apply the day rules to a row whose `totalWorkingHours` is already set:
- *   • overtime beyond `overtimeThresholdMinutes` (default 540);
- *   • `half_day` when the hours fall short of the shift's half-day hours,
- *     falling back to the configured threshold (default 4).
- * Mutates `att`; the caller saves it.
- */
-export function applyShiftRules(
-  att: IAttendance,
-  shift: IShift | null,
-  cfg: IAttendanceConfig | null,
-): void {
-  const otThresholdMin = cfg?.settings.overtimeThresholdMinutes ?? 540;
-  const halfDayHours = shift?.halfDayHours ?? cfg?.settings.halfDayThresholdHours ?? 4;
+// ─── Shifts ──────────────────────────────────────────────────────────────
 
-  const workMin = att.totalWorkingHours * 60;
-  att.overtimeHours = workMin > otThresholdMin ? +((workMin - otThresholdMin) / 60).toFixed(2) : 0;
-  if (att.totalWorkingHours < halfDayHours) {
-    att.status = 'half_day';
-  }
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60_000;
+
+/**
+ * The shift fields the day rules read. Times are `HH:mm` in the business
+ * timezone; the numeric fields may be missing on legacy lean reads, in which
+ * case the configured thresholds apply.
+ */
+export type ShiftRulesSource = Pick<IShift, 'startTime' | 'endTime'> &
+  Partial<Pick<IShift, 'graceMinutes' | 'halfDayHours' | 'fullDayHours' | 'isNightShift'>>;
+
+/** `HH:mm` as minutes after midnight, or null when malformed. */
+function clockMinutes(hhmm: string | null | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm ?? '');
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h < 24 && min < 60 ? h * 60 + min : null;
 }
 
 /**
  * Whether a shift runs past midnight — flagged as a night shift, or ending
- * at an earlier clock time than it starts (`HH:mm` compares as a string).
- * Such a shift's day ends on the next calendar day.
+ * at an earlier clock time than it starts. Such a shift's day ends on the
+ * next calendar day.
  */
 export function isOvernightShift(
   shift: Pick<IShift, 'isNightShift' | 'startTime' | 'endTime'> | null | undefined,
 ): boolean {
   if (!shift) return false;
   if (shift.isNightShift === true) return true;
-  return Boolean(shift.startTime && shift.endTime && shift.endTime < shift.startTime);
+  const start = clockMinutes(shift.startTime);
+  const end = clockMinutes(shift.endTime);
+  return start !== null && end !== null && end < start;
+}
+
+/**
+ * The instants a shift starts and ends for the business day `day` (a day
+ * label, see `lib/business-day.ts`). An `endTime` earlier than `startTime`
+ * (22:00 → 06:00) ends on the next day. Null when the shift has no usable
+ * times.
+ */
+export function shiftWindow(
+  day: Date,
+  shift: Pick<IShift, 'startTime' | 'endTime'> | null | undefined,
+): { start: Date; end: Date } | null {
+  if (!shift) return null;
+  const start = clockMinutes(shift.startTime);
+  const end = clockMinutes(shift.endTime);
+  if (start === null || end === null) return null;
+  const endDay = end < start ? new Date(day.getTime() + DAY_MS) : day;
+  return { start: atBusinessTime(day, shift.startTime), end: atBusinessTime(endDay, shift.endTime) };
+}
+
+/**
+ * The day label a check-in at `at` is filed under: the business day it falls
+ * on — except inside the tail of an overnight shift that began the evening
+ * before (a 22:00 → 06:00 shift punched at 00:30), which belongs to that
+ * evening's day, so a late arrival does not open a row for the wrong night.
+ */
+export function attendanceDayFor(
+  at: Date,
+  shift: Pick<IShift, 'isNightShift' | 'startTime' | 'endTime'> | null | undefined,
+): Date {
+  const today = startOfBusinessDay(at);
+  if (!isOvernightShift(shift)) return today;
+  const yesterday = new Date(today.getTime() - DAY_MS);
+  const window = shiftWindow(yesterday, shift);
+  return window && at.getTime() < window.end.getTime() ? yesterday : today;
+}
+
+/**
+ * The shift that governs an employee's day: their own (populated, or loaded
+ * by id), else the company default shift (`isDefault: true`), else none.
+ * A soft-deleted assigned shift falls through to the default. Pass
+ * `defaultShift` when it is already loaded (batch callers) to skip that query.
+ */
+export async function resolveShift(
+  employee: { shift?: unknown } | null | undefined,
+  opts: { defaultShift?: IShift | null } = {},
+): Promise<IShift | null> {
+  const assigned = employee?.shift;
+  if (assigned && typeof assigned === 'object' && !(assigned instanceof Types.ObjectId)) {
+    return assigned as IShift; // populated
+  }
+  if (assigned) {
+    const doc = await Shift.findById(assigned).exec();
+    if (doc) return doc;
+  }
+  if ('defaultShift' in opts) return opts.defaultShift ?? null;
+  return Shift.findOne({ isDefault: true }).exec();
+}
+
+// ─── Day rules ───────────────────────────────────────────────────────────
+
+/** Whole minutes in `ms`, never negative. */
+const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MINUTE_MS));
+
+/** A row an approved leave stamped (see `services/leave-attendance.service.ts`). */
+const hasLeaveStamp = (att: IAttendance): boolean => att.leaveRequestId != null || att.isPaidLeave != null;
+
+/**
+ * Judge a day from scratch — the same verdict for check-in, check-out, HR
+ * corrections and day-close, however often it is re-run. Reads the punches,
+ * `date` and (for the hours rules) `totalWorkingHours`, which the caller sets
+ * first via `computeHours`. On the row's business day, in business time:
+ *
+ *   • `lateBy` = minutes the check-in is past shift start + `graceMinutes`
+ *     (0 without a shift: there is no start to be late for);
+ *   • `earlyLeaveBy` = minutes the check-out is before shift end (0 without a
+ *     shift or a check-out). An overnight shift ends on the next day;
+ *   • `overtimeHours` beyond `fullDayHours` of the shift, else beyond the
+ *     configured `overtimeThresholdMinutes` (0 until checked out);
+ *   • `status`: a leave-stamped row keeps its leave status; otherwise
+ *     `half_day` when checked out under the shift's `halfDayHours` (else the
+ *     configured `halfDayThresholdHours`), else `late` when `lateBy > 0`,
+ *     else `present`. Half day wins over late: a short day is a short day.
+ *
+ * Rows without a check-in are left as they are. Mutates `att`; the caller saves it.
+ */
+export function applyShiftRules(
+  att: IAttendance,
+  shift: ShiftRulesSource | null,
+  cfg: IAttendanceConfig | null,
+): void {
+  const inAt = att.checkIn?.time ? new Date(att.checkIn.time) : null;
+  if (!inAt) return;
+  const outAt = att.checkOut?.time ? new Date(att.checkOut.time) : null;
+  // Normalising also reads a label stored at IST midnight as the day it names.
+  const day = startOfBusinessDay(att.date ? new Date(att.date) : inAt);
+  const window = shiftWindow(day, shift);
+  const graceMin = shift?.graceMinutes ?? cfg?.settings.lateMarkAfterMinutes ?? 15;
+
+  att.lateBy = window ? wholeMinutes(inAt.getTime() - window.start.getTime() - graceMin * MINUTE_MS) : 0;
+  att.earlyLeaveBy = window && outAt ? wholeMinutes(window.end.getTime() - outAt.getTime()) : 0;
+
+  const otThresholdMin =
+    shift?.fullDayHours != null ? shift.fullDayHours * 60 : (cfg?.settings.overtimeThresholdMinutes ?? 540);
+  const workMin = att.totalWorkingHours * 60;
+  att.overtimeHours = outAt && workMin > otThresholdMin ? +((workMin - otThresholdMin) / 60).toFixed(2) : 0;
+
+  if (hasLeaveStamp(att)) return;
+  const halfDayHours = shift?.halfDayHours ?? cfg?.settings.halfDayThresholdHours ?? 4;
+  if (outAt && att.totalWorkingHours < halfDayHours) att.status = 'half_day';
+  else if (att.lateBy > 0) att.status = 'late';
+  else att.status = 'present';
 }
