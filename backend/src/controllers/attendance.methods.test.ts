@@ -378,6 +378,62 @@ describe('night shift (22:00 → 06:00)', () => {
       label('2026-10-13').toISOString(),
     ]);
   });
+
+  it('a night row left open stops being current at shift end + grace: the next evening is a fresh day', async () => {
+    await configure();
+    const who = await nightWorker();
+    const stale = await punch('in', who, ist('2026-10-12', '22:00'));
+    const staleId = stale.body.data._id as string;
+
+    // Still the running shift at 06:00 + 15 min grace.
+    vi.setSystemTime(ist('2026-10-13', '06:15'));
+    const atGrace = await request(app).get('/api/v1/attendance/today').set(who.auth());
+    expect(atGrace.body.data._id).toBe(staleId);
+
+    // 21:55 the next evening: a forgotten check-out, not a 23.92 h day in progress.
+    vi.setSystemTime(ist('2026-10-13', '21:55'));
+    const today = await request(app).get('/api/v1/attendance/today').set(who.auth());
+    expect(today.status).toBe(200);
+    expect(today.body.data).toBeNull();
+
+    const out = await punch('out', who, ist('2026-10-13', '21:55'));
+    expect(out.status).toBe(400);
+    expect(out.body.error.message).toBe('You must check in first');
+    expect((await Attendance.findById(staleId).lean())!.checkOut?.time).toBeFalsy();
+
+    const fresh = await punch('in', who, ist('2026-10-13', '21:55'));
+    expect(fresh.status).toBe(201);
+    expect(fresh.body.data.date).toBe(label('2026-10-13').toISOString());
+
+    const closed = await punch('out', who, ist('2026-10-14', '06:00'));
+    expect(closed.status).toBe(200);
+    expect(closed.body.data._id).toBe(fresh.body.data._id);
+    expect((await Attendance.findById(staleId).lean())!.checkOut?.time).toBeFalsy();
+  });
+
+  it('/my, /monthly and /records report live hours for the running night row, not for a stale one', async () => {
+    await configure();
+    const who = await nightWorker();
+    const inRes = await punch('in', who, ist('2026-10-12', '22:30'));
+    const id = inRes.body.data._id as string;
+    const hoursIn = (body: { data: { _id: string; totalWorkingHours: number }[] }) =>
+      body.data.find((r) => r._id === id)!.totalWorkingHours;
+
+    vi.setSystemTime(ist('2026-10-13', '02:00'));
+    const my = await request(app).get('/api/v1/attendance/my').set(who.auth());
+    expect(hoursIn(my.body)).toBe(3.5);
+    const monthly = await request(app).get('/api/v1/attendance/monthly?year=2026&month=10').set(who.auth());
+    expect(hoursIn(monthly.body)).toBe(3.5);
+    const { token: adminToken } = await createUser({ roleSlug: 'admin' });
+    const records = await request(app)
+      .get('/api/v1/attendance/records')
+      .set({ Authorization: `Bearer ${adminToken}` });
+    expect(hoursIn(records.body)).toBe(3.5);
+
+    vi.setSystemTime(ist('2026-10-13', '21:55'));
+    const later = await request(app).get('/api/v1/attendance/my').set(who.auth());
+    expect(hoursIn(later.body)).toBe(0);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -436,6 +492,17 @@ describe('check-out method handling', () => {
       .send({});
     expect(outRes.status).toBe(200);
     expect(outRes.body.data.checkOut.method).toBe('manual');
+  });
+
+  it("a check-out sent as 'face' (the web default when face is listed first) succeeds, recorded as manual", async () => {
+    await configure({ enabledMethods: ['face', 'manual'] });
+    const who = await staff();
+
+    await punch('in', who, ist('2026-10-12', '09:30'));
+    const res = await punch('out', who, ist('2026-10-12', '18:30'), { method: 'face' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.checkOut.method).toBe('manual');
   });
 
   it('still enforces the location rule', async () => {

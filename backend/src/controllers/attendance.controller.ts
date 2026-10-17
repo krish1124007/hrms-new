@@ -8,17 +8,17 @@ import { GeofenceZone } from '../models/geofence-zone.model.js';
 import { AttendanceSite } from '../models/attendance-site.model.js';
 import { AllowedIP } from '../models/allowed-ip.model.js';
 import { Employee } from '../models/employee.model.js';
-import { Shift } from '../models/shift.model.js';
+import { Shift, type IShift } from '../models/shift.model.js';
 import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { isWeekOff, toKey } from '../lib/week-off.js';
-import { startOfBusinessDay } from '../lib/business-day.js';
+import { DAY_MS, startOfBusinessDay } from '../lib/business-day.js';
 import {
   applyShiftRules,
   attendanceDayFor,
   computeHours,
-  isOvernightShift,
+  isRowInProgress,
   resolveShift,
   type WorkedHoursSource,
 } from '../lib/attendance-hours.js';
@@ -233,6 +233,7 @@ function faceUnavailable(): AppError {
  * Prove a check-in came through `method`: it must be enabled for the tenant
  * and its evidence (QR code, office IP, site/geofence position, device) must
  * check out. Check-in only — check-out is not re-validated (see `checkOut`).
+ * `face` never gets here: `checkIn` refuses it first.
  */
 async function validateMethod(
   method: string,
@@ -246,8 +247,6 @@ async function validateMethod(
   const metadata: Record<string, unknown> = {};
 
   switch (method) {
-    case 'face':
-      throw faceUnavailable();
     case 'qr': {
       if (!body.qrCode) throw new ValidationAppError('qrCode is required');
       const qr = await QRCode.findOne({ code: body.qrCode, type: 'static', isActive: true }).exec();
@@ -397,29 +396,53 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
  * ─────────────────────────────────────────────────────────────────── */
 
 /**
- * Fill in `totalWorkingHours` for a day that is still running. Finished days
- * keep their stored value; nothing is written back to the database.
+ * Fill in `totalWorkingHours` for a day that is still running — by the same
+ * rule `currentRow` uses (`isRowInProgress`: today's open row, or a night
+ * shift's open row until its end + grace). Finished days and forgotten
+ * check-outs keep their stored value, so a forgotten one stays visible as the
+ * anomaly it is instead of growing without bound. Nothing is written back.
  */
-function withLiveHours<T extends WorkedHoursSource>(att: T, now: Date = new Date()): T {
-  if (!att?.checkIn?.time || att.checkOut?.time) return att;
-  // ONLY today's row is genuinely in progress. An older record with no
-  // check-out is a forgotten check-out, and treating it as "still running"
-  // grows without bound — a day missed in August reported 44.67 hours and
-  // climbing, which then inflated every month total built from these rows.
-  // Leave such records on their stored value so they stay visible as the
-  // anomaly they are and can be regularised.
-  // `date` is already a UTC-midnight day label; a bare timestamp has to be
-  // resolved to one first. Compare against today's label in business time.
-  const recordLabel = att.date
-    ? new Date(att.date)
-    : startOfBusinessDay(new Date(att.checkIn.time as string));
-  if (recordLabel.getTime() !== startOfBusinessDay(now).getTime()) return att;
+function withLiveHours<T extends WorkedHoursSource>(att: T, shift: IShift | null, now: Date): T {
+  if (!isRowInProgress(att, shift, now)) return att;
   // Callers hand us either lean objects or hydrated documents (paginate()
   // does not lean). Spreading a document would serialise its internals, so
   // convert first.
   const asDoc = att as unknown as { toObject?: () => T };
   const plain = typeof asDoc.toObject === 'function' ? asDoc.toObject() : att;
   return { ...plain, totalWorkingHours: computeHours(att, now) };
+}
+
+type LiveRow = WorkedHoursSource & { employeeId?: unknown };
+
+/** An `employeeId` that may be populated, as a string. */
+const ownerKey = (employeeId: unknown): string =>
+  String((employeeId as { _id?: unknown } | null)?._id ?? employeeId);
+
+/**
+ * `withLiveHours` for a list of rows (any mix of employees). Only an open row
+ * from an earlier day needs its owner's shift; those owners' shifts are loaded
+ * in one query, and only when there is such a row.
+ */
+async function withLiveHoursAll<T extends LiveRow>(rows: T[], now: Date = new Date()): Promise<T[]> {
+  const today = startOfDay(now).getTime();
+  const owners = new Set(
+    rows
+      .filter((r) => r.checkIn?.time && !r.checkOut?.time && r.date && startOfDay(new Date(r.date)).getTime() < today)
+      .map((r) => ownerKey(r.employeeId)),
+  );
+  const shifts = new Map<string, IShift | null>();
+  if (owners.size > 0) {
+    const [docs, defaultShift] = await Promise.all([
+      Employee.find({ _id: { $in: [...owners] } })
+        .setOptions({ withDeleted: true })
+        .select('_id shift')
+        .populate('shift')
+        .exec(),
+      Shift.findOne({ isDefault: true }).exec(),
+    ]);
+    for (const d of docs) shifts.set(String(d._id), await resolveShift(d, { defaultShift }));
+  }
+  return rows.map((r) => withLiveHours(r, shifts.get(ownerKey(r.employeeId)) ?? null, now));
 }
 
 /* ── Which row does a punch-out act on? ─────────────────────────────
@@ -451,18 +474,21 @@ async function findOpenPunch(employeeId: Types.ObjectId, now: Date): Promise<IAt
 }
 
 /**
- * The row the "today" card and breaks act on: today's row once it has a
- * check-in; otherwise, for an employee on an overnight shift, the check-in
- * still open from the evening before; otherwise today's row, if any.
+ * The row check-out, breaks and the "today" card act on: today's row once it
+ * has a check-in; otherwise the latest open check-in of the last 36 h if it
+ * is still in progress (`isRowInProgress`) — a night shift after midnight,
+ * up to its end + grace; otherwise today's row, if any.
  *
- * Restricted to overnight shifts so a day-shift row left open by a failed
- * day-close does not stand in for today and hide the check-in button.
+ * Past its end + grace an open row is a forgotten check-out (day-close closes
+ * it at that instant): it must not stand in for today — a punch the next
+ * evening would otherwise close a 24-hour "day" — nor hide the check-in
+ * button. A day-shift row from an earlier day never qualifies.
  */
 async function currentRow(emp: CurrentEmployee, now: Date): Promise<IAttendance | null> {
   const today = await Attendance.findOne({ employeeId: emp.id, date: startOfDay(now) }).exec();
   if (today?.checkIn?.time) return today;
   const open = await findOpenPunch(emp.id, now);
-  if (open && isOvernightShift(await resolveShift(emp.doc))) return open;
+  if (open && isRowInProgress(open, await resolveShift(emp.doc), now)) return open;
   return today;
 }
 
@@ -501,16 +527,13 @@ async function assertExpenseFiled(
 
 export async function checkOut(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkOutSchema>;
-  if (body.method === 'face') throw faceUnavailable();
   const emp = await getCurrentEmployee();
   if (!emp) throw new ForbiddenError('No employee profile found for current user');
 
   const now = new Date();
-  // Today's row once it has a check-in (already closed → say so); otherwise
-  // the latest check-in of the last 36 h still open — yesterday's row for a
-  // night shift checking out after midnight.
-  const today = await Attendance.findOne({ employeeId: emp.id, date: startOfDay(now) }).exec();
-  const att = today?.checkIn?.time ? today : await findOpenPunch(emp.id, now);
+  // Today's row once it has a check-in (already closed → say so); otherwise a
+  // night shift's row still in progress after midnight.
+  const att = await currentRow(emp, now);
   if (!att?.checkIn?.time) throw new ValidationAppError('You must check in first');
   if (att.checkOut?.time) {
     // Name the recorded time. Employees hit this without knowingly checking
@@ -530,7 +553,9 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
 
   att.checkOut = {
     time: now,
-    method: body.method,
+    // Not validated, so never recorded as face: there is no face check. (The
+    // web widget sends its selected method, `enabledMethods[0]` by default.)
+    method: body.method === 'face' ? 'manual' : body.method,
     location: body.location,
     photo: body.photo,
     deviceInfo: body.deviceInfo,
@@ -746,8 +771,9 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
   // Same live-hours treatment as /my — without it the admin records and
   // timesheet pages report 0.00h for everyone still checked in.
   const areas = await loadKnownAreas();
-  const data = result.data.map((r) => {
-    const row = withLiveHours(r as WorkedHoursSource) as WorkedHoursSource & {
+  const live = await withLiveHoursAll(result.data as LiveRow[]);
+  const data = live.map((r) => {
+    const row = r as WorkedHoursSource & {
       toObject?: () => unknown;
       checkIn?: { location?: { lat?: number; lng?: number } } | null;
       checkOut?: { location?: { lat?: number; lng?: number } } | null;
@@ -778,9 +804,9 @@ export async function myAttendance(req: Request, res: Response): Promise<void> {
     limit: q.limit ?? 50,
     sort: '-date',
   });
-  // Today's row is still running until check-out — report hours so far so the
-  // month summary built from this list isn't missing today's work.
-  const data = result.data.map((r) => withLiveHours(r as WorkedHoursSource));
+  // A day still running reports hours so far, so the month summary built
+  // from this list isn't missing today's (or tonight's) work.
+  const data = await withLiveHoursAll(result.data as LiveRow[]);
   res.json({ success: true, data, pagination: result.pagination });
 }
 
@@ -788,13 +814,13 @@ export async function todayAttendance(_req: Request, res: Response): Promise<voi
   const emp = await getCurrentEmployee();
   if (!emp) throw new ForbiddenError('No employee profile found for current user');
   const now = new Date();
-  // Today's row — or, after midnight on a night shift, the one still open
-  // from the evening before, so the clients offer "Check out", not "Check in".
-  const att = (await currentRow(emp, now))?.toObject() ?? null;
+  // Today's row — or, after midnight on a night shift, the one still in
+  // progress from the evening before, so the clients offer "Check out".
+  const att = await currentRow(emp, now);
   // Hours-so-far for a day still in progress — this is the record every
   // "Hours today" tile on web and mobile reads.
-  const running = Boolean(att?.checkIn?.time && !att.checkOut?.time);
-  res.json({ success: true, data: att && running ? { ...att, totalWorkingHours: computeHours(att, now) } : att });
+  const [data] = att ? await withLiveHoursAll([att.toObject() as LiveRow], now) : [null];
+  res.json({ success: true, data });
 }
 
 export async function myShift(_req: Request, res: Response): Promise<void> {
@@ -865,9 +891,9 @@ export async function monthlyAttendance(req: Request, res: Response): Promise<vo
   }
   filled.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  // Same as /my — today's row is still open, so report hours so far. The
-  // mobile month summary is built from this endpoint.
-  const withHours = filled.map((r) => withLiveHours(r as WorkedHoursSource));
+  // Same as /my — a day still running reports hours so far. The mobile
+  // month summary is built from this endpoint.
+  const withHours = await withLiveHoursAll(filled as LiveRow[]);
 
   res.json({ success: true, data: withHours });
 }
@@ -1017,7 +1043,6 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
 // DAY CLOSE — replay the nightly job for past days
 // ============================================================================
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** `to − from` in days: at most 62 days per backfill call. */
 const MAX_CLOSE_DAYS_SPAN = 61;
 

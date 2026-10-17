@@ -44,13 +44,13 @@ import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
 import { Shift, type IShift } from '../models/shift.model.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
-import { atBusinessTime, endOfBusinessDay, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
+import { atBusinessTime, DAY_MS, endOfBusinessDay, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
 import {
   applyShiftRules,
   computeHours,
   isOvernightShift,
   resolveShift,
-  shiftWindow,
+  shiftDeadline,
 } from '../lib/attendance-hours.js';
 import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
@@ -109,7 +109,6 @@ export class DayCloseError extends AggregateError {
 /** Check-out time used when `settings.autoCheckoutTime` is unset or invalid. */
 export const DEFAULT_AUTO_CHECKOUT_TIME = '23:59';
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The business day a stored date (joining, exit, leave start/end) falls on. */
 const dayOf = (d: Date): number => startOfBusinessDay(d).getTime();
@@ -307,12 +306,12 @@ export async function closeBusinessDay(
       if (dayOf(row.date) < day.getTime()) {
         // Previous day: only an overnight shift's row is this run's to close.
         if (!overnight) continue;
-        const window = shiftWindow(startOfBusinessDay(row.date), shift);
-        if (!window) {
+        // Shift end + grace: the moment it stopped being a day in progress.
+        const end = shiftDeadline(startOfBusinessDay(row.date), shift);
+        if (!end) {
           counts.skipped += 1;
           continue;
         }
-        const end = new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * 60_000);
         out = end.getTime() >= row.checkIn!.time!.getTime() ? end : row.checkIn!.time!;
       } else {
         if (overnight) {
@@ -372,6 +371,8 @@ function closeOpenRow(
   row.source = 'auto_checkout';
   row.totalWorkingHours = computeHours(row, out);
   applyShiftRules(row, shift, cfg);
-  // An assumed check-out time is not evidence of extra work: no overtime.
+  // An assumed check-out time is evidence of neither extra work nor an early
+  // departure: no overtime, no early leave.
   row.overtimeHours = 0;
+  row.earlyLeaveBy = 0;
 }

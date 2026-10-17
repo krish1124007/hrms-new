@@ -100,7 +100,8 @@ export function atBusinessTime(dayLabel: Date, hhmm: string): Date {
   return new Date(wall - businessOffsetMinutes(new Date(guess)) * 60_000);
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+/** One calendar day in milliseconds (the business timezone has no DST). */
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * A Date whose *server-local* calendar date is the label's date (local noon),

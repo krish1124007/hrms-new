@@ -11,7 +11,7 @@ import { Types } from 'mongoose';
 import type { IAttendance } from '../models/attendance.model.js';
 import type { IAttendanceConfig } from '../models/attendance-config.model.js';
 import { Shift, type IShift } from '../models/shift.model.js';
-import { atBusinessTime, startOfBusinessDay } from './business-day.js';
+import { atBusinessTime, DAY_MS, startOfBusinessDay } from './business-day.js';
 
 interface BreakLike {
   startTime?: Date | string | null;
@@ -54,7 +54,6 @@ export function computeHours(att: WorkedHoursSource, at: Date): number {
 
 // ─── Shifts ──────────────────────────────────────────────────────────────
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60_000;
 
 /**
@@ -80,7 +79,7 @@ function clockMinutes(hhmm: string | null | undefined): number | null {
  * next calendar day.
  */
 export function isOvernightShift(
-  shift: Pick<IShift, 'isNightShift' | 'startTime' | 'endTime'> | null | undefined,
+  shift: (Pick<IShift, 'startTime' | 'endTime'> & Partial<Pick<IShift, 'isNightShift'>>) | null | undefined,
 ): boolean {
   if (!shift) return false;
   if (shift.isNightShift === true) return true;
@@ -115,13 +114,46 @@ export function shiftWindow(
  */
 export function attendanceDayFor(
   at: Date,
-  shift: Pick<IShift, 'isNightShift' | 'startTime' | 'endTime'> | null | undefined,
+  shift: (Pick<IShift, 'startTime' | 'endTime'> & Partial<Pick<IShift, 'isNightShift'>>) | null | undefined,
 ): Date {
   const today = startOfBusinessDay(at);
   if (!isOvernightShift(shift)) return today;
   const yesterday = new Date(today.getTime() - DAY_MS);
   const window = shiftWindow(yesterday, shift);
   return window && at.getTime() < window.end.getTime() ? yesterday : today;
+}
+
+/**
+ * When the shift of business day `day` is over for good: its end plus
+ * `graceMinutes`. A check-in still open after this is a forgotten check-out
+ * (day-close closes it at exactly this instant), no longer a day in
+ * progress. Null when the shift has no usable times.
+ */
+export function shiftDeadline(day: Date, shift: ShiftRulesSource | null | undefined): Date | null {
+  const window = shiftWindow(day, shift);
+  return window ? new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * MINUTE_MS) : null;
+}
+
+/**
+ * Whether a row is a day still in progress at `now`: checked in, not out,
+ * and either on today's business day, or — on an overnight shift — on an
+ * earlier day whose shift has not reached `shiftDeadline` yet (a 22:00 →
+ * 06:00 shift at 02:00). Anything else open is a forgotten check-out: it
+ * must not report hours growing without bound (a day missed in August once
+ * reported 44.67 h and climbing) nor be closed by a punch hours later.
+ */
+export function isRowInProgress(
+  att: WorkedHoursSource,
+  shift: ShiftRulesSource | null | undefined,
+  now: Date,
+): boolean {
+  if (!att.checkIn?.time || att.checkOut?.time) return false;
+  const day = startOfBusinessDay(new Date(att.date ?? att.checkIn.time));
+  const today = startOfBusinessDay(now);
+  if (day.getTime() === today.getTime()) return true;
+  if (day.getTime() > today.getTime() || !isOvernightShift(shift)) return false;
+  const deadline = shiftDeadline(day, shift);
+  return deadline !== null && now.getTime() <= deadline.getTime();
 }
 
 /**

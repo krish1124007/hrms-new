@@ -332,6 +332,21 @@ describe('closeBusinessDay — auto-checkout', () => {
     expect(after!.status).toBe('half_day');
   });
 
+  it('never records early leave on the assumed check-out time (nor overtime)', async () => {
+    await AttendanceConfig.create({ settings: { autoCheckoutTime: '17:00' } });
+    const shift = await Shift.create({ name: 'Standard', startTime: '09:30', endTime: '18:30' });
+    const emp = await makeEmployee({ shift: shift._id });
+    const row = await openRow(emp, '2026-10-12', '09:30');
+
+    await closeBusinessDay(ist('2026-10-12', '23:59'));
+
+    const after = await Attendance.findById(row._id).lean().exec();
+    // 17:00 IST is 90 min before the 18:30 shift end — but nobody left early.
+    expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-12T11:30:00.000Z');
+    expect(after!.earlyLeaveBy).toBe(0);
+    expect(after!.overtimeHours).toBe(0);
+  });
+
   it('never sets a check-out before the check-in (late check-in after autoCheckoutTime)', async () => {
     await AttendanceConfig.create({ settings: { autoCheckoutTime: '19:00' } });
     const emp = await makeEmployee();
