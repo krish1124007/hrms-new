@@ -3,7 +3,12 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from '../models/index.js';
 import { NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
-import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
+import {
+  assertNotSelfApproval,
+  assertOwnOrPermission,
+  currentEmployeeId,
+  hasPermission,
+} from '../lib/access.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
@@ -28,6 +33,14 @@ async function getCurrentEmployee(): Promise<typeof Employee.prototype | null> {
 }
 
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
+
+const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
+
+/** Approvers and HR see every employee's leave; everyone else only their own. */
+const SEE_ALL_LEAVES = ['leaves.approve', 'leaves.update'] as const;
+function canSeeAllLeaves(req: Request): boolean {
+  return SEE_ALL_LEAVES.some((perm) => hasPermission(req.user, perm));
+}
 
 /**
  * Compute working days between startDate..endDate inclusive, excluding
@@ -146,7 +159,7 @@ export async function deleteLeaveType(req: Request, res: Response): Promise<void
 export const balanceQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(200).default(50),
-  employeeId: z.string().optional(),
+  employeeId: objectId.optional(),
   leaveTypeId: z.string().optional(),
   year: z.coerce.number().int().optional(),
 });
@@ -168,7 +181,12 @@ export async function listLeaveBalances(req: Request, res: Response): Promise<vo
   const q = req.query as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
-  if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  if (canSeeAllLeaves(req)) {
+    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  } else {
+    // `null` (no employee record) matches nothing — employeeId is required.
+    filter.employeeId = await currentEmployeeId(req);
+  }
   if (q.leaveTypeId) filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
   if (q.year) filter.year = q.year;
   const result = await LeaveBalance.paginate(filter, {
@@ -293,7 +311,7 @@ export async function resetLeaveBalances(req: Request, res: Response): Promise<v
 // ---------- Leave Request ----------
 
 export const createLeaveRequestSchema = z.object({
-  employeeId: z.string().optional(), // optional — defaults to current employee
+  employeeId: objectId.optional(), // optional — defaults to current employee
   leaveTypeId: z.string(),
   startDate: z.coerce.date(),
   endDate: z.coerce.date(),
@@ -314,7 +332,7 @@ export const leaveRequestQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
   status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(),
-  employeeId: z.string().optional(),
+  employeeId: objectId.optional(),
   leaveTypeId: z.string().optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
@@ -331,7 +349,12 @@ export async function listLeaveRequests(req: Request, res: Response): Promise<vo
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
   if (q.status) filter.status = q.status;
-  if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  if (canSeeAllLeaves(req)) {
+    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  } else {
+    // `null` (no employee record) matches nothing — employeeId is required.
+    filter.employeeId = await currentEmployeeId(req);
+  }
   if (q.leaveTypeId) filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
   if (q.from || q.to) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -527,6 +550,7 @@ export async function getLeaveRequest(req: Request, res: Response): Promise<void
     .populate('approvedBy', 'firstName lastName email')
     .exec();
   if (!doc) throw new NotFoundError('Leave request not found');
+  await assertOwnOrPermission(req, doc.employeeId, SEE_ALL_LEAVES);
   res.json({ success: true, data: doc });
 }
 
@@ -576,20 +600,7 @@ export async function rejectLeaveRequest(req: Request, res: Response): Promise<v
 export async function cancelLeaveRequest(req: Request, res: Response): Promise<void> {
   const doc = await LeaveRequest.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Leave request not found');
-
-  const me = await getCurrentEmployee();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const user = req.user as any;
-  const userPerms = new Set<string>([
-    ...(user?.role?.permissions ?? []),
-    ...(user?.customPermissions ?? []),
-  ]);
-  const hasUpdatePermission = userPerms.has('*') || userPerms.has('leaves.update');
-  const isOwner = me && String(doc.employeeId) === String(me._id);
-
-  if (!hasUpdatePermission && !isOwner) {
-    throw new ForbiddenError('You do not have permission to cancel this leave request');
-  }
+  await assertOwnOrPermission(req, doc.employeeId, 'leaves.update');
 
   if (doc.status === 'cancelled' || doc.status === 'rejected') {
     throw new ValidationAppError(`Cannot cancel a ${doc.status} request`);

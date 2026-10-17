@@ -818,7 +818,7 @@ export async function myShift(_req: Request, res: Response): Promise<void> {
 export const monthlyQuerySchema = z.object({
   year: z.coerce.number().int(),
   month: z.coerce.number().int().min(1).max(12),
-  employeeId: z.string().optional(),
+  employeeId: z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid employeeId').optional(),
 });
 
 export async function monthlyAttendance(req: Request, res: Response): Promise<void> {

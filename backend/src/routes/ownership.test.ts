@@ -15,12 +15,15 @@ import { ExpenseCategory } from '../models/expense-category.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveType } from '../models/leave-type.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
+import { LeaveBalance } from '../models/leave-balance.model.js';
 import { HrPolicy } from '../models/hr-policy.model.js';
 import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { Client } from '../models/client.model.js';
 import { Visit } from '../models/visit.model.js';
 import { FieldTask } from '../models/field-task.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
+import { ProductOrder } from '../models/product-order.model.js';
+import { PaymentCollection } from '../models/payment-collection.model.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -346,6 +349,137 @@ describe('leaves', () => {
   });
 });
 
+describe('leave reads and cancellation', () => {
+  async function leaveType() {
+    return LeaveType.create({ name: 'Casual', code: 'CL', daysAllowed: 12 });
+  }
+  async function leaveFor(employee: IEmployee, typeId: unknown, day: string) {
+    return LeaveRequest.create({
+      employeeId: employee._id,
+      leaveTypeId: typeId,
+      startDate: new Date(day),
+      endDate: new Date(day),
+      days: 1,
+      reason: 'Holiday',
+      status: 'pending',
+    });
+  }
+  const ids = (res: { body: { data: Array<{ _id: string }> } }) =>
+    res.body.data.map((r) => r._id).sort();
+
+  it('an employee lists, reads and sees balances for their own leave only', async () => {
+    const type = await leaveType();
+    const mine = await leaveFor(A.employee, type._id, '2026-03-10');
+    const theirs = await leaveFor(B.employee, type._id, '2026-03-11');
+    const myBalance = await LeaveBalance.create({
+      employeeId: A.employee._id,
+      leaveTypeId: type._id,
+      year: 2026,
+      allocated: 12,
+    });
+    await LeaveBalance.create({
+      employeeId: B.employee._id,
+      leaveTypeId: type._id,
+      year: 2026,
+      allocated: 12,
+    });
+
+    const list = await request(app)
+      .get('/api/v1/leaves/requests')
+      .query({ employeeId: String(B.employee._id) })
+      .set(auth(A.token));
+    expect(list.status).toBe(200);
+    expect(ids(list)).toEqual([String(mine._id)]);
+
+    const other = await request(app)
+      .get(`/api/v1/leaves/requests/${theirs._id}`)
+      .set(auth(A.token));
+    expect(other.status).toBe(403);
+    const own = await request(app).get(`/api/v1/leaves/requests/${mine._id}`).set(auth(A.token));
+    expect(own.status).toBe(200);
+
+    const balances = await request(app)
+      .get('/api/v1/leaves/balances')
+      .query({ employeeId: String(B.employee._id) })
+      .set(auth(A.token));
+    expect(balances.status).toBe(200);
+    expect(ids(balances)).toEqual([String(myBalance._id)]);
+  });
+
+  it('a leaves.approve holder (hr_manager) sees every employee', async () => {
+    const hr = await actorWithRole('hr_manager');
+    const type = await leaveType();
+    const mine = await leaveFor(A.employee, type._id, '2026-03-10');
+    const theirs = await leaveFor(B.employee, type._id, '2026-03-11');
+    await LeaveBalance.create({ employeeId: A.employee._id, leaveTypeId: type._id, year: 2026 });
+    await LeaveBalance.create({ employeeId: B.employee._id, leaveTypeId: type._id, year: 2026 });
+
+    const list = await request(app).get('/api/v1/leaves/requests').set(auth(hr.token));
+    expect(ids(list)).toEqual([String(mine._id), String(theirs._id)].sort());
+    const filtered = await request(app)
+      .get('/api/v1/leaves/requests')
+      .query({ employeeId: String(B.employee._id) })
+      .set(auth(hr.token));
+    expect(ids(filtered)).toEqual([String(theirs._id)]);
+    const get = await request(app).get(`/api/v1/leaves/requests/${theirs._id}`).set(auth(hr.token));
+    expect(get.status).toBe(200);
+    const balances = await request(app).get('/api/v1/leaves/balances').set(auth(hr.token));
+    expect(balances.body.data).toHaveLength(2);
+  });
+
+  it('a caller without an employee record gets empty lists, not an error', async () => {
+    const { token } = await createUser({ roleSlug: 'employee' });
+    const type = await leaveType();
+    await leaveFor(A.employee, type._id, '2026-03-10');
+    const list = await request(app).get('/api/v1/leaves/requests').set(auth(token));
+    expect(list.status).toBe(200);
+    expect(list.body.data).toEqual([]);
+    const balances = await request(app).get('/api/v1/leaves/balances').set(auth(token));
+    expect(balances.status).toBe(200);
+    expect(balances.body.data).toEqual([]);
+  });
+
+  it("403 cancelling another employee's leave; cancelling your own still works", async () => {
+    const type = await leaveType();
+    const theirs = await leaveFor(B.employee, type._id, '2026-03-11');
+    const denied = await request(app)
+      .patch(`/api/v1/leaves/requests/${theirs._id}/cancel`)
+      .set(auth(A.token));
+    expect(denied.status).toBe(403);
+    expect((await LeaveRequest.findById(theirs._id))?.status).toBe('pending');
+
+    const mine = await leaveFor(A.employee, type._id, '2026-03-10');
+    const ok = await request(app)
+      .patch(`/api/v1/leaves/requests/${mine._id}/cancel`)
+      .set(auth(A.token));
+    expect(ok.status).toBe(200);
+    expect(ok.body.data.status).toBe('cancelled');
+  });
+});
+
+describe('malformed employee ids', () => {
+  it('400 (not 500) for a non-ObjectId employeeId', async () => {
+    const admin = await actorWithRole('admin');
+    const monthly = await request(app)
+      .get('/api/v1/attendance/monthly')
+      .query({ year: 2026, month: 3, employeeId: 'not-an-id' })
+      .set(auth(admin.token));
+    expect(monthly.status).toBe(400);
+
+    const claims = await request(app)
+      .get('/api/v1/expense-claims/requests')
+      .query({ employeeId: 'not-an-id' })
+      .set(auth(admin.token));
+    expect(claims.status).toBe(400);
+
+    const leaves = await request(app)
+      .get('/api/v1/leaves/requests')
+      .query({ employeeId: 'not-an-id' })
+      .set(auth(admin.token));
+    expect(leaves.status).toBe(400);
+  });
+});
+
 describe('hr policy acknowledgement', () => {
   it('records the acknowledgement for the caller, ignoring body.employee', async () => {
     const policy = await HrPolicy.create({
@@ -495,6 +629,61 @@ describe('field module', () => {
       .get(`/api/v1/field/tracking/history/${A.employee._id}`)
       .set(auth(A.token));
     expect(own.status).toBe(200);
+  });
+
+  async function orderFor(employee: IEmployee, clientId: unknown) {
+    return ProductOrder.create({
+      orderNumber: `ORD-${String(employee._id).slice(-6)}`,
+      employeeId: employee._id,
+      clientId,
+      items: [{ name: 'Widget', quantity: 1, unitPrice: 100, total: 100 }],
+      subtotal: 100,
+      totalAmount: 100,
+    });
+  }
+
+  it("403 recording a payment against another rep's order; nothing is written", async () => {
+    const client = await Client.create({ name: 'Acme' });
+    const theirs = await orderFor(B.employee, client._id);
+    const res = await request(app)
+      .post('/api/v1/field/payments')
+      .set(auth(A.token))
+      .send({
+        clientId: String(client._id),
+        orderId: String(theirs._id),
+        amount: 100,
+        method: 'cash',
+      });
+    expect(res.status).toBe(403);
+    const order = await ProductOrder.findById(theirs._id).lean();
+    expect(order?.paidAmount ?? 0).toBe(0);
+    expect(await PaymentCollection.countDocuments({})).toBe(0);
+  });
+
+  it('400 ORDER_CLIENT_MISMATCH when the order belongs to a different client', async () => {
+    const acme = await Client.create({ name: 'Acme' });
+    const globex = await Client.create({ name: 'Globex' });
+    const mine = await orderFor(A.employee, acme._id);
+    const res = await request(app)
+      .post('/api/v1/field/payments')
+      .set(auth(A.token))
+      .send({
+        clientId: String(globex._id),
+        orderId: String(mine._id),
+        amount: 100,
+        method: 'cash',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error?.code).toBe('ORDER_CLIENT_MISMATCH');
+    expect(await PaymentCollection.countDocuments({})).toBe(0);
+
+    // The matching client goes through and marks the rep's own order paid.
+    const ok = await request(app)
+      .post('/api/v1/field/payments')
+      .set(auth(A.token))
+      .send({ clientId: String(acme._id), orderId: String(mine._id), amount: 100, method: 'cash' });
+    expect(ok.status).toBe(201);
+    expect((await ProductOrder.findById(mine._id).lean())?.paymentStatus).toBe('paid');
   });
 
   it('a field-sales.manage holder keeps cross-employee access', async () => {

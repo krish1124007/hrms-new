@@ -12,6 +12,8 @@ import {
   hasPermission,
 } from '../lib/access.js';
 
+const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
+
 /** Approvers see and act on everyone's claims; others only on their own. */
 const APPROVE = 'expenses.approve';
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
@@ -89,7 +91,7 @@ export async function deleteCategory(req: Request, res: Response): Promise<void>
 
 export const createClaimSchema = z
   .object({
-    employeeId: z.string().optional(),
+    employeeId: objectId.optional(),
     category: z.string(),
     amount: z.coerce.number().min(0),
     currency: z.string().default('INR'),
@@ -129,7 +131,7 @@ export const claimQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
   status: z.enum(['draft', 'pending', 'approved', 'rejected', 'reimbursed']).optional(),
-  employeeId: z.string().optional(),
+  employeeId: objectId.optional(),
   category: z.string().optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),

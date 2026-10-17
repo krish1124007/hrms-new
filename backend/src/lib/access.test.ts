@@ -121,6 +121,18 @@ describe('assertOwnOrPermission', () => {
     expect((err as ForbiddenError).message).toBe('You can only access your own records');
   });
 
+  it('accepts a list of permissions — any one of them is enough', async () => {
+    const { user } = await createUser({ roleSlug: 'hr_manager' }); // has leaves.approve
+    const authed = await User.findById(user._id).populate('role').orFail();
+    const someoneElse = new Types.ObjectId();
+    await expect(
+      assertOwnOrPermission(reqFor(authed), someoneElse, ['leaves.approve', 'leaves.update']),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOwnOrPermission(reqFor(authed), someoneElse, ['overtime.view', 'leaves.update']),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
   it('treats a caller without an employee record as not the owner', async () => {
     const { user } = await createUser({ roleSlug: 'employee' });
     await expect(

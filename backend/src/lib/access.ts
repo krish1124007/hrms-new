@@ -65,15 +65,17 @@ async function isOwnRecord(req: Request, ownerEmployeeId: unknown): Promise<bool
 }
 
 /**
- * Allow the record's owner, or anyone holding `perm`; otherwise 403.
- * A caller with no employee record is never the owner.
+ * Allow the record's owner, or anyone holding `perm` (any one of them, when
+ * given a list); otherwise 403. A caller with no employee record is never
+ * the owner.
  */
 export async function assertOwnOrPermission(
   req: Request,
   ownerEmployeeId: unknown,
-  perm: string,
+  perm: string | readonly string[],
 ): Promise<void> {
-  if (hasPermission(req.user, perm)) return;
+  const perms = typeof perm === 'string' ? [perm] : perm;
+  if (perms.some((p) => hasPermission(req.user, p))) return;
   if (await isOwnRecord(req, ownerEmployeeId)) return;
   throw new ForbiddenError('You can only access your own records');
 }

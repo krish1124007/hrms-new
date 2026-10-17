@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { PaymentCollection } from '../models/payment-collection.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { Client } from '../models/client.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
@@ -108,6 +108,18 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
     if (!own) throw new ValidationAppError('employeeId required');
     employeeId = String(own);
   }
+
+  // A linked order must be one the caller may touch, and must be for the same
+  // client — otherwise a rep could mark another rep's (or client's) order paid.
+  // Checked before anything is written.
+  const order = body.orderId ? await ProductOrder.findById(body.orderId).exec() : null;
+  if (order) {
+    await assertOwnOrPermission(req, order.employeeId, MANAGE);
+    if (String(order.clientId) !== String(body.clientId)) {
+      throw new AppError('The order belongs to a different client', 400, 'ORDER_CLIENT_MISMATCH');
+    }
+  }
+
   const receiptNumber = await nextReceiptNumber();
   const doc = await PaymentCollection.create({
     ...body,
@@ -123,17 +135,14 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
   ).exec();
 
   // Update order paymentStatus if linked
-  if (body.orderId) {
-    const order = await ProductOrder.findById(body.orderId).exec();
-    if (order) {
-      const newPaid = order.paidAmount + body.amount;
-      let status: 'pending' | 'partial' | 'paid' = 'pending';
-      if (newPaid >= order.totalAmount) status = 'paid';
-      else if (newPaid > 0) status = 'partial';
-      order.paidAmount = newPaid;
-      order.paymentStatus = status;
-      await order.save();
-    }
+  if (order) {
+    const newPaid = order.paidAmount + body.amount;
+    let status: 'pending' | 'partial' | 'paid' = 'pending';
+    if (newPaid >= order.totalAmount) status = 'paid';
+    else if (newPaid > 0) status = 'partial';
+    order.paidAmount = newPaid;
+    order.paymentStatus = status;
+    await order.save();
   }
 
   void audit({ action: 'create', entity: 'PaymentCollection', entityId: String(doc._id) });
