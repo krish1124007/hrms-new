@@ -45,6 +45,8 @@ interface SalaryParts {
   hra?: number;
   da?: number;
   specialAllowance?: number;
+  /** The free-form map the CSV import stashes figures in (employeePf, ctc, netPay …). */
+  otherAllowances?: Record<string, number>;
 }
 
 async function setSalary(emp: IEmployee, parts: SalaryParts): Promise<void> {
@@ -53,7 +55,7 @@ async function setSalary(emp: IEmployee, parts: SalaryParts): Promise<void> {
     hra: parts.hra ?? 0,
     da: parts.da ?? 0,
     specialAllowance: parts.specialAllowance ?? 0,
-    otherAllowances: {},
+    otherAllowances: parts.otherAllowances ?? {},
     grossSalary: 0,
   });
   await emp.save(); // the pre-save hook totals the gross
@@ -113,6 +115,28 @@ describe('ESI — eligibility is fixed for the contribution period', () => {
     expect(lineOf(record.employerContributions, 'esi')).toEqual(
       expect.objectContaining({ name: 'ESI Employer', amount: 666.25, statutoryType: 'esi' }),
     );
+    expect(await statutoryOf(emp)).toMatchObject({ esiEligible: true, esiPeriodKey: '2026-H2' });
+  });
+
+  it('is decided from the salary components, not from a stored gross inflated by the otherAllowances stash', async () => {
+    const hr = await hrAuth();
+    // 10,000 + 4,000 + 6,000 = 20,000 a month. The import also stashed its own figures in
+    // otherAllowances, which the employee pre-save hook adds into the stored `grossSalary`.
+    const emp = await employee({
+      basic: 10000,
+      hra: 4000,
+      specialAllowance: 6000,
+      otherAllowances: { employeePf: 1800, ctc: 30000, netPay: 18000 },
+    });
+    expect((await Employee.findById(emp._id).lean())!.salary.grossSalary).toBe(69800); // polluted, as imported
+
+    const record = await recordOf(await processMonth(hr, 2026, 10), emp);
+
+    expect(record.grossSalary).toBe(20000);
+    expect(lineOf(record.deductions, 'esi')).toEqual(
+      expect.objectContaining({ name: 'ESI Employee', amount: 150, statutoryType: 'esi' }),
+    );
+    expect(lineOf(record.employerContributions, 'esi')!.amount).toBe(650);
     expect(await statutoryOf(emp)).toMatchObject({ esiEligible: true, esiPeriodKey: '2026-H2' });
   });
 

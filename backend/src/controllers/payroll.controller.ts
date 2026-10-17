@@ -33,6 +33,7 @@ import {
   touchProcessing,
 } from '../lib/payroll-cycle.js';
 import { settleCycle } from '../services/payroll-settlement.service.js';
+import { saveEsiDecision } from '../services/employee-statutory.service.js';
 import {
   generatePayslipPdf,
   type YtdTotals,
@@ -443,12 +444,14 @@ async function computeForEmployee(
   const pfEmp = pfEmployee(pfWage);
 
   const periodKey = esiPeriodKey(new Date(Date.UTC(cycle.year, cycle.month - 1, 1)));
-  const storedGross = Number(employee.salary?.grossSalary ?? 0);
-  const esi = esiEligibility(employee, storedGross > 0 ? storedGross : fullMonthGross, periodKey);
+  // Eligibility is decided on the full-month gross of the salary COMPONENTS —
+  // not the stored `salary.grossSalary`, which the employee pre-save hook also
+  // adds every `otherAllowances` value into (the CSV import stashes its PF,
+  // CTC, net pay … there).
+  const esi = esiEligibility(employee, fullMonthGross, periodKey);
   if (esi.persist) {
     const statutory = { esiEligible: esi.eligible, esiPeriodKey: periodKey };
-    employee.statutory = statutory;
-    await Employee.updateOne({ _id: employee._id }, { $set: { statutory } }).exec();
+    if (await saveEsiDecision(employee._id as Types.ObjectId, statutory)) employee.statutory = statutory;
   }
   const esicEmp = esiEmployee(grossEarnings, esi.eligible);
 
