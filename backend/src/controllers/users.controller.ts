@@ -111,13 +111,17 @@ export async function getUser(req: Request, res: Response): Promise<void> {
 export async function updateUser(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateUserSchema>;
 
-  const target = await User.findById(String(req.params.id)).exec();
+  const target = await User.findById(String(req.params.id)).populate('role').exec();
   if (!target) throw new NotFoundError('User not found');
 
+  // A lesser admin may not change a more privileged user at all — otherwise
+  // they could demote them first (dropping permissions is always allowed) and
+  // then reset their password, deactivate or delete them.
+  assertCanManageUser(req.user, target);
+
   // Nobody can use this endpoint to give anyone (themselves included) more
-  // than they hold. Only what actually changes is checked, so editing a user
-  // who already holds more than the caller (or whose stored list has retired
-  // names) still works.
+  // than they hold. Only what actually changes is checked, so a stored list
+  // with retired names can be re-saved.
   if (body.customPermissions !== undefined) {
     assertCanSetPermissions(
       req.user,
@@ -129,7 +133,9 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
   if (body.roleId !== undefined) {
     const role = await Role.findById(body.roleId).exec();
     if (!role) throw new NotFoundError('Role not found');
-    if (String(role._id) !== String(target.role)) assertCanAssignRole(req.user, role);
+    // `target.role` is populated (null if its role document is gone).
+    const currentRoleId = (target.role as unknown as { _id?: unknown } | null)?._id;
+    if (String(role._id) !== String(currentRoleId)) assertCanAssignRole(req.user, role);
   }
 
   const update: Record<string, unknown> = {};

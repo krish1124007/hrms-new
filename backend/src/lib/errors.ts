@@ -47,7 +47,8 @@ export class NotFoundError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message = 'Resource already exists') {
-    super(message, 409, 'CONFLICT');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  constructor(message = 'Resource already exists', code = 'CONFLICT', details?: any) {
+    super(message, 409, code, details);
   }
 }

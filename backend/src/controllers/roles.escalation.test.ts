@@ -26,6 +26,16 @@ async function delegatedHrManager(): Promise<{ token: string; userId: string }> 
   return { token, userId: String(user._id) };
 }
 
+/** An ordinary employee who has been delegated role editing and deletion (and nothing else). */
+async function lesserRoleAdmin(): Promise<{ token: string }> {
+  const { user, token } = await createUser({ roleSlug: 'employee' });
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { customPermissions: ['roles.update', 'roles.delete'] } },
+  );
+  return { token };
+}
+
 /** An ordinary employee who has been delegated user administration (and nothing else). */
 async function lesserUserAdmin(): Promise<{ token: string }> {
   const { user, token } = await createUser({ roleSlug: 'employee' });
@@ -127,7 +137,7 @@ describe('PATCH /roles/:id', () => {
     expect(ok.body.data.permissions).toEqual(['payroll.view', 'employees.view']);
   });
 
-  it('lets a non-admin keep a permission they lack that the role already holds', async () => {
+  it('403 when a non-admin edits a role that holds a permission they lack, even just a rename', async () => {
     const { token } = await delegatedHrManager();
     const role = await Role.create({
       name: 'Has delete',
@@ -137,8 +147,10 @@ describe('PATCH /roles/:id', () => {
     const res = await request(app)
       .patch(`/api/v1/roles/${role._id}`)
       .set(auth(token))
-      .send({ name: 'Has delete (renamed)', permissions: ['users.delete', 'payroll.view'] });
-    expect(res.status).toBe(200);
+      .send({ name: 'Has delete (renamed)' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.details.missingPermissions).toEqual(['users.delete']);
+    expect((await Role.findById(role._id).orFail().lean().exec()).name).toBe('Has delete');
   });
 
   it('200 for an admin adding the wildcard', async () => {
@@ -252,7 +264,7 @@ describe('PATCH /users/:id', () => {
     expect(res.status).toBe(404);
   });
 
-  it('does not block an unrelated edit of a user who already holds more than the caller', async () => {
+  it('403 for any edit of a user who holds more than the caller, even a name change', async () => {
     const { token } = await delegatedHrManager();
     const target = await createUser({ roleSlug: 'admin' });
     const admin = await createRole('admin');
@@ -260,6 +272,35 @@ describe('PATCH /users/:id', () => {
       .patch(`/api/v1/users/${target.user._id}`)
       .set(auth(token))
       .send({ firstName: 'Renamed', roleId: String(admin._id) });
+    expect(res.status).toBe(403);
+    expect(res.body.error.details.missingPermissions).toContain('*');
+
+    const after = await User.findById(target.user._id).orFail().lean().exec();
+    expect(after.firstName).not.toBe('Renamed');
+  });
+
+  it('403 when a lesser admin tries to demote an admin to the employee role; the admin is unchanged', async () => {
+    const { token } = await lesserUserAdmin();
+    const employeeRole = await createRole('employee');
+    const adminRole = await createRole('admin');
+    const target = await createUser({ roleSlug: 'admin' });
+    const res = await request(app)
+      .patch(`/api/v1/users/${target.user._id}`)
+      .set(auth(token))
+      .send({ roleId: String(employeeRole._id), customPermissions: [] });
+    expect(res.status).toBe(403);
+
+    const after = await User.findById(target.user._id).orFail().lean().exec();
+    expect(String(after.role)).toBe(String(adminRole._id));
+  });
+
+  it('200 for the same caller editing a plain employee', async () => {
+    const { token } = await lesserUserAdmin();
+    const target = await createUser({ roleSlug: 'employee' });
+    const res = await request(app)
+      .patch(`/api/v1/users/${target.user._id}`)
+      .set(auth(token))
+      .send({ firstName: 'Renamed' });
     expect(res.status).toBe(200);
     expect(res.body.data.firstName).toBe('Renamed');
   });
@@ -523,5 +564,116 @@ describe('a user who holds more than the caller is protected from them', () => {
     expect(status.status).toBe(200);
     const del = await request(app).delete(`/api/v1/users/${other.user._id}`).set(auth(token));
     expect(del.status).toBe(200);
+  });
+});
+
+describe('a role that holds more than the caller is protected from them', () => {
+  const customRole = (permissions: string[], slug = 'custom') =>
+    Role.create({ name: slug, slug, permissions });
+
+  it('403 (naming what is missing) on PATCH and DELETE of a role holding a permission the caller lacks', async () => {
+    const { token } = await lesserRoleAdmin();
+    const role = await customRole(['payroll.view', 'payroll.process']);
+
+    const patch = await request(app)
+      .patch(`/api/v1/roles/${role._id}`)
+      .set(auth(token))
+      .send({ permissions: ['payroll.view'] });
+    expect(patch.status).toBe(403);
+    expect(patch.body.error.details.missingPermissions).toEqual(['payroll.process']);
+
+    const del = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(del.status).toBe(403);
+
+    const stored = await Role.findById(role._id).orFail().lean().exec();
+    expect(stored.permissions).toEqual(['payroll.view', 'payroll.process']);
+  });
+
+  it('403 on PATCH and DELETE of a custom role holding the wildcard', async () => {
+    const { token } = await lesserRoleAdmin();
+    const role = await customRole(['*']);
+    const patch = await request(app)
+      .patch(`/api/v1/roles/${role._id}`)
+      .set(auth(token))
+      .send({ permissions: [] });
+    expect(patch.status).toBe(403);
+    expect(patch.body.error.details.missingPermissions).toEqual(['*']);
+    const del = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(del.status).toBe(403);
+    expect((await Role.findById(role._id).orFail().lean().exec()).permissions).toEqual(['*']);
+  });
+
+  it('retired names a role still stores do not count against the caller', async () => {
+    const { token } = await lesserRoleAdmin();
+    const role = await customRole(['departments.manage', 'payroll.view']);
+    const res = await request(app)
+      .patch(`/api/v1/roles/${role._id}`)
+      .set(auth(token))
+      .send({ name: 'Renamed', permissions: ['departments.manage', 'payroll.view'] });
+    expect(res.status).toBe(200);
+  });
+
+  it('200 on PATCH and DELETE of a role the caller fully holds that no user references', async () => {
+    const { token } = await lesserRoleAdmin();
+    const role = await customRole(['payroll.view', 'leaves.view']);
+    const patch = await request(app)
+      .patch(`/api/v1/roles/${role._id}`)
+      .set(auth(token))
+      .send({ permissions: ['payroll.view'] });
+    expect(patch.status).toBe(200);
+    const del = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(del.status).toBe(200);
+    expect(await Role.countDocuments({ _id: role._id })).toBe(0);
+  });
+
+  it('409 ROLE_IN_USE while a user references the role; 200 once that user is reassigned', async () => {
+    const { token } = await lesserRoleAdmin();
+    const role = await customRole(['payroll.view']);
+    const holder = await createUser({ roleSlug: 'employee' });
+    await User.updateOne({ _id: holder.user._id }, { $set: { role: role._id } });
+
+    const blocked = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe('ROLE_IN_USE');
+    expect(await Role.countDocuments({ _id: role._id })).toBe(1);
+
+    const employeeRole = await createRole('employee');
+    await User.updateOne({ _id: holder.user._id }, { $set: { role: employeeRole._id } });
+
+    const deleted = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(deleted.status).toBe(200);
+    expect(await Role.countDocuments({ _id: role._id })).toBe(0);
+  });
+
+  it('409 ROLE_IN_USE even when the only user referencing the role is soft-deleted, also for an admin', async () => {
+    const role = await customRole(['payroll.view']);
+    const holder = await createUser({ roleSlug: 'employee' });
+    await User.updateOne({ _id: holder.user._id }, { $set: { role: role._id } });
+    await User.updateOne({ _id: holder.user._id }, { $set: { isDeleted: true } });
+
+    const res = await request(app)
+      .delete(`/api/v1/roles/${role._id}`)
+      .set(auth(await adminToken()));
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('ROLE_IN_USE');
+  });
+
+  it('an admin (*) can edit and delete a role holding any permission', async () => {
+    const token = await adminToken();
+    const role = await customRole(['payroll.process', '*']);
+    const patch = await request(app)
+      .patch(`/api/v1/roles/${role._id}`)
+      .set(auth(token))
+      .send({ permissions: ['payroll.process'] });
+    expect(patch.status).toBe(200);
+    const del = await request(app).delete(`/api/v1/roles/${role._id}`).set(auth(token));
+    expect(del.status).toBe(200);
+  });
+
+  it('system roles stay protected: 403 for an admin deleting a system role', async () => {
+    const token = await adminToken();
+    const hr = await createRole('hr_manager');
+    const res = await request(app).delete(`/api/v1/roles/${hr._id}`).set(auth(token));
+    expect(res.status).toBe(403);
   });
 });

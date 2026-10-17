@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Role } from '../models/role.model.js';
+import { User } from '../models/user.model.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { slugify } from '../lib/slugify.js';
@@ -8,6 +9,7 @@ import { cached, invalidate } from '../lib/cache.js';
 import { PERMISSIONS_BY_MODULE } from '../config/permissions.js';
 import {
   assertCanGrant,
+  assertCanManageRole,
   assertCanSetPermissions,
   permissionListSchema,
   storedPermissionListSchema,
@@ -68,13 +70,13 @@ export async function updateRole(req: Request, res: Response): Promise<void> {
   const role = await Role.findById(String(req.params.id)).exec();
   if (!role) throw new NotFoundError('Role not found');
   if (role.isSystem) throw new ForbiddenError('System roles cannot be modified');
+  assertCanManageRole(req.user, role);
 
   const body = req.body as z.infer<typeof updateRoleSchema>;
   if (body.permissions !== undefined) {
     // Only what is being *added* is validated and needs the caller's blessing:
-    // a role may already hold retired names or permissions the caller lacks
-    // (the UI sends the whole list back), but nobody may widen a role — their
-    // own included — beyond what they hold.
+    // a role may already store retired names (the UI sends the whole list back).
+    // Nobody may widen a role — their own included — beyond what they hold.
     assertCanSetPermissions(req.user, 'permissions', body.permissions, role.permissions);
   }
   if (body.name !== undefined) {
@@ -94,6 +96,17 @@ export async function deleteRole(req: Request, res: Response): Promise<void> {
   const role = await Role.findById(String(req.params.id)).exec();
   if (!role) throw new NotFoundError('Role not found');
   if (role.isSystem) throw new ForbiddenError('System roles cannot be deleted');
+  assertCanManageRole(req.user, role);
+
+  // Soft-deleted users keep their role reference and can be restored, so they count too.
+  const assigned = await User.countDocuments({ role: role._id }).setOptions({ withDeleted: true }).exec();
+  if (assigned > 0) {
+    throw new ConflictError(
+      `This role is still assigned to ${assigned} user${assigned === 1 ? '' : 's'}. Reassign them first.`,
+      'ROLE_IN_USE',
+      { userCount: assigned },
+    );
+  }
 
   await role.deleteOne();
   void audit({ action: 'delete', entity: 'Role', entityId: String(role._id) });

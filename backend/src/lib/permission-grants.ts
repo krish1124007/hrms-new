@@ -12,8 +12,10 @@
  *  2. A caller without `*` can never grant a permission they do not hold
  *     themselves — directly, or by assigning a role that carries it. That
  *     also keeps `*` itself admin-only.
- *  3. A caller without `*` cannot act on a user who holds a permission the
- *     caller lacks.
+ *  3. A caller without `*` cannot act on a user — or edit/delete a role —
+ *     that holds a permission the caller lacks. Retired names an old record
+ *     still stores confer no access (no route checks them), so they never
+ *     count towards that.
  */
 import { z } from 'zod';
 import { ALL_PERMISSIONS } from '../config/permissions.js';
@@ -98,25 +100,53 @@ export function assertCanSetPermissions(
   assertCanGrant(caller, added);
 }
 
+/** What a stored list actually confers: the wildcard and catalogued names (retired names grant nothing). */
+function effectivePermissions(permissions: readonly string[]): string[] {
+  return dedupe([...permissions]).filter(
+    (permission) => permission === '*' || ALL_PERMISSIONS.has(permission),
+  );
+}
+
 /** Assigning a role grants everything on it, so the caller must be able to grant all of it. */
 export function assertCanAssignRole(caller: Caller, role: { permissions: readonly string[] }): void {
-  assertCanGrant(caller, role.permissions);
+  assertCanGrant(caller, effectivePermissions(role.permissions));
+}
+
+function assertHoldsAll(caller: Caller, held: readonly string[], message: string): void {
+  const missing = held.filter((permission) => !hasPermission(caller, permission));
+  if (missing.length > 0) throw new ForbiddenError(message, { missingPermissions: missing });
 }
 
 /**
  * 403 unless the caller holds every permission `target` holds (role +
- * custom). `target.role` must be populated. A `*` caller is unrestricted; a
- * user holding `*` can only be acted on by a `*` caller.
+ * custom). `target.role` must be populated. A `*` caller is unrestricted and a
+ * user holding `*` can only be acted on by a `*` caller. A user is
+ * changed through this rule by password reset, status change, delete and
+ * edit — otherwise a lesser admin could demote a more privileged user first
+ * and then act on them freely.
  */
 export function assertCanManageUser(
   caller: Caller,
   target: { role?: unknown; customPermissions?: string[] },
 ): void {
   const role = target.role as { permissions?: string[] } | null | undefined;
-  const held = dedupe([...(role?.permissions ?? []), ...(target.customPermissions ?? [])]);
-  const missing = held.filter((permission) => !hasPermission(caller, permission));
-  if (missing.length === 0) return;
-  throw new ForbiddenError('You cannot modify a user who holds permissions you do not have', {
-    missingPermissions: missing,
-  });
+  assertHoldsAll(
+    caller,
+    effectivePermissions([...(role?.permissions ?? []), ...(target.customPermissions ?? [])]),
+    'You cannot modify a user who holds permissions you do not have',
+  );
+}
+
+/**
+ * 403 unless the caller holds every permission `role` holds. Same semantics as
+ * {@link assertCanManageUser}, for editing or deleting a role: a lesser
+ * `roles.update` / `roles.delete` holder must not be able to strip or remove a
+ * role that carries permissions (or `*`) they lack.
+ */
+export function assertCanManageRole(caller: Caller, role: { permissions: readonly string[] }): void {
+  assertHoldsAll(
+    caller,
+    effectivePermissions(role.permissions),
+    'You cannot modify a role that holds permissions you do not have',
+  );
 }
