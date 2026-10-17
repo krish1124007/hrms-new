@@ -124,21 +124,30 @@ export function attendanceDayFor(
 }
 
 /**
- * When the shift of business day `day` is over for good: its end plus
- * `graceMinutes`. A check-in still open after this is a forgotten check-out
- * (day-close closes it at exactly this instant), no longer a day in
- * progress. Null when the shift has no usable times.
+ * How long after an overnight shift's end its open row still counts as the
+ * running day — the employee can check out, take a break, see live hours.
+ * Staying on past a night shift is routine; `graceMinutes` is a lateness
+ * tolerance, not an overtime allowance.
+ */
+export const OVERNIGHT_CHECKOUT_ALLOWANCE_HOURS = 6;
+
+/**
+ * Until when an open overnight row of business day `day` is still the day in
+ * progress: shift end + `OVERNIGHT_CHECKOUT_ALLOWANCE_HOURS`. Past it the row
+ * is a forgotten check-out — no punch closes it (a punch the next evening
+ * would record a 24-hour day); the nightly day-close does, at shift end +
+ * grace. Null when the shift has no usable times.
  */
 export function shiftDeadline(day: Date, shift: ShiftRulesSource | null | undefined): Date | null {
   const window = shiftWindow(day, shift);
-  return window ? new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * MINUTE_MS) : null;
+  return window ? new Date(window.end.getTime() + OVERNIGHT_CHECKOUT_ALLOWANCE_HOURS * 60 * MINUTE_MS) : null;
 }
 
 /**
  * Whether a row is a day still in progress at `now`: checked in, not out,
  * and either on today's business day, or — on an overnight shift — on an
  * earlier day whose shift has not reached `shiftDeadline` yet (a 22:00 →
- * 06:00 shift at 02:00). Anything else open is a forgotten check-out: it
+ * 06:00 shift until 12:00). Anything else open is a forgotten check-out: it
  * must not report hours growing without bound (a day missed in August once
  * reported 44.67 h and climbing) nor be closed by a punch hours later.
  */

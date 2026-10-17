@@ -398,7 +398,7 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
 /**
  * Fill in `totalWorkingHours` for a day that is still running — by the same
  * rule `currentRow` uses (`isRowInProgress`: today's open row, or a night
- * shift's open row until its end + grace). Finished days and forgotten
+ * shift's open row until 6 h after its end). Finished days and forgotten
  * check-outs keep their stored value, so a forgotten one stays visible as the
  * anomaly it is instead of growing without bound. Nothing is written back.
  */
@@ -477,10 +477,11 @@ async function findOpenPunch(employeeId: Types.ObjectId, now: Date): Promise<IAt
  * The row check-out, breaks and the "today" card act on: today's row once it
  * has a check-in; otherwise the latest open check-in of the last 36 h if it
  * is still in progress (`isRowInProgress`) — a night shift after midnight,
- * up to its end + grace; otherwise today's row, if any.
+ * up to 6 h past its end (`OVERNIGHT_CHECKOUT_ALLOWANCE_HOURS`); otherwise
+ * today's row, if any.
  *
- * Past its end + grace an open row is a forgotten check-out (day-close closes
- * it at that instant): it must not stand in for today — a punch the next
+ * Past that an open row is a forgotten check-out (day-close closes it at
+ * shift end + grace): it must not stand in for today — a punch the next
  * evening would otherwise close a 24-hour "day" — nor hide the check-in
  * button. A day-shift row from an earlier day never qualifies.
  */

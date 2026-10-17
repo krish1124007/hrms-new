@@ -50,7 +50,7 @@ import {
   computeHours,
   isOvernightShift,
   resolveShift,
-  shiftDeadline,
+  shiftWindow,
 } from '../lib/attendance-hours.js';
 import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
@@ -306,12 +306,13 @@ export async function closeBusinessDay(
       if (dayOf(row.date) < day.getTime()) {
         // Previous day: only an overnight shift's row is this run's to close.
         if (!overnight) continue;
-        // Shift end + grace: the moment it stopped being a day in progress.
-        const end = shiftDeadline(startOfBusinessDay(row.date), shift);
-        if (!end) {
+        // Closed at shift end + grace: the latest an on-time departure would be.
+        const window = shiftWindow(startOfBusinessDay(row.date), shift);
+        if (!window) {
           counts.skipped += 1;
           continue;
         }
+        const end = new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * 60_000);
         out = end.getTime() >= row.checkIn!.time!.getTime() ? end : row.checkIn!.time!;
       } else {
         if (overnight) {

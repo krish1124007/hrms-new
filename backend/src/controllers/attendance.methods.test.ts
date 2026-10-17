@@ -379,14 +379,49 @@ describe('night shift (22:00 → 06:00)', () => {
     ]);
   });
 
-  it('a night row left open stops being current at shift end + grace: the next evening is a fresh day', async () => {
+  it('staying past shift end is routine: a 06:20 check-out (grace 15) closes the same row', async () => {
+    await configure();
+    const who = await nightWorker();
+    const inRes = await punch('in', who, ist('2026-10-12', '22:00'));
+
+    const out = await punch('out', who, ist('2026-10-13', '06:20'));
+
+    expect(out.status).toBe(200);
+    expect(out.body.data._id).toBe(inRes.body.data._id);
+    const rows = await rowsOf(who);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.totalWorkingHours).toBeCloseTo(8.33, 2);
+    expect(rows[0]!.earlyLeaveBy).toBe(0);
+  });
+
+  it('past shift end + 6 h (12:30 next day) the open night row is no longer current', async () => {
     await configure();
     const who = await nightWorker();
     const stale = await punch('in', who, ist('2026-10-12', '22:00'));
     const staleId = stale.body.data._id as string;
 
-    // Still the running shift at 06:00 + 15 min grace.
-    vi.setSystemTime(ist('2026-10-13', '06:15'));
+    vi.setSystemTime(ist('2026-10-13', '12:30'));
+    const today = await request(app).get('/api/v1/attendance/today').set(who.auth());
+    expect(today.body.data).toBeNull();
+
+    const out = await punch('out', who, ist('2026-10-13', '12:30'));
+    expect(out.status).toBe(400);
+    expect(out.body.error.message).toBe('You must check in first');
+
+    const fresh = await punch('in', who, ist('2026-10-13', '12:30'));
+    expect(fresh.status).toBe(201);
+    expect(fresh.body.data.date).toBe(label('2026-10-13').toISOString());
+    expect((await Attendance.findById(staleId).lean())!.checkOut?.time).toBeFalsy();
+  });
+
+  it('a night row left open stops being current 6 h after shift end: the next evening is a fresh day', async () => {
+    await configure();
+    const who = await nightWorker();
+    const stale = await punch('in', who, ist('2026-10-12', '22:00'));
+    const staleId = stale.body.data._id as string;
+
+    // Still current up to 06:00 + 6 h.
+    vi.setSystemTime(ist('2026-10-13', '12:00'));
     const atGrace = await request(app).get('/api/v1/attendance/today').set(who.auth());
     expect(atGrace.body.data._id).toBe(staleId);
 
