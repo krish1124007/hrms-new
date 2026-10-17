@@ -49,7 +49,7 @@ function expectNoSecrets(body: unknown): void {
 function emailedResetToken(): string {
   const calls = vi.mocked(sendMail).mock.calls;
   const html = calls[calls.length - 1]?.[0].html ?? '';
-  const match = /reset-password\/([a-f0-9]+)/.exec(html);
+  const match = /reset-password\?token=([a-f0-9]+)/.exec(html);
   if (!match) throw new Error('no reset link in the captured e-mail');
   return match[1] as string;
 }

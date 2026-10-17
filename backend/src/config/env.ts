@@ -53,6 +53,12 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default('no-reply@example.com'),
+  /**
+   * Production refuses to boot without a mail transport (RESEND_API_KEY or
+   * SMTP_HOST) because invitations and password resets could never be
+   * delivered. Set to "true" to boot anyway, with e-mail disabled.
+   */
+  ALLOW_NO_MAIL: z.enum(['true', 'false']).default('false'),
 
   COMPANY_NAME: z.string().default('Company'),
   COMPANY_EMAIL: z.string().optional(),

@@ -6,7 +6,7 @@ import { Role } from '../models/role.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
-import { env } from '../config/env.js';
+import { appBaseUrl } from '../lib/app-url.js';
 import {
   assertCanAssignRole,
   assertCanManageUser,
@@ -93,7 +93,7 @@ export async function inviteUser(req: Request, res: Response): Promise<void> {
   void sendMail({
     to: user.email,
     subject: 'You have been invited',
-    html: `<p>Hi ${user.firstName},</p><p>You've been invited. Click below to set up your account:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Accept invitation</a></p>`,
+    html: `<p>Hi ${user.firstName},</p><p>You've been invited. Click below to set up your account:</p><p><a href="${appBaseUrl()}/accept-invite?token=${verificationToken}">Accept invitation</a></p>`,
   });
 
   void audit({ action: 'create', entity: 'User', entityId: String(user._id) });

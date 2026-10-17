@@ -200,6 +200,31 @@ export const swaggerPaths: Record<string, unknown> = {
       responses: { ...res200('Password reset successful'), ...{ 400: errResponses[400] } },
     },
   },
+  '/auth/accept-invite': {
+    post: {
+      tags: ['Auth'],
+      summary: 'Activate an invited account',
+      description:
+        'Exchanges the token from the invitation e-mail (link: /accept-invite?token=...) and a chosen password for an active account. Returns the same payload as login. A used or unknown token answers 400 INVALID_INVITE; a rejected password 400 WEAK_PASSWORD.',
+      security: [],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['token', 'password'],
+              properties: {
+                token: { type: 'string', minLength: 10 },
+                password: { type: 'string', minLength: 8, maxLength: 128 },
+              },
+            },
+          },
+        },
+      },
+      responses: { ...res200('Account activated; user and tokens returned'), ...{ 400: errResponses[400] } },
+    },
+  },
   '/auth/verify-email/{token}': {
     get: {
       tags: ['Auth'],

@@ -11,6 +11,7 @@ import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
+import { appBaseUrl } from '../lib/app-url.js';
 import { assertCanAssignRole } from '../lib/permission-grants.js';
 
 const addressSchema = z
@@ -254,7 +255,7 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
         void sendMail({
           to: user.email,
           subject: `Welcome to ${env.COMPANY_NAME}`,
-          html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${env.CORS_ORIGIN}/accept-invite/${verificationToken}">Activate account</a></p>`,
+          html: `<p>Hi ${user.firstName},</p><p>Your employee account has been created. Set up your password to get started:</p><p><a href="${appBaseUrl()}/accept-invite?token=${verificationToken}">Activate account</a></p>`,
         });
       }
     }

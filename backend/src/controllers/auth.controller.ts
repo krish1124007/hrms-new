@@ -12,10 +12,11 @@ import {
   UnauthorizedError,
   ForbiddenError,
 } from '../lib/errors.js';
+import { appBaseUrl } from '../lib/app-url.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { revokeToken, revokeAllUserTokens } from '../lib/token-blacklist.js';
-import type { LoginInput } from '../validators/auth.validators.js';
+import type { AcceptInviteInput, LoginInput } from '../validators/auth.validators.js';
 
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -215,7 +216,7 @@ export async function forgotPassword(req: Request, res: Response): Promise<void>
     void sendMail({
       to: user.email,
       subject: 'Reset your password',
-      html: `<p>Click the link below to reset your password (valid for 1 hour):</p><p><a href="${env.CORS_ORIGIN}/reset-password/${token}">Reset password</a></p>`,
+      html: `<p>Click the link below to reset your password (valid for 1 hour):</p><p><a href="${appBaseUrl()}/reset-password?token=${token}">Reset password</a></p>`,
     });
   }
   res.json({ success: true, message: 'If an account exists, a reset email has been sent' });
@@ -270,6 +271,68 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
   res.json({
     success: true,
     message: 'Password reset successful. All existing sessions have been revoked.',
+  });
+}
+
+/**
+ * Activates an invited account: the e-mailed token proves the recipient owns
+ * the address, the body supplies the password they chose. Returns the same
+ * payload as `login`, so the SPA can drop the user straight into the app.
+ */
+export async function acceptInvite(req: Request, res: Response): Promise<void> {
+  const { token, password } = req.body as AcceptInviteInput;
+
+  const invalid = (): AppError =>
+    new AppError('Invitation link is invalid or has already been used', 400, 'INVALID_INVITE');
+
+  // Only an account still waiting for activation can be claimed this way: a
+  // leftover verification token on an active user must never reset a password.
+  const user = await User.findOne({ emailVerificationToken: token, status: 'invited' })
+    .select('+emailVerificationToken +password')
+    .exec();
+  if (!user) throw invalid();
+
+  const { validateNewPassword } = await import('../lib/password-security.js');
+  const pwCheck = await validateNewPassword(password);
+  if (!pwCheck.ok) {
+    throw new AppError(pwCheck.reason ?? 'Password rejected', 400, 'WEAK_PASSWORD');
+  }
+
+  user.password = password;
+  user.status = 'active';
+  user.emailVerified = true;
+  user.emailVerificationToken = undefined;
+  user.passwordChangedAt = new Date();
+  user.lastLogin = new Date();
+  user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  await user.save();
+
+  const accessToken = user.generateAccessToken();
+  const refreshToken = user.generateRefreshToken();
+  await persistSession(user, accessToken, refreshToken, req);
+
+  setContext({ userId: String(user._id) });
+  void audit({
+    action: 'update',
+    entity: 'User',
+    entityId: String(user._id),
+    metadata: { event: 'invite.accepted', sessionVersion: user.sessionVersion },
+  });
+
+  await user.populate('role');
+  res.json({
+    success: true,
+    data: {
+      user: {
+        _id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      },
+      accessToken,
+      refreshToken,
+    },
   });
 }
 

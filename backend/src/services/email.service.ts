@@ -8,6 +8,8 @@ import { logger } from '../config/logger.js';
  *   1. `RESEND_API_KEY` set → Resend HTTP API (modern SaaS default)
  *   2. `SMTP_HOST` set      → nodemailer SMTP (legacy/self-hosted)
  *   3. nothing set          → dev-mode: log the mail to stdout, return OK
+ *                             (production: log an error, return false —
+ *                             never report a mail as sent that was not)
  *
  * This means `sendMail()` never throws in dev (so BullMQ dunning jobs don't
  * retry endlessly) and is production-ready the moment a key is provided.
@@ -82,12 +84,20 @@ async function sendViaResend(input: SendMailInput): Promise<void> {
 /**
  * Send an email via the configured transport.
  *
- * Returns true on success / dev-noop, false if delivery failed (errors are
- * logged but never thrown — callers are typically fire-and-forget).
+ * Returns true on success / dev-noop, false if delivery failed or production
+ * has no transport at all (errors are logged but never thrown — callers are
+ * typically fire-and-forget).
  */
 export async function sendMail(input: SendMailInput): Promise<boolean> {
   try {
     if (transport.kind === 'dev') {
+      if (env.NODE_ENV === 'production') {
+        logger.error(
+          { to: input.to, subject: input.subject },
+          'No mail transport configured — email NOT sent',
+        );
+        return false;
+      }
       logger.info(
         { to: input.to, subject: input.subject, tags: input.tags },
         '[email:dev] would send mail (no transport configured)',
@@ -143,7 +153,13 @@ export async function verifyTransport(): Promise<{
   error?: string;
 }> {
   try {
-    if (transport.kind === 'dev') return { ok: true, kind: 'dev' };
+    if (transport.kind === 'dev') {
+      // The logging transport is a fine stand-in while developing; in
+      // production it is a misconfiguration, never "ok".
+      return env.NODE_ENV === 'production'
+        ? { ok: false, kind: 'dev', error: 'No mail transport configured (SMTP_HOST or RESEND_API_KEY)' }
+        : { ok: true, kind: 'dev' };
+    }
     if (transport.kind === 'resend') {
       // Resend has no verify endpoint; treat as ok if key present.
       return { ok: true, kind: 'resend' };

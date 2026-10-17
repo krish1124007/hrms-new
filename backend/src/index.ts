@@ -13,6 +13,7 @@ import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { redis, disconnectRedis } from './config/redis.js';
 
 import { createApp, docsEnabledByDefault } from './app.js';
+import { mailBootProblem } from './lib/mail-boot-check.js';
 import { registerFieldTrackingNamespace } from './sockets/field-tracking.socket.js';
 
 const REDIS_BOOT_TIMEOUT_MS = 5_000;
@@ -37,6 +38,15 @@ async function redisReachable(timeoutMs: number): Promise<boolean> {
 }
 
 async function bootstrap(): Promise<void> {
+  // Invitations, activations and password resets are delivered by e-mail only.
+  // Refuse to serve a production API that cannot send any, rather than let
+  // them "succeed" and vanish.
+  const mailProblem = mailBootProblem(env);
+  if (mailProblem) {
+    logger.fatal(mailProblem);
+    process.exit(1);
+  }
+
   await connectDatabase();
   if (!(await redisReachable(REDIS_BOOT_TIMEOUT_MS))) {
     logger.warn(
