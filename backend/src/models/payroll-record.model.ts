@@ -30,6 +30,36 @@ export interface IPayrollManualAdjustments {
   note?: string;
 }
 
+/**
+ * The figures payroll computed for the overridable fields, before any HR
+ * override — what a field goes back to when its override is cleared.
+ */
+export interface IPayrollComputedFigures {
+  arrears: number;
+  advance: number;
+  expense: number;
+  reimbursements: number;
+  loanDeduction: number;
+  tds: number;
+}
+
+/** A loan instalment the record's loan deduction counted, and the amount it counted. */
+export interface IPayrollSettlementInstallment {
+  loanId: Types.ObjectId;
+  installmentId: Types.ObjectId;
+  amount: number;
+}
+
+/**
+ * What the record counted, so paying the cycle settles exactly that: the loan
+ * instalments behind `loanDeduction` and the expense claims behind
+ * `reimbursements`, in the order they are settled.
+ */
+export interface IPayrollSettlement {
+  loanInstallments: IPayrollSettlementInstallment[];
+  claimIds: Types.ObjectId[];
+}
+
 export interface IPayrollBank {
   bankName?: string;
   accountNumber?: string;
@@ -70,6 +100,8 @@ export interface IPayrollRecord extends Document {
   loanDeduction: number;
   tds: number;
   manualAdjustments: IPayrollManualAdjustments;
+  computed: IPayrollComputedFigures;
+  settlement: IPayrollSettlement;
   payslipUrl?: string;
   paymentStatus: PayrollPaymentStatus;
   paymentRef?: string;
@@ -98,6 +130,38 @@ const manualAdjustmentsSchema = new Schema<IPayrollManualAdjustments>(
     loanDeduction: { type: Number, default: null },
     tds: { type: Number, default: null },
     note: { type: String },
+  },
+  { _id: false },
+);
+
+const computedFiguresSchema = new Schema<IPayrollComputedFigures>(
+  {
+    arrears: { type: Number, default: 0 },
+    advance: { type: Number, default: 0 },
+    expense: { type: Number, default: 0 },
+    reimbursements: { type: Number, default: 0 },
+    loanDeduction: { type: Number, default: 0 },
+    tds: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
+const settlementSchema = new Schema<IPayrollSettlement>(
+  {
+    loanInstallments: {
+      type: [
+        new Schema<IPayrollSettlementInstallment>(
+          {
+            loanId: { type: Schema.Types.ObjectId, ref: 'Loan', required: true },
+            installmentId: { type: Schema.Types.ObjectId, required: true },
+            amount: { type: Number, default: 0 },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    claimIds: { type: [{ type: Schema.Types.ObjectId, ref: 'ExpenseClaim' }], default: [] },
   },
   { _id: false },
 );
@@ -142,6 +206,8 @@ const payrollRecordSchema = new Schema<IPayrollRecord>({
   loanDeduction: { type: Number, default: 0 },
   tds: { type: Number, default: 0 },
   manualAdjustments: { type: manualAdjustmentsSchema, default: () => ({}) },
+  computed: { type: computedFiguresSchema, default: () => ({}) },
+  settlement: { type: settlementSchema, default: () => ({}) },
   payslipUrl: String,
   paymentStatus: { type: String, enum: ['pending', 'paid'], default: 'pending' },
   paymentRef: String,

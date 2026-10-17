@@ -7,12 +7,9 @@ import {
   PayrollCycle,
   PayrollRecord,
   Employee,
-  Attendance,
-  OvertimeRequest,
   type IPayrollLine,
   type IPayrollRecord,
 } from '../models/index.js';
-import { AttendanceConfig } from '../models/attendance-config.model.js';
 import type { IPayrollManualAdjustments, PayrollStatutoryType } from '../models/payroll-record.model.js';
 import type { PayrollCycleStatus } from '../models/payroll-cycle.model.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
@@ -32,60 +29,25 @@ import {
   setManualAdjustment,
   touchProcessing,
 } from '../lib/payroll-cycle.js';
-import { settleCycle } from '../services/payroll-settlement.service.js';
-import { saveEsiDecision } from '../services/employee-statutory.service.js';
+import { settleCycle, type SettlementResult } from '../services/payroll-settlement.service.js';
+import {
+  STRUCTURE_POPULATE,
+  computeRecord,
+  loadComputeConfig,
+  payrollEmployeeFilter,
+} from '../services/payroll-compute.service.js';
 import {
   generatePayslipPdf,
   type YtdTotals,
 } from '../services/payslip-pdf.service.js';
 import { deleteFile } from '../lib/local-storage.js';
 import { logger } from '../config/logger.js';
-import {
-  esiEligibility,
-  esiEmployee,
-  esiEmployer,
-  esiPeriodKey,
-  pfEmployee,
-  pfEmployer,
-  professionalTax,
-  ptStateCodeOf,
-} from '../lib/statutory.js';
 
 /* ──────────────────────────────────────────────────────────── */
 /* Helpers                                                       */
 /* ──────────────────────────────────────────────────────────── */
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
-
-function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
-}
-
-/**
- * Overtime pay using the company formula:
- *   (Gross / 2) / actualWorkingDays / 8 / 60 × OT_minutes × 2
- * Simplifies to:
- *   Gross × OT_minutes / (actualWorkingDays × 480)
- *
- * Worked example (gross 50,000, 26 days, 50 OT min):
- *   50,000 × 50 / (26 × 480) = 200.32  ✓
- *
- * Returns 0 if any divisor is zero (no presence ⇒ no OT pay).
- */
-function computeOvertimePay(
-  fullMonthGross: number,
-  otMinutes: number,
-  actualWorkingDays: number,
-): number {
-  if (
-    fullMonthGross <= 0 ||
-    otMinutes <= 0 ||
-    actualWorkingDays <= 0
-  ) {
-    return 0;
-  }
-  return round2((fullMonthGross * otMinutes) / (actualWorkingDays * 480));
-}
 
 /* ──────────────────────────────────────────────────────────── */
 /* Salary Components                                             */
@@ -257,20 +219,25 @@ export async function deleteStructure(req: Request, res: Response): Promise<void
 }
 
 export const assignStructureSchema = z.object({
-  employeeIds: z.array(z.string()).min(1),
+  employeeIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid employee id')).min(1),
 });
 
+/** Puts the employees on the structure: payroll takes their earning lines from it. */
 export async function assignStructure(req: Request, res: Response): Promise<void> {
-  // For now we just record an audit; actual structure-employee join could be added
-  // as a future enhancement. Each employee already carries its own salary breakdown.
   const { employeeIds } = req.body as z.infer<typeof assignStructureSchema>;
+  const structure = await SalaryStructure.findById(String(req.params.id)).select('_id').lean().exec();
+  if (!structure) throw new NotFoundError('Structure not found');
+  const { matchedCount } = await Employee.updateMany(
+    { _id: { $in: employeeIds.map((id) => new Types.ObjectId(id)) } },
+    { $set: { salaryStructureId: structure._id } },
+  ).exec();
   void audit({
     action: 'update',
     entity: 'SalaryStructure',
-    entityId: String(req.params.id),
-    after: { assignedTo: employeeIds },
+    entityId: String(structure._id),
+    after: { assignedTo: employeeIds, assigned: matchedCount },
   });
-  res.json({ success: true, data: { assigned: employeeIds.length } });
+  res.json({ success: true, data: { assigned: matchedCount } });
 }
 
 /* ──────────────────────────────────────────────────────────── */
@@ -323,201 +290,6 @@ export async function getCycle(req: Request, res: Response): Promise<void> {
 /* Process payroll for a cycle                                   */
 /* ──────────────────────────────────────────────────────────── */
 
-interface ComputedRecord {
-  earnings: IPayrollLine[];
-  deductions: IPayrollLine[];
-  employerContributions: IPayrollLine[];
-  fullMonthGross: number;
-  grossSalary: number;
-  totalDeductions: number;
-  netSalary: number;
-  workingDays: number;
-  daysPaid: number;
-  presentDays: number;
-  absentDays: number;
-  lopDays: number;
-  lopAmount: number;
-  paidLeaveDays: number;
-  weeklyOffDays: number;
-  unpaidDays: number;
-  lateLoginCount: number;
-  paidLeaveBalance: number;
-  overtimeHours: number;
-  overtimeAmount: number;
-  expense: number;
-  advance: number;
-  lateDeduction: number;
-}
-
-async function computeForEmployee(
-  employee: typeof Employee.prototype,
-  cycle: typeof PayrollCycle.prototype,
-): Promise<ComputedRecord> {
-  const monthDays = daysInMonth(cycle.year, cycle.month);
-  const periodStart = new Date(cycle.year, cycle.month - 1, 1);
-  const periodEnd = new Date(cycle.year, cycle.month, 0, 23, 59, 59);
-
-  // Pull every attendance row in the period and count by status.
-  const records = await Attendance.find({
-    employeeId: employee._id,
-    date: { $gte: periodStart, $lte: periodEnd },
-  })
-    .lean()
-    .exec();
-
-  // Match the reference payslip: "Days Present" column counts strict 'present'
-  // rows. Late check-ins are reported separately under "Late Login".
-  const presentDays = records.filter((r) => r.status === 'present').length;
-  const lateDays = records.filter((r) => r.status === 'late').length;
-  const halfDays = records.filter((r) => r.status === 'half_day').length;
-  const paidLeaveDays = records.filter((r) => r.status === 'on_leave').length;
-  const weeklyOffDays = records.filter(
-    (r) => r.status === 'weekend' || r.status === 'holiday',
-  ).length;
-  const unpaidDays = records.filter((r) => r.status === 'absent').length;
-  // Late logins = late-status rows + any present rows that were flagged late.
-  // Also count `lateDays` separately so we can include them in earned days.
-  const lateLoginCount =
-    lateDays + records.filter((r) => r.status === 'present' && (r.lateBy ?? 0) > 0).length;
-
-  // Days Paid = total month days − unpaid (matches the reference payslip:
-  //   Khyati: 31 − 2 = 29).
-  // Half-days subtract 0.5 from days paid since they cost half a day's wage.
-  const daysPaid = round2(monthDays - unpaidDays - halfDays * 0.5);
-  const lopDaysFinal = round2(unpaidDays + halfDays * 0.5);
-
-  // Full-month figures from employee's stored salary. We treat
-  // `specialAllowance` as the "Other Allowance" line in the payslip (the CSV
-  // import populated this field with the "Other All." column).
-  const basic = Number(employee.salary?.basic ?? 0);
-  const hra = Number(employee.salary?.hra ?? 0);
-  const da = Number(employee.salary?.da ?? 0);
-  const otherAllowance = Number(employee.salary?.specialAllowance ?? 0);
-
-  const fullMonthGross = round2(basic + hra + da + otherAllowance);
-
-  // Pro-rate basic + allowances by daysPaid / monthDays.
-  const proRate = (val: number): number =>
-    monthDays > 0 ? round2((val * daysPaid) / monthDays) : 0;
-
-  const earnedBasic = proRate(basic);
-  const earnedDa = da > 0 ? proRate(da) : 0;
-  const earnings: IPayrollLine[] = [
-    { name: 'Basic', amount: earnedBasic },
-    { name: 'HRA', amount: proRate(hra) },
-  ];
-  if (da > 0) earnings.push({ name: 'DA', amount: earnedDa });
-  earnings.push({ name: 'Other Allowance', amount: proRate(otherAllowance) });
-
-  // Auto-compute overtime from APPROVED OvertimeRequest rows for the period.
-  // Raw attendance.overtimeHours is the sensor reading (when did they punch
-  // out late) but only formally approved requests get paid.
-  const otApproved = await OvertimeRequest.find({
-    employee: employee._id,
-    status: 'approved',
-    date: { $gte: periodStart, $lte: periodEnd },
-  })
-    .lean()
-    .exec();
-  const overtimeHours = round2(otApproved.reduce((s, r) => s + (r.hours ?? 0), 0));
-  const otMinutes = overtimeHours * 60;
-  // Divide the rate by `daysPaid` (paid working days in the cycle), not
-  // `presentDays` — `presentDays` is 0 when attendance hasn't been entered
-  // yet, which would zero out OT pay even for valid approved requests.
-  // `daysPaid` defaults to the full month minus LOP, matching how every
-  // other earning is pro-rated.
-  const overtimeAmount = computeOvertimePay(fullMonthGross, otMinutes, daysPaid);
-
-  // Expense is manual — HR enters via record edit, defaults to 0.
-  const expense = 0;
-  if (overtimeAmount > 0) earnings.push({ name: 'Over Time', amount: overtimeAmount });
-  if (expense > 0) earnings.push({ name: 'Expense', amount: expense });
-
-  const grossEarnings = round2(earnings.reduce((s, l) => s + l.amount, 0));
-  const lopAmount = round2((fullMonthGross / monthDays) * lopDaysFinal);
-
-  // Statutory deductions (rules and rates live in lib/statutory.ts).
-  // PF is on what was EARNED: the pro-rated basic + DA, capped at the wage
-  // ceiling. ESI is on the earned gross; whether it applies is decided once
-  // per Apr–Sep / Oct–Mar period from the full-month gross and then kept.
-  const pfWage = round2(earnedBasic + earnedDa);
-  const pfEmp = pfEmployee(pfWage);
-
-  const periodKey = esiPeriodKey(new Date(Date.UTC(cycle.year, cycle.month - 1, 1)));
-  // Eligibility is decided on the full-month gross of the salary COMPONENTS —
-  // not the stored `salary.grossSalary`, which the employee pre-save hook also
-  // adds every `otherAllowances` value into (the CSV import stashes its PF,
-  // CTC, net pay … there).
-  const esi = esiEligibility(employee, fullMonthGross, periodKey);
-  if (esi.persist) {
-    const statutory = { esiEligible: esi.eligible, esiPeriodKey: periodKey };
-    if (await saveEsiDecision(employee._id as Types.ObjectId, statutory)) employee.statutory = statutory;
-  }
-  const esicEmp = esiEmployee(grossEarnings, esi.eligible);
-
-  const pt = professionalTax({
-    stateCode: ptStateCodeOf(employee),
-    monthlyGross: grossEarnings,
-    month: cycle.month,
-    gender: employee.gender,
-  });
-
-  const deductions: IPayrollLine[] = [];
-  if (pt > 0) deductions.push({ name: 'P.Tax', amount: pt, statutoryType: 'pt' });
-  deductions.push({ name: 'PF Employee', amount: pfEmp, statutoryType: 'pf' });
-  deductions.push({ name: 'ESI Employee', amount: esicEmp, statutoryType: 'esi' });
-
-  // Manual deductions — defaulted to 0; HR can edit on the record.
-  const advance = 0;
-
-  // Auto late deduction: every late check-in beyond the monthly free quota
-  // (default 3) costs half a day's gross. HR can override via record edit.
-  const cfg = await AttendanceConfig.findOne({}).lean().exec();
-  const freeLateDays = cfg?.settings?.freeLateDaysPerMonth ?? 3;
-  const penalisableLate = Math.max(0, lateLoginCount - freeLateDays);
-  const lateDeduction =
-    monthDays > 0 ? round2((fullMonthGross / monthDays) * 0.5 * penalisableLate) : 0;
-
-  if (advance > 0) deductions.push({ name: 'Advance', amount: advance });
-  if (lateDeduction > 0) deductions.push({ name: 'Late Deduction', amount: lateDeduction });
-
-  // Employer contributions
-  const pfErp = pfEmployer(pfWage);
-  const esicErp = esiEmployer(grossEarnings, esi.eligible);
-  const employerContributions: IPayrollLine[] = [];
-  employerContributions.push({ name: 'PF Employer', amount: pfErp, statutoryType: 'pf' });
-  employerContributions.push({ name: 'ESI Employer', amount: esicErp, statutoryType: 'esi' });
-
-  const totalDeductions = round2(deductions.reduce((s, l) => s + l.amount, 0));
-  const netSalary = round2(grossEarnings - totalDeductions);
-
-  return {
-    earnings,
-    deductions,
-    employerContributions,
-    fullMonthGross,
-    grossSalary: grossEarnings,
-    totalDeductions,
-    netSalary,
-    workingDays: monthDays,
-    daysPaid,
-    presentDays,
-    absentDays: unpaidDays,
-    lopDays: lopDaysFinal,
-    lopAmount,
-    paidLeaveDays,
-    weeklyOffDays,
-    unpaidDays,
-    lateLoginCount,
-    paidLeaveBalance: 0, // wire to leave-balance module later
-    overtimeHours,
-    overtimeAmount,
-    expense,
-    advance,
-    lateDeduction,
-  };
-}
-
 /** The acting user as an ObjectId, when the request has one. */
 function actingUserId(): Types.ObjectId | undefined {
   const userId = getUserId();
@@ -565,26 +337,32 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
 
     // Compute everything before touching the stored records, so a failure
     // here leaves them (and their overrides) exactly as they were.
-    const employees = await Employee.find({ status: 'active' }).exec();
+    const cfg = await loadComputeConfig();
+    const employees = await Employee.find(payrollEmployeeFilter(cycle.year, cycle.month))
+      .populate(STRUCTURE_POPULATE)
+      .exec();
     const rebuilt: IPayrollRecord[] = [];
     let lastBeat = Date.now();
     for (const emp of employees) {
-      const computed = await computeForEmployee(emp, cycle);
       const carry = overrides.get(String(emp._id));
-      if (carry) carried.add(String(emp._id));
-      const record = new PayrollRecord({
-        cycleId,
-        employeeId: emp._id,
-        ...computed,
-        manualAdjustments: carry ?? {},
-        bankDetails: {
-          bankName: emp.bankDetails?.bankName,
-          accountNumber: emp.bankDetails?.accountNumber,
-          ifscCode: emp.bankDetails?.ifscCode,
-        },
-        paymentStatus: 'pending',
-      });
-      rebuilt.push(applyManualAdjustments(record));
+      // HR's overrides go over the freshly computed figures; null ones fall back to them.
+      const computed = await computeRecord(emp, cycle, cfg, { manual: carry });
+      if (computed) {
+        if (carry) carried.add(String(emp._id));
+        rebuilt.push(
+          new PayrollRecord({
+            cycleId,
+            employeeId: emp._id,
+            ...computed,
+            bankDetails: {
+              bankName: emp.bankDetails?.bankName,
+              accountNumber: emp.bankDetails?.accountNumber,
+              ifscCode: emp.bankDetails?.ifscCode,
+            },
+            paymentStatus: 'pending',
+          }),
+        );
+      }
       if (Date.now() - lastBeat > PROCESSING_HEARTBEAT_MS) {
         await touchProcessing(cycleId);
         lastBeat = Date.now();
@@ -595,7 +373,7 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
     if (dropped.length) {
       logger.warn(
         { cycleId: String(cycleId), droppedOverrides: dropped },
-        'payroll: overrides of employees no longer active were not carried over',
+        'payroll: overrides of employees no longer paid in this cycle were not carried over',
       );
     }
 
@@ -878,7 +656,12 @@ export const markPaidSchema = z.object({
   paidAt: z.coerce.date().optional(),
 });
 
-/** locked → paid: every record is marked paid, then loans/claims settle. */
+/**
+ * locked → paid: every record is marked paid, then loans/claims settle. The
+ * money has gone out by now, so a failed settlement does not fail the
+ * request: it is logged, reported as `settlement: { ok: false }`, and
+ * retried with POST /payroll/cycles/:id/settle.
+ */
 export async function markCyclePaid(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof markPaidSchema>;
   const found = await PayrollCycle.findById(String(req.params.id)).exec();
@@ -897,10 +680,37 @@ export async function markCyclePaid(req: Request, res: Response): Promise<void> 
     { cycleId: cycle._id },
     { $set: { paymentStatus: 'paid', paidAt, paymentRef: body.paymentRef } },
   );
-  await settleCycle(cycle);
+  let settlement: { ok: boolean } & Partial<SettlementResult>;
+  try {
+    settlement = { ok: true, ...(await settleCycle(cycle)) };
+  } catch (err) {
+    logger.error(
+      { err, cycleId: String(cycle._id) },
+      'payroll: settling loans and expense claims failed; retry with POST /payroll/cycles/:id/settle',
+    );
+    settlement = { ok: false };
+  }
 
-  void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { status: 'paid' } });
-  res.json({ success: true, data: cycle });
+  void audit({
+    action: 'update',
+    entity: 'PayrollCycle',
+    entityId: String(cycle._id),
+    after: { status: 'paid', settlement },
+  });
+  res.json({ success: true, data: cycle, settlement });
+}
+
+/**
+ * Settles a paid cycle's loans and claims again — after a settlement that
+ * failed part-way. Only what is still open is settled.
+ */
+export async function settlePaidCycle(req: Request, res: Response): Promise<void> {
+  const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
+  if (!cycle) throw new NotFoundError('Cycle not found');
+  assertTransition(cycle, 'settle');
+  const result = await settleCycle(cycle);
+  void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { settlement: result } });
+  res.json({ success: true, data: result });
 }
 
 /* ──────────────────────────────────────────────────────────── */

@@ -37,6 +37,8 @@ export interface IExpenseClaim extends Document {
   rejectedReason?: string;
   reimbursedAt?: Date;
   reimbursementRef?: string;
+  /** The payroll cycle that paid this claim out, when payroll reimbursed it. */
+  payrollCycleId?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +75,7 @@ const expenseClaimSchema = new Schema<IExpenseClaim>({
   rejectedReason: { type: String },
   reimbursedAt: { type: Date },
   reimbursementRef: { type: String },
+  payrollCycleId: { type: Schema.Types.ObjectId, ref: 'PayrollCycle' },
 });
 expenseClaimSchema.plugin(timestampPlugin);
 expenseClaimSchema.plugin(softDeletePlugin);

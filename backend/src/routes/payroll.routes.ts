@@ -146,6 +146,11 @@ router.post(
   validate(ctrl.markPaidSchema),
   asyncHandler(ctrl.markCyclePaid),
 );
+router.post(
+  '/cycles/:id/settle',
+  requirePermission('payroll.process'),
+  asyncHandler(ctrl.settlePaidCycle),
+);
 
 /* ── Records ── */
 // `getRecord` returns the full payroll record (incl. salary). Employees who

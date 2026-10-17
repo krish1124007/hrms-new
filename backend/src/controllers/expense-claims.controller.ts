@@ -2,8 +2,9 @@ import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
+import { cycleLabel, payrollReimbursingClaim } from '../services/payroll-settlement.service.js';
 import { getUserId } from '../lib/async-context.js';
 import {
   assertNotSelfApproval,
@@ -347,12 +348,26 @@ export async function rejectClaim(req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: doc });
 }
 
+/**
+ * Manual reimbursement (cash, a separate transfer). Approved claims are
+ * otherwise paid with payroll and settled when the cycle is paid
+ * (payroll-settlement.service), so a claim an unpaid cycle is about to
+ * reimburse is refused here — 409 `CLAIM_IN_PAYROLL` — rather than paid twice.
+ */
 export async function reimburseClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof reimburseClaimSchema>;
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
   if (doc.status !== 'approved') {
     throw new ValidationAppError(`Can only reimburse approved claims (current: ${doc.status})`);
+  }
+  const payroll = await payrollReimbursingClaim(doc._id as Types.ObjectId);
+  if (payroll) {
+    throw new AppError(
+      `This claim is reimbursed with the ${cycleLabel(payroll)} payroll. Set that record's reimbursements to 0 to pay it here instead.`,
+      409,
+      'CLAIM_IN_PAYROLL',
+    );
   }
   doc.status = 'reimbursed';
   doc.reimbursedAt = new Date();

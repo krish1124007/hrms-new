@@ -20,6 +20,8 @@ export type LoanStatus =
 export type InstallmentStatus = 'scheduled' | 'paid' | 'partial' | 'skipped' | 'overdue';
 
 export interface ILoanInstallment {
+  /** Set by Mongoose on every instalment (the subdocument keeps its own `_id`). */
+  _id?: Types.ObjectId;
   installmentNumber: number;
   dueDate: Date;
   amount: number;
@@ -29,6 +31,8 @@ export interface ILoanInstallment {
   paidOn?: Date | null;
   status: InstallmentStatus;
   notes?: string;
+  /** The payroll cycle whose pay-out paid into this instalment (see payroll-settlement.service). */
+  payrollCycleId?: Types.ObjectId | null;
 }
 
 export interface ILoan extends Document {
@@ -74,6 +78,7 @@ const installmentSchema = new Schema<ILoanInstallment>(
       default: 'scheduled',
     },
     notes: { type: String, trim: true },
+    payrollCycleId: { type: Schema.Types.ObjectId, ref: 'PayrollCycle', default: null },
   },
   { _id: true },
 );

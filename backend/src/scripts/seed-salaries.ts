@@ -12,7 +12,7 @@
  *   • Idempotent — run as often as needed; the spreadsheet is the source of
  *     truth for these four fields.
  *
- * The payroll engine (`payroll.controller.ts → computeForEmployee`) reads
+ * The payroll engine (`services/payroll-compute.service.ts → computeRecord`) reads
  * these stored values and applies the statutory rules (PF 12% / 13% capped
  * at ₹15,000 wage, ESIC 0.75% / 3.25% under ₹21,000, professional tax),
  * so the resulting payslip mirrors the "NET Pay" column from the sheet.

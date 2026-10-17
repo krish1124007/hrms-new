@@ -2,9 +2,10 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Loan, type ILoanInstallment, type LoanStatus } from '../models/loan.model.js';
 import { Employee } from '../models/employee.model.js';
-import { ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
+import { AppError, ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { getUserId } from '../lib/async-context.js';
 import { audit } from '../services/audit.service.js';
+import { cycleLabel, payrollDeductingInstallment } from '../services/payroll-settlement.service.js';
 
 /** GET /api/v1/loans/me — loans belonging to the calling employee. Auth-only. */
 export async function myLoans(_req: Request, res: Response): Promise<void> {
@@ -419,12 +420,19 @@ export async function recordPayment(req: Request, res: Response): Promise<void> 
     throw new ValidationAppError('Loan is not in a payable state');
   }
 
-  // Mongoose adds _id to subdocs but the type interface omits it.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const inst = loan.installments.find((i) => String((i as any)._id) === body.installmentId);
+  const inst = loan.installments.find((i) => String(i._id) === body.installmentId);
   if (!inst) throw new NotFoundError('Installment not found');
   if (inst.status === 'paid') {
     throw new ValidationAppError('This installment is already paid');
+  }
+  // Payroll deducts the EMI and pays the instalment when its cycle is paid out.
+  const payroll = inst._id ? await payrollDeductingInstallment(inst._id) : null;
+  if (payroll) {
+    throw new AppError(
+      `The ${cycleLabel(payroll)} payroll deducts this instalment. Set that record's loan deduction to 0 to take the payment here instead.`,
+      409,
+      'INSTALLMENT_IN_PAYROLL',
+    );
   }
 
   const remaining = round2(inst.amount - inst.paidAmount);

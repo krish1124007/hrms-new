@@ -38,7 +38,7 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 /* State machine                                                 */
 /* ──────────────────────────────────────────────────────────── */
 
-export type CycleAction = 'process' | 'edit' | 'lock' | 'markPaid' | 'generatePayslips';
+export type CycleAction = 'process' | 'edit' | 'lock' | 'markPaid' | 'settle' | 'generatePayslips';
 
 /** The statuses each action may start from. */
 export const CYCLE_ACTION_FROM: Readonly<Record<CycleAction, readonly PayrollCycleStatus[]>> = {
@@ -46,6 +46,8 @@ export const CYCLE_ACTION_FROM: Readonly<Record<CycleAction, readonly PayrollCyc
   edit: ['draft', 'processed'],
   lock: ['processed'],
   markPaid: ['locked'],
+  // Loans and claims settle once the money has gone out (and again on a retry).
+  settle: ['paid'],
   // Never while `processing`: the records are being replaced.
   generatePayslips: ['processed', 'locked', 'paid'],
 };
@@ -81,6 +83,7 @@ const ACTION_PAST: Record<CycleAction, string> = {
   edit: 'edited',
   lock: 'locked',
   markPaid: 'marked paid',
+  settle: 'settled',
   generatePayslips: 'given payslips',
 };
 
@@ -214,6 +217,8 @@ export interface AdjustableRecord extends Record<LineField | AdjustableField, nu
   earnings: IPayrollLine[];
   deductions: IPayrollLine[];
   manualAdjustments?: Partial<IPayrollManualAdjustments> | null;
+  /** The computed figures under the overrides (what clearing an override goes back to). */
+  computed?: Partial<Record<AdjustableField, number>> | null;
   grossSalary: number;
   totalDeductions: number;
   netSalary: number;
@@ -286,10 +291,9 @@ export function applyManualAdjustments<T extends AdjustableRecord>(record: T): T
 /**
  * Sets (number) or clears (`null`) one override on the record; the caller
  * then runs `applyManualAdjustments`. Clearing puts the field back to its
- * computed value — 0 for all six today (none is computed yet), so the field
- * and its line go. Task 8 computes loan, reimbursement and TDS figures; once
- * it does, clearing those should restore the computed amount (re-processing
- * the cycle already does).
+ * computed value (`record.computed`: the loan EMI due, the approved claims,
+ * the declared TDS; 0 for arrears/advance/expense and on records computed
+ * before figures were kept) — the same figure re-processing would give.
  */
 export function setManualAdjustment(
   record: AdjustableRecord & { manualAdjustments: Partial<IPayrollManualAdjustments> },
@@ -299,7 +303,8 @@ export function setManualAdjustment(
   // Stored exactly as applied, so the override always equals the field.
   record.manualAdjustments[field] = value === null ? null : round2(value);
   if (value === null) {
-    record[field] = 0;
+    record[field] = round2(record.computed?.[field] ?? 0);
+    // The TDS line is rebuilt from the field (it is not a field line).
     if (field === 'tds') record.deductions = record.deductions.filter((l) => !isTdsLine(l));
   }
 }
