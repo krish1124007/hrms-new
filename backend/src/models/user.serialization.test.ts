@@ -228,23 +228,4 @@ describe('user serialization hides credentials and tokens', () => {
       .send({ token, password: 'Another-New#Passw0rd-2027' });
     expect(replay.status).toBe(401);
   });
-
-  it('keeps email verification working and consumes the token', async () => {
-    const { user } = await createUser({ roleSlug: 'employee' });
-    await User.updateOne(
-      { _id: user._id },
-      { $set: { emailVerified: false, emailVerificationToken: VERIFY_TOKEN } },
-    );
-    const app = createApp();
-
-    const ok = await request(app).get(`/api/v1/auth/verify-email/${VERIFY_TOKEN}`);
-    expect(ok.status).toBe(200);
-
-    const stored = await User.findById(user._id).select('+emailVerificationToken').exec();
-    expect(stored?.emailVerified).toBe(true);
-    expect(stored?.emailVerificationToken).toBeUndefined();
-
-    const replay = await request(app).get(`/api/v1/auth/verify-email/${VERIFY_TOKEN}`);
-    expect(replay.status).toBe(404);
-  });
 });

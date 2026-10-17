@@ -64,9 +64,11 @@ describe('accept-invite', () => {
     const { email, token } = await inviteEmployee();
     const app = createApp();
 
-    // Invited users cannot log in yet.
+    // Until accepted the account is only invited, and the password the user is
+    // about to choose is not yet valid for anything.
+    expect((await User.findOne({ email }))?.status).toBe('invited');
     const before = await request(app).post('/api/v1/auth/login').send({ email, password: STRONG });
-    expect(before.status).toBeGreaterThanOrEqual(400);
+    expect(before.status).toBe(401);
 
     const res = await request(app).post('/api/v1/auth/accept-invite').send({ token, password: STRONG });
     expect(res.status).toBe(200);
@@ -94,6 +96,20 @@ describe('accept-invite', () => {
     expect(login.body.data.accessToken).toEqual(expect.any(String));
   });
 
+  it('keeps an invited account out even when its password is known (login gates on status)', async () => {
+    const { email } = await inviteEmployee();
+    // Give the still-invited account a password we know, so the only thing
+    // left to stop the login is the status check itself.
+    const invited = await User.findOne({ email }).select('+password').orFail();
+    invited.password = STRONG;
+    await invited.save();
+    expect(invited.status).toBe('invited');
+
+    const login = await request(createApp()).post('/api/v1/auth/login').send({ email, password: STRONG });
+    expect(login.status).toBe(403);
+    expect(login.body.error.message).toMatch(/invited/);
+  });
+
   it('rejects a token that has already been used', async () => {
     const { token } = await inviteEmployee();
     const app = createApp();
@@ -107,6 +123,17 @@ describe('accept-invite', () => {
     expect(replay.status).toBe(400);
     expect(replay.body.error.code).toBe('INVALID_INVITE');
     expect(replay.body.error.message).toBe('Invitation link is invalid or has already been used');
+  });
+
+  it('no longer exposes GET /auth/verify-email, so an invite token cannot be consumed without activating', async () => {
+    const { email, token } = await inviteEmployee();
+
+    const res = await request(createApp()).get(`/api/v1/auth/verify-email/${token}`);
+    expect(res.status).toBe(404);
+
+    const stored = await User.findOne({ email }).select('+emailVerificationToken').lean();
+    expect(stored?.status).toBe('invited');
+    expect(stored?.emailVerificationToken).toBe(token);
   });
 
   it('rejects an unknown token', async () => {

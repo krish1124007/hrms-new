@@ -29,7 +29,6 @@ router.post(
   validate(acceptInviteSchema),
   asyncHandler(auth.acceptInvite),
 );
-router.get('/verify-email/:token', asyncHandler(auth.verifyEmail));
 router.get('/me', authMiddleware, asyncHandler(auth.me));
 router.patch(
   '/me',

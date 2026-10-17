@@ -336,20 +336,6 @@ export async function acceptInvite(req: Request, res: Response): Promise<void> {
   });
 }
 
-export async function verifyEmail(req: Request, res: Response): Promise<void> {
-  const { token } = req.params;
-  const user = await User.findOne({ emailVerificationToken: token })
-    .select('+emailVerificationToken')
-    .exec();
-  if (!user) throw new NotFoundError('Invalid verification token');
-
-  user.emailVerified = true;
-  user.emailVerificationToken = undefined;
-  await user.save();
-
-  res.json({ success: true, message: 'Email verified' });
-}
-
 export async function me(req: Request, res: Response): Promise<void> {
   if (!req.user) throw new UnauthorizedError();
   res.json({

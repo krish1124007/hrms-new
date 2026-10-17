@@ -225,15 +225,6 @@ export const swaggerPaths: Record<string, unknown> = {
       responses: { ...res200('Account activated; user and tokens returned'), ...{ 400: errResponses[400] } },
     },
   },
-  '/auth/verify-email/{token}': {
-    get: {
-      tags: ['Auth'],
-      summary: 'Verify email address',
-      security: [],
-      parameters: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' }, description: 'Email verification token' }],
-      responses: { ...res200('Email verified'), ...{ 400: errResponses[400] } },
-    },
-  },
   '/auth/me': {
     get: {
       tags: ['Auth'],
