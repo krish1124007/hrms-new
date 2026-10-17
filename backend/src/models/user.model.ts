@@ -76,6 +76,26 @@ const refreshTokenSchema = new Schema<IRefreshToken>(
   { _id: false },
 );
 
+/**
+ * Credentials and one-time tokens must never leave the process in a response
+ * body or a log line, whatever query loaded the document (`select: false` keeps
+ * them out of default queries; this covers the `+field` opt-ins and the
+ * document that `User.create` returns).
+ */
+const SECRET_FIELDS = [
+  'password',
+  'passwordHistory',
+  'refreshTokens',
+  'emailVerificationToken',
+  'passwordResetToken',
+  'passwordResetExpires',
+] as const;
+
+function stripSecrets(_doc: unknown, ret: Record<string, unknown>): Record<string, unknown> {
+  for (const field of SECRET_FIELDS) delete ret[field];
+  return ret;
+}
+
 const userSchema = new Schema<IUser>({
   email: { type: String, required: true, lowercase: true, trim: true },
   password: { type: String, required: true, select: false },
@@ -87,9 +107,9 @@ const userSchema = new Schema<IUser>({
   status: { type: String, enum: ['active', 'inactive', 'invited'], default: 'active' },
   lastLogin: Date,
   emailVerified: { type: Boolean, default: false },
-  emailVerificationToken: String,
-  passwordResetToken: String,
-  passwordResetExpires: Date,
+  emailVerificationToken: { type: String, select: false },
+  passwordResetToken: { type: String, select: false },
+  passwordResetExpires: { type: Date, select: false },
   loginMethod: { type: String, enum: ['email', 'uid', 'sso'], default: 'email' },
   uid: { type: String },
   refreshTokens: { type: [refreshTokenSchema], default: [], select: false },
@@ -115,6 +135,9 @@ const userSchema = new Schema<IUser>({
     userAgent: String,
     documentVersions: { type: Schema.Types.Mixed, default: {} },
   },
+}, {
+  toJSON: { transform: stripSecrets },
+  toObject: { transform: stripSecrets },
 });
 userSchema.plugin(timestampPlugin);
 userSchema.plugin(softDeletePlugin);

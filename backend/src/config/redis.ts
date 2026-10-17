@@ -2,16 +2,61 @@ import { Redis } from 'ioredis';
 import { env } from './env.js';
 import { logger } from './logger.js';
 
+function attachLogging(client: Redis, name: string): void {
+  client.on('connect', () => logger.info(`✅ Redis connected (${name})`));
+  client.on('error', (err) => logger.error({ err, client: name }, 'Redis connection error'));
+  client.on('close', () => logger.warn({ client: name }, 'Redis connection closed'));
+}
+
+/**
+ * BullMQ client (jobs/backup.jobs.ts). BullMQ requires
+ * `maxRetriesPerRequest: null` — blocking commands must wait indefinitely —
+ * which also means commands queue forever while Redis is down. Never use this
+ * client on the request path.
+ */
 export const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null,
   enableReadyCheck: true,
   lazyConnect: false,
 });
+attachLogging(redis, 'queue');
 
-redis.on('connect', () => logger.info('✅ Redis connected'));
-redis.on('error', (err) => logger.error({ err }, 'Redis connection error'));
-redis.on('close', () => logger.warn('Redis connection closed'));
+/**
+ * Request-path client (auth cache, token blacklist, rate limits, idempotency,
+ * response cache). It fails fast: with the offline queue disabled a command
+ * issued while Redis is unreachable rejects immediately, and `commandTimeout`
+ * bounds one that was already in flight. Callers treat the rejection as "Redis
+ * unavailable" and fail open, so an outage degrades the cache/rate limits
+ * instead of hanging every authenticated request.
+ */
+export const redisApp = new Redis(env.REDIS_URL, {
+  maxRetriesPerRequest: 2,
+  enableOfflineQueue: false,
+  commandTimeout: 2000,
+  enableReadyCheck: true,
+  lazyConnect: false,
+});
+attachLogging(redisApp, 'app');
+
+const QUIT_TIMEOUT_MS = 2000;
+
+/** Graceful QUIT, falling back to a hard disconnect if Redis is down or slow. */
+async function closeClient(client: Redis): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      client.quit(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Redis QUIT timed out')), QUIT_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    client.disconnect();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function disconnectRedis(): Promise<void> {
-  await redis.quit();
+  await Promise.all([closeClient(redis), closeClient(redisApp)]);
 }

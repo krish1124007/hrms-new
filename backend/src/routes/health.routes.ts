@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import mongoose from 'mongoose';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { registry } from '../lib/metrics.js';
 
 const router = Router();
@@ -48,7 +48,7 @@ router.get('/readyz', async (_req: Request, res: Response) => {
   const dbState = mongoose.connection.readyState; // 1 = connected
   let redisOk = false;
   try {
-    await redis.ping();
+    await redisApp.ping();
     redisOk = true;
   } catch {
     /* Redis down */

@@ -234,7 +234,7 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
     passwordResetToken: token,
     passwordResetExpires: { $gt: new Date() },
   })
-    .select('+passwordHistory +password')
+    .select('+passwordHistory +password +passwordResetToken +passwordResetExpires')
     .exec();
   if (!user) throw new UnauthorizedError('Invalid or expired reset token');
 
@@ -275,7 +275,9 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
 
 export async function verifyEmail(req: Request, res: Response): Promise<void> {
   const { token } = req.params;
-  const user = await User.findOne({ emailVerificationToken: token }).exec();
+  const user = await User.findOne({ emailVerificationToken: token })
+    .select('+emailVerificationToken')
+    .exec();
   if (!user) throw new NotFoundError('Invalid verification token');
 
   user.emailVerified = true;

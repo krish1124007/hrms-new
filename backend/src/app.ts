@@ -19,6 +19,7 @@ import { apiVersionMiddleware } from './middleware/api-version.middleware.js';
 import { compressionTelemetry } from './middleware/compression-telemetry.middleware.js';
 import { metricsMiddleware } from './middleware/metrics.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { metricsGuard } from './middleware/metrics-guard.middleware.js';
 import { presignResponse, unsignRequestBody } from './middleware/presign-response.middleware.js';
 
 import apiRoutes from './routes/index.js';
@@ -33,7 +34,28 @@ import healthRoutes, { healthHandler } from './routes/health.routes.js';
  * workers or register sockets. `index.ts` owns that lifecycle; tests call this
  * directly with supertest.
  */
-export function createApp(): Express {
+export interface CreateAppOptions {
+  /**
+   * Serve Swagger UI and /api/docs.json. Defaults to on everywhere except
+   * production, where it needs ENABLE_API_DOCS=true.
+   */
+  exposeDocs?: boolean;
+  /**
+   * Shared secret accepted in `X-Metrics-Token` by /api/metrics from
+   * non-loopback callers. Defaults to METRICS_TOKEN.
+   */
+  metricsToken?: string;
+}
+
+/** Whether the API docs are served when `createApp` is not told explicitly. */
+export function docsEnabledByDefault(): boolean {
+  return env.NODE_ENV !== 'production' || env.ENABLE_API_DOCS === 'true';
+}
+
+export function createApp(opts: CreateAppOptions = {}): Express {
+  const exposeDocs = opts.exposeDocs ?? docsEnabledByDefault();
+  const metricsToken = opts.metricsToken ?? env.METRICS_TOKEN;
+
   const app = express();
   app.set('trust proxy', 1);
 
@@ -115,28 +137,36 @@ export function createApp(): Express {
   // liveness probe is also reachable at /api/v1/health (where the access-log
   // filter and API clients expect it); readyz and metrics must never be
   // exposed unauthenticated under the versioned prefix.
+  // Prometheus scrape endpoint: loopback or X-Metrics-Token only. Registered
+  // ahead of healthRoutes so the guard runs first; health/readyz stay public.
+  app.use('/api/metrics', metricsGuard(metricsToken));
   app.use('/api', healthRoutes);
   app.get('/api/v1/health', healthHandler);
-  app.use(
-    '/api/docs',
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerSpec, {
-      customCss: '.swagger-ui .topbar { display: none }',
-      customSiteTitle: 'HRMS API Documentation',
-      swaggerOptions: {
-        persistAuthorization: true,
-        docExpansion: 'none',
-        filter: true,
-        tagsSorter: 'alpha',
-        operationsSorter: 'alpha',
-      },
-    }),
-  );
 
-  // Serve raw OpenAPI JSON spec for programmatic consumers
-  app.get('/api/docs.json', (_req: Request, res: Response) => {
-    res.json(swaggerSpec);
-  });
+  // API documentation is an information-disclosure surface (full route and
+  // schema inventory), so it is off in production unless explicitly enabled.
+  if (exposeDocs) {
+    app.use(
+      '/api/docs',
+      swaggerUi.serve,
+      swaggerUi.setup(swaggerSpec, {
+        customCss: '.swagger-ui .topbar { display: none }',
+        customSiteTitle: 'HRMS API Documentation',
+        swaggerOptions: {
+          persistAuthorization: true,
+          docExpansion: 'none',
+          filter: true,
+          tagsSorter: 'alpha',
+          operationsSorter: 'alpha',
+        },
+      }),
+    );
+
+    // Serve raw OpenAPI JSON spec for programmatic consumers
+    app.get('/api/docs.json', (_req: Request, res: Response) => {
+      res.json(swaggerSpec);
+    });
+  }
 
   // ─── API routes ───
   // Signed file downloads: authorised by the link's signature, not a session.

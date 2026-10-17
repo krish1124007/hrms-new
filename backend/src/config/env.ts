@@ -64,6 +64,23 @@ const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  /**
+   * Serve Swagger UI (/api/docs) and the OpenAPI JSON (/api/docs.json) in
+   * production. Always on outside production. Off by default: the spec is a
+   * complete inventory of the API surface.
+   */
+  ENABLE_API_DOCS: z.enum(['true', 'false']).default('false'),
+  /**
+   * Shared secret for /api/metrics. Requests from a non-loopback address must
+   * send it as `X-Metrics-Token`; loopback callers need nothing. Unset: only
+   * loopback may scrape.
+   */
+  METRICS_TOKEN: z.preprocess(
+    // A blank `METRICS_TOKEN=` line in .env means "not configured".
+    (value) => (value === '' ? undefined : value),
+    z.string().min(16, 'METRICS_TOKEN must be at least 16 characters').optional(),
+  ),
+
   ENCRYPTION_KEY: z
     .string()
     .min(32, 'ENCRYPTION_KEY must be at least 32 characters')

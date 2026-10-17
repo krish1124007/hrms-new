@@ -1,4 +1,4 @@
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { logger } from '../config/logger.js';
 
 /**
@@ -23,7 +23,7 @@ export async function revokeToken(jti: string, expSeconds: number): Promise<void
   const now = Math.floor(Date.now() / 1000);
   const ttl = Math.max(1, expSeconds - now);
   try {
-    await redis.set(`${PREFIX}${jti}`, '1', 'EX', ttl);
+    await redisApp.set(`${PREFIX}${jti}`, '1', 'EX', ttl);
   } catch (err) {
     logger.warn({ err, jti }, 'Failed to write to token blacklist — fail open');
   }
@@ -32,7 +32,7 @@ export async function revokeToken(jti: string, expSeconds: number): Promise<void
 /** Fast existence check: true = revoked, false = still valid (or Redis down). */
 export async function isTokenRevoked(jti: string): Promise<boolean> {
   try {
-    const hit = await redis.get(`${PREFIX}${jti}`);
+    const hit = await redisApp.get(`${PREFIX}${jti}`);
     return hit === '1';
   } catch (err) {
     logger.warn({ err, jti }, 'Blacklist check failed — fail open');
@@ -56,7 +56,7 @@ export async function revokeAllUserTokens(
 ): Promise<void> {
   try {
     // 7-day TTL — long enough to cover a refresh token's lifespan
-    await redis.set(`jwt:sv:${userId}`, String(newSessionVersion), 'EX', 7 * 24 * 3600);
+    await redisApp.set(`jwt:sv:${userId}`, String(newSessionVersion), 'EX', 7 * 24 * 3600);
   } catch (err) {
     logger.warn({ err, userId }, 'Failed to mark sessionVersion — fail open');
   }
@@ -65,7 +65,7 @@ export async function revokeAllUserTokens(
 /** Read cached sessionVersion (avoid DB round-trip on every request). */
 export async function getCachedSessionVersion(userId: string): Promise<number | null> {
   try {
-    const val = await redis.get(`jwt:sv:${userId}`);
+    const val = await redisApp.get(`jwt:sv:${userId}`);
     return val ? parseInt(val, 10) : null;
   } catch {
     return null;

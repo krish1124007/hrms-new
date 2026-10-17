@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { authRateLimit } from './rate-limit.middleware.js';
 
 function fakeRes() {
@@ -68,7 +68,7 @@ describe('authRateLimit', () => {
       await authRateLimit(req, fakeRes() as unknown as Response, next as unknown as NextFunction);
     }
 
-    const ttl = vi.spyOn(redis, 'ttl').mockResolvedValue(-1);
+    const ttl = vi.spyOn(redisApp, 'ttl').mockResolvedValue(-1);
     try {
       const blocked = fakeRes();
       await authRateLimit(req, blocked as unknown as Response, next as unknown as NextFunction);

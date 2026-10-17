@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
+import { logger } from '../config/logger.js';
 
 interface RateLimitOptions {
   windowMs: number;
@@ -20,16 +21,16 @@ function buildLimiter(opts: RateLimitOptions) {
       const key = `ratelimit:${opts.keyPrefix}:${id}`;
       const ttlSeconds = Math.ceil(opts.windowMs / 1000);
 
-      const count = await redis.incr(key);
+      const count = await redisApp.incr(key);
       if (count === 1) {
-        await redis.expire(key, ttlSeconds);
+        await redisApp.expire(key, ttlSeconds);
       }
 
       res.setHeader('X-RateLimit-Limit', String(opts.max));
       res.setHeader('X-RateLimit-Remaining', String(Math.max(0, opts.max - count)));
 
       if (count > opts.max) {
-        const retryAfter = await redis.ttl(key);
+        const retryAfter = await redisApp.ttl(key);
         res.setHeader('Retry-After', String(retryAfter > 0 ? retryAfter : ttlSeconds));
         res.status(429).json({
           success: false,
@@ -79,30 +80,62 @@ export const authRateLimit = buildLimiter({
 const failKey = (email: string, ip: string): string => `login-fail:${email.toLowerCase()}:${ip}`;
 const lockKey = (email: string, ip: string): string => `login-lock:${email.toLowerCase()}:${ip}`;
 
+/**
+ * The lockout counters live in Redis, which `redisApp` now rejects promptly
+ * when it is down. Failing the login with a 500 would turn a cache outage into
+ * a full sign-in outage, so — like the rate limiters above — the helpers fail
+ * open: no lock is seen and no failure is counted until Redis is back.
+ */
+async function failOpen<T>(operation: string, run: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    logger.warn({ err, operation }, 'Login lockout store unavailable — failing open');
+    return fallback;
+  }
+}
+
 export async function trackLoginFailure(email: string, ip: string): Promise<number> {
-  const { redis } = await import('../config/redis.js');
-  const key = failKey(email, ip);
-  const count = await redis.incr(key);
-  if (count === 1) await redis.expire(key, 30 * 60);
-  return count;
+  return failOpen(
+    'trackLoginFailure',
+    async () => {
+      const key = failKey(email, ip);
+      const count = await redisApp.incr(key);
+      if (count === 1) await redisApp.expire(key, 30 * 60);
+      return count;
+    },
+    0,
+  );
 }
 
 export async function clearLoginFailures(email: string, ip: string): Promise<void> {
-  const { redis } = await import('../config/redis.js');
-  await redis.del(failKey(email, ip));
+  await failOpen(
+    'clearLoginFailures',
+    async () => {
+      await redisApp.del(failKey(email, ip));
+    },
+    undefined,
+  );
 }
 
 export async function isAccountLocked(email: string, ip: string): Promise<boolean> {
-  const { redis } = await import('../config/redis.js');
-  return Boolean(await redis.get(lockKey(email, ip)));
+  return failOpen(
+    'isAccountLocked',
+    async () => Boolean(await redisApp.get(lockKey(email, ip))),
+    false,
+  );
 }
 
 export async function lockAccount(email: string, ip: string, minutes = 15): Promise<void> {
-  const { redis } = await import('../config/redis.js');
-  await redis.set(lockKey(email, ip), '1', 'EX', minutes * 60);
+  await failOpen(
+    'lockAccount',
+    async () => {
+      await redisApp.set(lockKey(email, ip), '1', 'EX', minutes * 60);
+    },
+    undefined,
+  );
 }
 
 export async function getLockTTL(email: string, ip: string): Promise<number> {
-  const { redis } = await import('../config/redis.js');
-  return redis.ttl(lockKey(email, ip));
+  return failOpen('getLockTTL', async () => redisApp.ttl(lockKey(email, ip)), 0);
 }

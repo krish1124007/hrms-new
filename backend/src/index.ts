@@ -12,12 +12,37 @@ import { logger } from './config/logger.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { redis, disconnectRedis } from './config/redis.js';
 
-import { createApp } from './app.js';
+import { createApp, docsEnabledByDefault } from './app.js';
 import { registerFieldTrackingNamespace } from './sockets/field-tracking.socket.js';
+
+const REDIS_BOOT_TIMEOUT_MS = 5_000;
+
+/** Resolves true once Redis answers a PING, false if it errors or takes too long. */
+async function redisReachable(timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  // Always settles to a boolean, so a late rejection can never surface as an
+  // unhandledRejection (which this process treats as fatal).
+  const ping = redis.ping().then(
+    () => true as const,
+    () => false as const,
+  );
+  try {
+    return await Promise.race([ping, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function bootstrap(): Promise<void> {
   await connectDatabase();
-  await redis.ping();
+  if (!(await redisReachable(REDIS_BOOT_TIMEOUT_MS))) {
+    logger.warn(
+      'Redis not reachable at boot — continuing; auth cache/rate limits will fail open',
+    );
+  }
 
   // Emit a warning log for any mongo op over 100ms. N+1s + missing indexes
   // surface as structured log entries so log-based alerting can flag them.
@@ -45,7 +70,9 @@ async function bootstrap(): Promise<void> {
 
   httpServer.listen(env.PORT, () => {
     logger.info(`API listening on http://localhost:${env.PORT}`);
-    logger.info(`Swagger UI: http://localhost:${env.PORT}/api/docs`);
+    if (docsEnabledByDefault()) {
+      logger.info(`Swagger UI: http://localhost:${env.PORT}/api/docs`);
+    }
   });
 
   const { startBackupWorker, setMonthlyBackupSchedule } = await import('./jobs/backup.jobs.js');

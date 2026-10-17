@@ -54,8 +54,13 @@ import '../config/database.js';
 
 vi.mock('../config/redis.js', async () => {
   const { default: RedisMock } = await import('ioredis-mock');
+  // The real module has two clients (BullMQ's `redis`, the fail-fast request
+  // path `redisApp`); in tests both are the SAME in-memory instance, so a
+  // value written through one is visible through the other.
+  const client = new RedisMock();
   return {
-    redis: new RedisMock(),
+    redis: client,
+    redisApp: client,
     disconnectRedis: vi.fn(async () => undefined),
   };
 });

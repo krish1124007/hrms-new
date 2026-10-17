@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
-import { redis } from '../config/redis.js';
+import { redisApp } from '../config/redis.js';
 import { logger } from '../config/logger.js';
 
 /**
@@ -46,7 +46,7 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
     const redisKey = `idem:${scope}:${key}`;
 
     try {
-      const cached = await redis.get(redisKey);
+      const cached = await redisApp.get(redisKey);
       if (cached) {
         const cachedObj = JSON.parse(cached) as { bodyHash: string; status: number; body: unknown };
         if (cachedObj.bodyHash !== bodyHash) {
@@ -78,7 +78,7 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
       const status = res.statusCode;
       // Only cache successful responses — 4xx/5xx should be retryable
       if (status >= 200 && status < 300) {
-        void redis.set(
+        void redisApp.set(
           redisKey,
           JSON.stringify({ bodyHash, status, body }),
           'EX',
