@@ -13,11 +13,16 @@
  * Cycles and records are written straight through the models where that is
  * the shortest way to a given state; everything under test goes over HTTP.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 import type { Express } from 'express';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { createApp } from '../app.js';
+import { logger } from '../config/logger.js';
+import { uploadRoot, deleteFile } from '../lib/local-storage.js';
+import { AuditLog } from '../models/audit-log.model.js';
 import { createUser, createEmployeeFor, type RoleSlug } from '../test/factories.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
 import { User, type IUser } from '../models/user.model.js';
@@ -584,5 +589,208 @@ describe('payslipLines (what the PDF prints)', () => {
 
     expect(earnings).toEqual(current.earnings);
     expect(deductions).toEqual(current.deductions);
+  });
+});
+
+/* ──────────────────────────────────────────────────────────── */
+/* Fix round 1                                                   */
+/* ──────────────────────────────────────────────────────────── */
+
+const MINUTE = 60 * 1000;
+const keyOf = (url: string): string => url.replace(/^\/uploads\//, '');
+
+/** Make a cycle look last touched `ms` ago (timestamps off, so the write keeps it). */
+async function age(c: IPayrollCycle, ms: number): Promise<void> {
+  await PayrollCycle.updateOne({ _id: c._id }, { $set: { updatedAt: new Date(Date.now() - ms) } }, { timestamps: false });
+}
+
+describe('cached payslips follow the record', () => {
+  it('an edit drops the generated payslip; the employee download regenerates it after lock', async () => {
+    const hr = await actor('hr_manager');
+    const me = await staff();
+    const c = await cycle('processed');
+    const id = String(c._id);
+    const r = await record(c, me.emp._id as Types.ObjectId);
+
+    expect((await request(app).post(`${API}/cycles/${id}/generate-payslips`).set(hr.auth)).status).toBe(200);
+    const generated = (await PayrollRecord.findById(r._id).lean())!.payslipUrl!;
+    const generatedPath = path.join(uploadRoot(), keyOf(generated));
+    expect(fs.existsSync(generatedPath)).toBe(true);
+
+    await request(app).patch(`${API}/cycles/${id}/records/${String(r._id)}`).set(hr.auth).send({ arrears: 500 }).expect(200);
+    const edited = (await PayrollRecord.findById(r._id).lean())!;
+    expect(edited.payslipUrl).toBeUndefined();
+    expect(fs.existsSync(generatedPath)).toBe(false);
+    expect(edited.grossSalary).toBe(30500);
+
+    await request(app).post(`${API}/cycles/${id}/lock`).set(hr.auth).expect(200);
+    const dl = await request(app).get(`${API}/records/${String(r._id)}/payslip`).set(me.auth);
+    expect(dl.status).toBe(200);
+    const regenerated = (await PayrollRecord.findById(r._id).lean())!.payslipUrl!;
+    expect(regenerated).toMatch(/^\/uploads\/payslips\//);
+    expect(regenerated).not.toBe(generated);
+    expect(fs.existsSync(path.join(uploadRoot(), keyOf(regenerated)))).toBe(true);
+
+    await deleteFile(keyOf(regenerated));
+  });
+
+  it.each(['draft', 'processing'] as const)('refuses to generate payslips for a %s cycle with 409', async (status) => {
+    const hr = await actor('hr_manager');
+    const c = await cycle(status);
+    const r = await record(c, otherEmployeeId());
+
+    const res = await request(app).post(`${API}/cycles/${String(c._id)}/generate-payslips`).set(hr.auth);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CYCLE_NOT_EDITABLE');
+    expect((await PayrollRecord.findById(r._id).lean())!.payslipUrl).toBeUndefined();
+  });
+});
+
+describe('a process run that fails part-way', () => {
+  it('after the old records are gone: back to draft, totals from the survivors, lock refused', async () => {
+    const hr = await actor('hr_manager');
+    const a = await staff();
+    const b = await staff();
+    a.emp.salary.basic = 30000;
+    b.emp.salary.basic = 20000;
+    await a.emp.save();
+    await b.emp.save();
+    const c = await cycle('processed');
+    await record(c, a.emp._id as Types.ObjectId, { manualAdjustments: { arrears: 500 } as IPayrollRecord['manualAdjustments'] });
+    await record(c, b.emp._id as Types.ObjectId, { manualAdjustments: { arrears: 700 } as IPayrollRecord['manualAdjustments'] });
+
+    const realSave = PayrollRecord.prototype.save;
+    let saves = 0;
+    const saveSpy = vi.spyOn(PayrollRecord.prototype, 'save').mockImplementation(function (this: IPayrollRecord, ...args) {
+      saves += 1;
+      if (saves === 2) return Promise.reject(new Error('disk full'));
+      return realSave.apply(this, args as Parameters<typeof realSave>);
+    });
+    const warn = vi.spyOn(logger, 'warn');
+
+    const res = await request(app).post(`${API}/cycles/${String(c._id)}/process`).set(hr.auth);
+    saveSpy.mockRestore();
+
+    expect(res.status).toBe(500);
+    const after = (await PayrollCycle.findById(c._id).lean())!;
+    expect(after.status).toBe('draft');
+    const survivors = await PayrollRecord.find({ cycleId: c._id }).lean();
+    expect(survivors.map((r) => String(r.employeeId))).toEqual([String(a.emp._id)]);
+    expect(survivors[0]!.arrears).toBe(500);
+    expect(after.totalGross).toBe(survivors[0]!.grossSalary);
+    expect(after.totalNet).toBe(survivors[0]!.netSalary);
+    expect(after.employeeCount).toBe(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ lostOverrides: [String(b.emp._id)] }),
+      expect.any(String),
+    );
+
+    const lock = await request(app).post(`${API}/cycles/${String(c._id)}/lock`).set(hr.auth);
+    expect(lock.status).toBe(409);
+    expect(lock.body.error.code).toBe('CYCLE_NOT_EDITABLE');
+
+    // A clean re-run from draft rebuilds everyone; the surviving override stays.
+    await request(app).post(`${API}/cycles/${String(c._id)}/process`).set(hr.auth).expect(200);
+    expect((await PayrollRecord.findOne({ cycleId: c._id, employeeId: a.emp._id }).lean())!.arrears).toBe(500);
+    expect(await PayrollRecord.countDocuments({ cycleId: c._id })).toBe(2);
+  });
+});
+
+describe('a cycle stuck in processing', () => {
+  it('can be processed again once untouched for over 10 minutes (a crashed run)', async () => {
+    const hr = await actor('hr_manager');
+    const c = await cycle('processing');
+    await age(c, 11 * MINUTE);
+
+    const res = await request(app).post(`${API}/cycles/${String(c._id)}/process`).set(hr.auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('processed');
+  });
+
+  it('is still refused while the run is recent', async () => {
+    const hr = await actor('hr_manager');
+    const c = await cycle('processing');
+    await age(c, 1 * MINUTE);
+
+    const res = await request(app).post(`${API}/cycles/${String(c._id)}/process`).set(hr.auth);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CYCLE_NOT_EDITABLE');
+    expect((await PayrollCycle.findById(c._id).lean())!.status).toBe('processing');
+  });
+});
+
+describe('overrides of employees no longer in the run', () => {
+  it('counts only re-applied overrides and logs the dropped ones', async () => {
+    const hr = await actor('hr_manager');
+    const active = await staff();
+    const gone = await staff();
+    gone.emp.status = 'resigned';
+    await gone.emp.save();
+    const c = await cycle('processed');
+    await record(c, active.emp._id as Types.ObjectId, { manualAdjustments: { arrears: 100 } as IPayrollRecord['manualAdjustments'] });
+    await record(c, gone.emp._id as Types.ObjectId, { manualAdjustments: { advance: 200 } as IPayrollRecord['manualAdjustments'] });
+    const warn = vi.spyOn(logger, 'warn');
+
+    await request(app).post(`${API}/cycles/${String(c._id)}/process`).set(hr.auth).expect(200);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ droppedOverrides: [String(gone.emp._id)] }),
+      expect.any(String),
+    );
+    await vi.waitFor(async () => {
+      const entry = await AuditLog.findOne({ entity: 'PayrollCycle', entityId: String(c._id) }).lean();
+      expect(entry?.changes?.after).toMatchObject({ status: 'processed', carriedOverrides: 1 });
+    });
+  });
+});
+
+describe('an edit that races a lock', () => {
+  it('is reverted with 409 when the cycle stopped being editable during the save', async () => {
+    const hr = await actor('hr_manager');
+    const c = await cycle('processed');
+    const r = await record(c, otherEmployeeId(), { payslipUrl: '/uploads/payslips/x/race.pdf' });
+
+    const realSave = PayrollRecord.prototype.save;
+    vi.spyOn(PayrollRecord.prototype, 'save').mockImplementation(async function (this: IPayrollRecord, ...args) {
+      const saved = await realSave.apply(this, args as Parameters<typeof realSave>);
+      await PayrollCycle.updateOne({ _id: c._id }, { $set: { status: 'locked' } });
+      return saved;
+    });
+
+    const res = await request(app)
+      .patch(`${API}/cycles/${String(c._id)}/records/${String(r._id)}`)
+      .set(hr.auth)
+      .send({ arrears: 500 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CYCLE_NOT_EDITABLE');
+    const after = (await PayrollRecord.findById(r._id).lean())!;
+    expect(after.manualAdjustments.arrears).toBeNull();
+    expect(after.arrears).toBe(0);
+    expect(after.earnings.map((l) => l.name)).toEqual(['Basic']);
+    expect(after).toMatchObject({ grossSalary: 30000, totalDeductions: 1800, netSalary: 28200 });
+    expect(after.payslipUrl).toBe('/uploads/payslips/x/race.pdf');
+    expect((await PayrollCycle.findById(c._id).lean())!.totalNet).toBe(28200);
+  });
+});
+
+describe('stored overrides', () => {
+  it('are rounded like the field they set', async () => {
+    const hr = await actor('hr_manager');
+    const c = await cycle('processed');
+    const r = await record(c, otherEmployeeId());
+
+    await request(app)
+      .patch(`${API}/cycles/${String(c._id)}/records/${String(r._id)}`)
+      .set(hr.auth)
+      .send({ arrears: 100.456 })
+      .expect(200);
+
+    const after = (await PayrollRecord.findById(r._id).lean())!;
+    expect(after.arrears).toBe(100.46);
+    expect(after.manualAdjustments.arrears).toBe(100.46);
   });
 });

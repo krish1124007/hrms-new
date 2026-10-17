@@ -57,7 +57,7 @@ function idOf(value: unknown): string | null {
 }
 
 /** True when `ownerEmployeeId` is the caller's own employee record. */
-async function isOwnRecord(req: Request, ownerEmployeeId: unknown): Promise<boolean> {
+export async function isOwnRecord(req: Request, ownerEmployeeId: unknown): Promise<boolean> {
   const owner = idOf(ownerEmployeeId);
   if (!owner) return false;
   const own = await currentEmployeeId(req);

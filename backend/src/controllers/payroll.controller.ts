@@ -15,19 +15,22 @@ import {
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import type { IPayrollManualAdjustments, PayrollStatutoryType } from '../models/payroll-record.model.js';
 import type { PayrollCycleStatus } from '../models/payroll-cycle.model.js';
-import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
-import { assertOwnOrPermission, hasPermission } from '../lib/access.js';
+import { hasPermission, isOwnRecord } from '../lib/access.js';
 import {
   ADJUSTABLE_FIELDS,
   EMPLOYEE_VISIBLE_STATUSES,
   applyManualAdjustments,
   assertTransition,
   claimTransition,
+  cycleNotEditable,
   hasManualAdjustments,
+  isTransitionAllowed,
   recomputeCycleTotals,
   setManualAdjustment,
+  touchProcessing,
 } from '../lib/payroll-cycle.js';
 import { settleCycle } from '../services/payroll-settlement.service.js';
 import {
@@ -519,18 +522,40 @@ async function computeForEmployee(
   };
 }
 
+/** The acting user as an ObjectId, when the request has one. */
+function actingUserId(): Types.ObjectId | undefined {
+  const userId = getUserId();
+  return userId ? new Types.ObjectId(userId) : undefined;
+}
+
+/** Keep a run's `processing` claim fresh at most this often (see STALE_PROCESSING_MS). */
+const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+
 /**
- * (Re)builds every record of a draft or processed cycle. HR overrides
- * (`manualAdjustments`) on the records being replaced are carried over by
- * employee and re-applied to the fresh figures.
+ * (Re)builds every record of a draft or processed cycle (or of one left in
+ * `processing` by a crashed run). HR overrides (`manualAdjustments`) on the
+ * records being replaced are carried over by employee and re-applied to the
+ * fresh figures.
+ *
+ * Failure handling (no transactions): before the old records are deleted a
+ * failure puts the cycle back where it was. After, the cycle drops to
+ * `draft` — it can be re-processed but not locked — with totals from the
+ * records that were saved; overrides of the employees not yet saved are
+ * lost and logged.
  */
 export async function processCycle(req: Request, res: Response): Promise<void> {
   const found = await PayrollCycle.findById(String(req.params.id)).exec();
   if (!found) throw new NotFoundError('Cycle not found');
-  const previousStatus = found.status;
+  // A crashed run's records are in an unknown state: never go back to it.
+  const restoreTo: PayrollCycleStatus = found.status === 'processing' ? 'draft' : found.status;
   // While `processing`, edits, lock and a second run are all refused (409).
   const cycle = await claimTransition(found, 'process', { status: 'processing' });
   const cycleId = cycle._id as Types.ObjectId;
+
+  let oldRecordsDeleted = false;
+  /** Employees whose carried override is on a rebuilt record / whose record is saved. */
+  const carried = new Set<string>();
+  const saved = new Set<string>();
 
   try {
     const previous = await PayrollRecord.find({ cycleId })
@@ -546,13 +571,16 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
     // here leaves them (and their overrides) exactly as they were.
     const employees = await Employee.find({ status: 'active' }).exec();
     const rebuilt: IPayrollRecord[] = [];
+    let lastBeat = Date.now();
     for (const emp of employees) {
       const computed = await computeForEmployee(emp, cycle);
+      const carry = overrides.get(String(emp._id));
+      if (carry) carried.add(String(emp._id));
       const record = new PayrollRecord({
         cycleId,
         employeeId: emp._id,
         ...computed,
-        manualAdjustments: overrides.get(String(emp._id)) ?? {},
+        manualAdjustments: carry ?? {},
         bankDetails: {
           bankName: emp.bankDetails?.bankName,
           accountNumber: emp.bankDetails?.accountNumber,
@@ -561,22 +589,32 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
         paymentStatus: 'pending',
       });
       rebuilt.push(applyManualAdjustments(record));
+      if (Date.now() - lastBeat > PROCESSING_HEARTBEAT_MS) {
+        await touchProcessing(cycleId);
+        lastBeat = Date.now();
+      }
+    }
+
+    const dropped = [...overrides.keys()].filter((id) => !carried.has(id));
+    if (dropped.length) {
+      logger.warn(
+        { cycleId: String(cycleId), droppedOverrides: dropped },
+        'payroll: overrides of employees no longer active were not carried over',
+      );
     }
 
     await PayrollRecord.deleteMany({ cycleId });
-    for (const record of rebuilt) await record.save();
+    oldRecordsDeleted = true;
+    for (const record of rebuilt) {
+      await record.save();
+      saved.add(String(record.employeeId));
+    }
     await recomputeCycleTotals(cycleId);
 
-    const userId = getUserId();
+    const by = actingUserId();
     const processed = await PayrollCycle.findOneAndUpdate(
       { _id: cycleId, status: 'processing' },
-      {
-        $set: {
-          status: 'processed',
-          processedAt: new Date(),
-          ...(userId ? { processedBy: new Types.ObjectId(userId) } : {}),
-        },
-      },
+      { $set: { status: 'processed', processedAt: new Date(), ...(by ? { processedBy: by } : {}) } },
       { new: true },
     ).exec();
     if (!processed) throw new NotFoundError('Cycle not found');
@@ -585,17 +623,39 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
       action: 'update',
       entity: 'PayrollCycle',
       entityId: String(cycleId),
-      after: { status: 'processed', carriedOverrides: overrides.size },
+      after: { status: 'processed', carriedOverrides: carried.size },
     });
     res.json({ success: true, data: processed });
   } catch (err) {
-    // Never leave the cycle stuck in `processing` (which refuses every action).
-    await PayrollCycle.updateOne({ _id: cycleId, status: 'processing' }, { $set: { status: previousStatus } })
-      .exec()
-      .catch((restoreErr: unknown) =>
-        logger.error({ err: restoreErr, cycleId: String(cycleId) }, 'payroll: could not reset a failed run'),
-      );
+    await recoverFailedRun(cycleId, oldRecordsDeleted ? 'draft' : restoreTo, oldRecordsDeleted, carried, saved);
     throw err;
+  }
+}
+
+/**
+ * Never leave a failed run's cycle in `processing` (which refuses every
+ * action). Best effort: a failure here is logged, the run's own error wins.
+ */
+async function recoverFailedRun(
+  cycleId: Types.ObjectId,
+  status: PayrollCycleStatus,
+  oldRecordsDeleted: boolean,
+  carried: Set<string>,
+  saved: Set<string>,
+): Promise<void> {
+  try {
+    await PayrollCycle.updateOne({ _id: cycleId, status: 'processing' }, { $set: { status } }).exec();
+    if (!oldRecordsDeleted) return;
+    await recomputeCycleTotals(cycleId);
+    const lost = [...carried].filter((id) => !saved.has(id));
+    if (lost.length) {
+      logger.warn(
+        { cycleId: String(cycleId), lostOverrides: lost },
+        'payroll: run failed after replacing records; these overrides were lost',
+      );
+    }
+  } catch (restoreErr) {
+    logger.error({ err: restoreErr, cycleId: String(cycleId) }, 'payroll: could not reset a failed run');
   }
 }
 
@@ -640,16 +700,52 @@ function adjustmentsSnapshot(manual: IPayrollManualAdjustments): Record<string, 
   return out;
 }
 
+/** Everything an edit can change on a record — what a reverted edit puts back. */
+const EDITED_PATHS = [
+  'earnings',
+  'deductions',
+  ...ADJUSTABLE_FIELDS,
+  'grossSalary',
+  'totalDeductions',
+  'netSalary',
+  'manualAdjustments',
+  'payslipUrl',
+] as const;
+
+/** Writes `original`'s values of EDITED_PATHS back onto the stored record. */
+async function restoreRecord(recordId: unknown, original: Record<string, unknown>): Promise<void> {
+  const $set: Record<string, unknown> = {};
+  const $unset: Record<string, 1> = {};
+  for (const p of EDITED_PATHS) {
+    if (original[p] === undefined) $unset[p] = 1;
+    else $set[p] = original[p];
+  }
+  await PayrollRecord.updateOne(
+    { _id: recordId },
+    Object.keys($unset).length ? { $set, $unset } : { $set },
+  ).exec();
+}
+
+/** Deletes a stored payslip file. Best effort: logged, never thrown. */
+async function discardPayslipFile(url: string | undefined): Promise<void> {
+  if (!url?.startsWith('/uploads/')) return;
+  await deleteFile(url.slice('/uploads/'.length)).catch((err: unknown) =>
+    logger.warn({ err, url }, 'payroll: could not delete superseded payslip'),
+  );
+}
+
 export async function updateRecord(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateRecordSchema>;
   const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
   if (!cycle) throw new NotFoundError('Cycle not found');
+  const cycleId = cycle._id as Types.ObjectId;
   const record = await PayrollRecord.findById(String(req.params.recordId)).exec();
-  if (!record || !record.cycleId.equals(cycle._id as Types.ObjectId)) {
+  if (!record || !record.cycleId.equals(cycleId)) {
     throw new NotFoundError('Record not found');
   }
   assertTransition(cycle, 'edit');
 
+  const original = record.toObject() as unknown as Record<string, unknown>;
   const before = adjustmentsSnapshot(record.manualAdjustments);
   for (const field of ADJUSTABLE_FIELDS) {
     const value = body[field];
@@ -657,8 +753,23 @@ export async function updateRecord(req: Request, res: Response): Promise<void> {
   }
   if (body.note !== undefined) record.manualAdjustments.note = body.note || undefined;
   applyManualAdjustments(record);
+  // A generated payslip shows the old figures: drop it. The next download
+  // (or generate-payslips run) renders it again from the edited record.
+  const stalePayslip = record.payslipUrl;
+  record.payslipUrl = undefined;
   await record.save();
-  await recomputeCycleTotals(cycle._id as Types.ObjectId);
+
+  // The status was checked before the save; if the cycle was locked (or
+  // claimed by a process run) meanwhile, put the record back and refuse.
+  const current = await PayrollCycle.findById(cycleId).select('status updatedAt').lean().exec();
+  if (!current || !isTransitionAllowed(current, 'edit')) {
+    await restoreRecord(record._id, original);
+    await recomputeCycleTotals(cycleId);
+    if (!current) throw new NotFoundError('Cycle not found');
+    throw cycleNotEditable(current.status, 'edit');
+  }
+  await recomputeCycleTotals(cycleId);
+  await discardPayslipFile(stalePayslip);
 
   void audit({
     action: 'update',
@@ -700,9 +811,7 @@ async function ytdForEmployee(
 export async function generatePayslips(req: Request, res: Response): Promise<void> {
   const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
   if (!cycle) throw new NotFoundError('Cycle not found');
-  if (cycle.status === 'draft') {
-    throw new ValidationAppError('Cycle must be processed first');
-  }
+  assertTransition(cycle, 'generatePayslips');
 
   const company = {
     name: process.env.COMPANY_NAME || 'Company',
@@ -736,11 +845,7 @@ export async function generatePayslips(req: Request, res: Response): Promise<voi
       await record.save();
       generated += 1;
       // Each generation writes a new random key; drop the file it supersedes.
-      if (previousUrl?.startsWith('/uploads/') && previousUrl !== url) {
-        await deleteFile(previousUrl.slice('/uploads/'.length)).catch((err) =>
-          logger.warn({ err, previousUrl }, 'payroll: could not delete superseded payslip'),
-        );
-      }
+      if (previousUrl !== url) await discardPayslipFile(previousUrl);
     } catch (err) {
       // Continue on individual failure — don't break the batch
       // eslint-disable-next-line no-console
@@ -757,12 +862,6 @@ export async function generatePayslips(req: Request, res: Response): Promise<voi
 /* ──────────────────────────────────────────────────────────── */
 /* Lock / Mark paid                                              */
 /* ──────────────────────────────────────────────────────────── */
-
-/** The acting user as an ObjectId, when the request has one. */
-function actingUserId(): Types.ObjectId | undefined {
-  const userId = getUserId();
-  return userId ? new Types.ObjectId(userId) : undefined;
-}
 
 /** processed → locked. From here the figures are final and employees can see them. */
 export async function lockCycle(req: Request, res: Response): Promise<void> {
@@ -839,7 +938,9 @@ async function assertPayslipAccess(
   cycleStatus: PayrollCycleStatus | undefined,
 ): Promise<void> {
   if (hasPermission(req.user, PAYROLL_PRIVILEGE)) return;
-  await assertOwnOrPermission(req, ownerEmployeeId, PAYROLL_PRIVILEGE);
+  if (!(await isOwnRecord(req, ownerEmployeeId))) {
+    throw new ForbiddenError('You can only access your own records');
+  }
   if (!cycleStatus || !EMPLOYEE_VISIBLE_STATUSES.includes(cycleStatus)) {
     throw new NotFoundError('Record not found');
   }
@@ -851,9 +952,11 @@ export async function downloadPayslip(req: Request, res: Response): Promise<void
   const cycle = await PayrollCycle.findById(record.cycleId).exec();
   await assertPayslipAccess(req, record.employeeId, cycle?.status);
 
-  // Generate on demand if not already cached on the record.
+  // Generate on demand if not already cached on the record (an edit drops
+  // the cached one), under the same rule as generate-payslips.
   if (!record.payslipUrl) {
     if (!cycle) throw new NotFoundError('Cycle not found');
+    assertTransition(cycle, 'generatePayslips');
 
     const employee = await Employee.findById(record.employeeId)
       .populate('department', 'name code')

@@ -8,7 +8,10 @@
  * - `assertTransition` / `claimTransition`: which actions each status allows
  *   (409 `CYCLE_NOT_EDITABLE` otherwise). `claimTransition` also moves the
  *   cycle with a compare-and-set on its status, so two concurrent requests
- *   cannot both pass the check (no transactions on standalone Mongo).
+ *   cannot both pass the check (no transactions on standalone Mongo). A
+ *   cycle left in `processing` by a crashed run may be processed again once
+ *   it has been untouched for `STALE_PROCESSING_MS`; a live run keeps it
+ *   fresh with `touchProcessing`.
  * - `applyManualAdjustments`: HR overrides sit in `record.manualAdjustments`
  *   on top of the computed figures. Applying them writes each override into
  *   its field, rebuilds the lines those fields show as, and recomputes the
@@ -35,7 +38,7 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 /* State machine                                                 */
 /* ──────────────────────────────────────────────────────────── */
 
-export type CycleAction = 'process' | 'edit' | 'lock' | 'markPaid';
+export type CycleAction = 'process' | 'edit' | 'lock' | 'markPaid' | 'generatePayslips';
 
 /** The statuses each action may start from. */
 export const CYCLE_ACTION_FROM: Readonly<Record<CycleAction, readonly PayrollCycleStatus[]>> = {
@@ -43,7 +46,29 @@ export const CYCLE_ACTION_FROM: Readonly<Record<CycleAction, readonly PayrollCyc
   edit: ['draft', 'processed'],
   lock: ['processed'],
   markPaid: ['locked'],
+  // Never while `processing`: the records are being replaced.
+  generatePayslips: ['processed', 'locked', 'paid'],
 };
+
+/**
+ * A `processing` cycle untouched this long is taken to be a crashed run and
+ * may be processed again. A live run refreshes `updatedAt` (`touchProcessing`)
+ * well inside this window.
+ */
+export const STALE_PROCESSING_MS = 10 * 60 * 1000;
+
+type CycleState = Pick<IPayrollCycle, 'status'> & Partial<Pick<IPayrollCycle, 'updatedAt'>>;
+
+/** True when `action` may start from the cycle's current state. */
+export function isTransitionAllowed(cycle: CycleState, action: CycleAction, now = Date.now()): boolean {
+  if (CYCLE_ACTION_FROM[action].includes(cycle.status)) return true;
+  return (
+    action === 'process' &&
+    cycle.status === 'processing' &&
+    !!cycle.updatedAt &&
+    now - cycle.updatedAt.getTime() > STALE_PROCESSING_MS
+  );
+}
 
 /**
  * Cycles whose payslips employees may see. Before lock the figures can still
@@ -56,9 +81,11 @@ const ACTION_PAST: Record<CycleAction, string> = {
   edit: 'edited',
   lock: 'locked',
   markPaid: 'marked paid',
+  generatePayslips: 'given payslips',
 };
 
-function cycleNotEditable(status: PayrollCycleStatus, action: CycleAction): AppError {
+/** The 409 `CYCLE_NOT_EDITABLE` error for `action` on a cycle in `status`. */
+export function cycleNotEditable(status: PayrollCycleStatus, action: CycleAction): AppError {
   return new AppError(
     `A ${status} payroll cycle cannot be ${ACTION_PAST[action]}`,
     409,
@@ -66,11 +93,9 @@ function cycleNotEditable(status: PayrollCycleStatus, action: CycleAction): AppE
   );
 }
 
-/** 409 `CYCLE_NOT_EDITABLE` unless `action` is allowed from the cycle's status. */
-export function assertTransition(cycle: Pick<IPayrollCycle, 'status'>, action: CycleAction): void {
-  if (!CYCLE_ACTION_FROM[action].includes(cycle.status)) {
-    throw cycleNotEditable(cycle.status, action);
-  }
+/** 409 `CYCLE_NOT_EDITABLE` unless `action` is allowed from the cycle's state. */
+export function assertTransition(cycle: CycleState, action: CycleAction): void {
+  if (!isTransitionAllowed(cycle, action)) throw cycleNotEditable(cycle.status, action);
 }
 
 /**
@@ -80,13 +105,18 @@ export function assertTransition(cycle: Pick<IPayrollCycle, 'status'>, action: C
  * updated cycle.
  */
 export async function claimTransition(
-  cycle: Pick<IPayrollCycle, '_id' | 'status'>,
+  cycle: CycleState & Pick<IPayrollCycle, '_id'>,
   action: CycleAction,
   set: Record<string, unknown>,
 ): Promise<IPayrollCycle> {
   assertTransition(cycle, action);
+  const allowed: Array<Record<string, unknown>> = [{ status: { $in: CYCLE_ACTION_FROM[action] } }];
+  if (action === 'process') {
+    allowed.push({ status: 'processing', updatedAt: { $lt: new Date(Date.now() - STALE_PROCESSING_MS) } });
+  }
+  // The update refreshes `updatedAt` (timestamps), so a taken-over run is fresh again.
   const updated = await PayrollCycle.findOneAndUpdate(
-    { _id: cycle._id, status: { $in: CYCLE_ACTION_FROM[action] } },
+    { _id: cycle._id, $or: allowed },
     { $set: set },
     { new: true },
   ).exec();
@@ -95,6 +125,11 @@ export async function claimTransition(
     throw cycleNotEditable(now?.status ?? cycle.status, action);
   }
   return updated;
+}
+
+/** Marks a run as alive: refreshes `updatedAt` while the cycle is still `processing`. */
+export async function touchProcessing(cycleId: Types.ObjectId): Promise<void> {
+  await PayrollCycle.updateOne({ _id: cycleId, status: 'processing' }, { $set: { status: 'processing' } }).exec();
 }
 
 /* ──────────────────────────────────────────────────────────── */
@@ -261,7 +296,8 @@ export function setManualAdjustment(
   field: AdjustableField,
   value: number | null,
 ): void {
-  record.manualAdjustments[field] = value;
+  // Stored exactly as applied, so the override always equals the field.
+  record.manualAdjustments[field] = value === null ? null : round2(value);
   if (value === null) {
     record[field] = 0;
     if (field === 'tds') record.deductions = record.deductions.filter((l) => !isTdsLine(l));
