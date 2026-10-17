@@ -67,7 +67,8 @@ export async function getCachedSessionVersion(userId: string): Promise<number | 
   try {
     const val = await redisApp.get(`jwt:sv:${userId}`);
     return val ? parseInt(val, 10) : null;
-  } catch {
+  } catch (err) {
+    logger.warn({ err, userId }, 'Session-version cache read failed — fail open');
     return null;
   }
 }

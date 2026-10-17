@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import { redisApp } from '../config/redis.js';
+import { logger } from '../config/logger.js';
 import { isTokenRevoked, getCachedSessionVersion, revokeToken } from './token-blacklist.js';
 import { cached } from './cache.js';
 import { authRateLimit } from '../middleware/rate-limit.middleware.js';
@@ -35,6 +36,23 @@ describe('request-path Redis users fail open when Redis rejects', () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith();
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('logs a warning instead of swallowing the error silently', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const failure = down();
+    vi.spyOn(redisApp, 'get').mockRejectedValue(failure);
+    vi.spyOn(redisApp, 'incr').mockRejectedValue(failure);
+
+    await expect(getCachedSessionVersion('user-1')).resolves.toBeNull();
+    await authRateLimit(
+      { ip: '198.51.100.21' } as unknown as Request,
+      { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() } as unknown as Response,
+      vi.fn() as unknown as NextFunction,
+    );
+
+    const logged = warn.mock.calls.map(([payload]) => payload as { err?: unknown });
+    expect(logged.filter((entry) => entry.err === failure)).toHaveLength(2);
   });
 
   it('cache helper: falls back to the fetcher', async () => {

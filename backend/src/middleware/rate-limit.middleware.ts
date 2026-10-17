@@ -45,8 +45,8 @@ function buildLimiter(opts: RateLimitOptions) {
       next();
     } catch (err) {
       // If Redis is down, fail open rather than blocking traffic.
+      logger.warn({ err, keyPrefix: opts.keyPrefix }, 'Rate limiter store unavailable — failing open');
       next();
-      void err;
     }
   };
 }

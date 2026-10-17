@@ -75,27 +75,6 @@ async function bootstrap(): Promise<void> {
     }
   });
 
-  const { startBackupWorker, setMonthlyBackupSchedule } = await import('./jobs/backup.jobs.js');
-  startBackupWorker();
-  logger.info('Backup worker started');
-
-  // Re-apply the operator's monthly auto-backup choice, persisted by
-  // PUT /api/v1/backups/schedule { enabled } (enabled on a fresh install).
-  // Idempotent — re-registering overwrites the repeatable job in Redis.
-  try {
-    const { getSetting } = await import('./models/system-setting.model.js');
-    const { MONTHLY_BACKUP_SETTING } = await import('./lib/backups.js');
-    const enabled = (await getSetting<unknown>(MONTHLY_BACKUP_SETTING, true)) !== false;
-    await setMonthlyBackupSchedule(enabled);
-    logger.info(
-      enabled
-        ? 'Monthly auto-backup schedule registered (last day of every month, 23:50)'
-        : 'Monthly auto-backup schedule left disabled (operator setting)',
-    );
-  } catch (err) {
-    logger.warn({ err }, 'Failed to apply the monthly backup schedule');
-  }
-
   // ─── Graceful shutdown ───
   // Drain in-flight requests, then disconnect resources.
   // Deploys / autoscalers send SIGTERM; we have ~30s before SIGKILL.
@@ -148,6 +127,32 @@ async function bootstrap(): Promise<void> {
   });
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // ─── Redis-dependent background setup ───
+  // Everything below talks to BullMQ's `redis` client, whose commands wait
+  // forever while Redis is down. None of it may delay the process handlers
+  // registered above, and the schedule step must not be awaited by bootstrap.
+  const { startBackupWorker, setMonthlyBackupSchedule } = await import('./jobs/backup.jobs.js');
+  startBackupWorker();
+  logger.info('Backup worker started');
+
+  // Re-apply the operator's monthly auto-backup choice, persisted by
+  // PUT /api/v1/backups/schedule { enabled } (enabled on a fresh install).
+  // Idempotent — re-registering overwrites the repeatable job in Redis.
+  const applyMonthlySchedule = async (): Promise<void> => {
+    const { getSetting } = await import('./models/system-setting.model.js');
+    const { MONTHLY_BACKUP_SETTING } = await import('./lib/backups.js');
+    const enabled = (await getSetting<unknown>(MONTHLY_BACKUP_SETTING, true)) !== false;
+    await setMonthlyBackupSchedule(enabled);
+    logger.info(
+      enabled
+        ? 'Monthly auto-backup schedule registered (last day of every month, 23:50)'
+        : 'Monthly auto-backup schedule left disabled (operator setting)',
+    );
+  };
+  void applyMonthlySchedule().catch((err) =>
+    logger.warn({ err }, 'Could not register monthly backup schedule'),
+  );
 }
 
 bootstrap().catch((err) => {

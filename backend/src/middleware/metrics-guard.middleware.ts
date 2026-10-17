@@ -10,18 +10,28 @@ function tokensMatch(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+function isLoopback(address: string | undefined): boolean {
+  return address !== undefined && LOOPBACK_IPS.has(address);
+}
+
 /**
- * Restricts the Prometheus scrape endpoint. A request is allowed when it comes
- * from the loopback interface (a local scraper / sidecar), or presents the
- * configured shared secret in `X-Metrics-Token`. Everything else gets 403.
+ * Restricts the Prometheus scrape endpoint. A request is allowed when
+ *   - BOTH `req.ip` AND `req.socket.remoteAddress` are loopback addresses
+ *     (127.0.0.1, ::1, ::ffff:127.0.0.1), or
+ *   - it presents the configured shared secret in `X-Metrics-Token`.
+ * Everything else gets 403.
  *
- * `req.ip` honours `trust proxy`, so behind nginx it is the forwarded client
- * address, not the proxy's — a public caller cannot pass as loopback unless the
- * proxy itself forwards a loopback address.
+ * `req.ip` alone is not enough: with `trust proxy` it follows
+ * `X-Forwarded-For`, so anyone who can reach the Node port directly could send
+ * `X-Forwarded-For: 127.0.0.1` and pass. Requiring the TCP peer
+ * (`req.socket.remoteAddress`) to be loopback as well means a spoofed header
+ * from a remote socket still falls through to the token check, while a local
+ * scraper or a same-host reverse proxy (whose forwarded client address is
+ * itself loopback) keeps working.
  */
 export function metricsGuard(metricsToken?: string): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (req.ip && LOOPBACK_IPS.has(req.ip)) return next();
+    if (isLoopback(req.ip) && isLoopback(req.socket.remoteAddress)) return next();
 
     const presented = req.get('x-metrics-token');
     if (metricsToken && presented && tokensMatch(presented, metricsToken)) return next();

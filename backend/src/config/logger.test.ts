@@ -46,6 +46,31 @@ describe('logger redaction', () => {
     expect(entry.req.headers.accept).toBe('*/*');
   });
 
+  it('redacts the metrics and CSRF tokens', () => {
+    const { log, lines } = memoryLogger();
+
+    log.info(
+      {
+        req: {
+          headers: {
+            'x-metrics-token': 'metrics-secret-value',
+            'x-csrf-token': 'csrf-secret-value',
+            'user-agent': 'vitest',
+          },
+        },
+      },
+      'request completed',
+    );
+
+    const output = lines.join('');
+    expect(output).not.toContain('metrics-secret-value');
+    expect(output).not.toContain('csrf-secret-value');
+    const entry = JSON.parse(lines[0] ?? '{}') as { req: { headers: Record<string, string> } };
+    expect(entry.req.headers['x-metrics-token']).toBe('[REDACTED]');
+    expect(entry.req.headers['x-csrf-token']).toBe('[REDACTED]');
+    expect(entry.req.headers['user-agent']).toBe('vitest');
+  });
+
   it('redacts Set-Cookie on responses', () => {
     const { log, lines } = memoryLogger();
 
@@ -68,13 +93,15 @@ describe('logger redaction', () => {
     await request(app)
       .get('/ping')
       .set('Authorization', 'Bearer eyJhbGciOi.secret-access-token.sig')
-      .set('Cookie', 'session=secret-session-cookie');
+      .set('Cookie', 'session=secret-session-cookie')
+      .set('X-Metrics-Token', 'secret-metrics-token-value');
 
     const output = lines.join('');
     expect(output).toContain('"url":"/ping"');
     expect(output).toContain('[REDACTED]');
     expect(output).not.toContain('secret-access-token');
     expect(output).not.toContain('secret-session-cookie');
+    expect(output).not.toContain('secret-metrics-token-value');
     expect(output).not.toContain('secret-refresh-value');
   });
 });

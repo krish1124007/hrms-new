@@ -1,7 +1,9 @@
 import request from 'supertest';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import type { Request, Response, NextFunction } from 'express';
 import { createApp } from '../app.js';
 import { env } from '../config/env.js';
+import { metricsGuard } from '../middleware/metrics-guard.middleware.js';
 
 const METRICS_TOKEN = 'secret-metrics-token-123';
 const PUBLIC_IP = '203.0.113.9';
@@ -70,6 +72,17 @@ describe('metrics gating', () => {
     expect(res.headers['content-type']).toMatch(/text\/plain/);
   });
 
+  it.each(['127.0.0.1', '::1', '::ffff:127.0.0.1'])(
+    'allows a forwarded loopback client (%s) arriving over the loopback socket',
+    async (forwarded) => {
+      const app = createApp({ metricsToken: METRICS_TOKEN });
+
+      const res = await request(app).get('/api/metrics').set('X-Forwarded-For', forwarded);
+
+      expect(res.status).toBe(200);
+    },
+  );
+
   it('allows loopback callers without a token', async () => {
     const app = createApp({ metricsToken: METRICS_TOKEN });
 
@@ -98,6 +111,57 @@ describe('metrics gating', () => {
     }
     const ready = await request(app).get('/api/readyz').set('X-Forwarded-For', PUBLIC_IP);
     expect([200, 503]).toContain(ready.status);
+  });
+});
+
+describe('metricsGuard socket check', () => {
+  // supertest always connects over loopback, so a request whose TCP peer is a
+  // remote address while X-Forwarded-For claims loopback can only be exercised
+  // by handing the middleware a hand-built request.
+  function run(opts: { ip?: string; remote?: string; token?: string }, configured?: string) {
+    const req = {
+      ip: opts.ip,
+      socket: { remoteAddress: opts.remote },
+      get: (name: string) => (name.toLowerCase() === 'x-metrics-token' ? opts.token : undefined),
+    } as unknown as Request;
+    const res = { status: vi.fn(), json: vi.fn() };
+    res.status.mockReturnValue(res);
+    const next = vi.fn();
+    metricsGuard(configured)(req, res as unknown as Response, next as unknown as NextFunction);
+    return { res, next };
+  }
+
+  it('lets a request through only when req.ip AND the socket peer are loopback', () => {
+    const { next, res } = run({ ip: '127.0.0.1', remote: '::ffff:127.0.0.1' }, METRICS_TOKEN);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects a spoofed X-Forwarded-For: 127.0.0.1 from a remote socket', () => {
+    const { next, res } = run({ ip: '127.0.0.1', remote: '203.0.113.9' }, METRICS_TOKEN);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('rejects a remote client forwarded by a local proxy when it has no token', () => {
+    const { next, res } = run({ ip: '203.0.113.9', remote: '127.0.0.1' }, METRICS_TOKEN);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('still honours the token when the loopback check fails', () => {
+    const spoofed = run({ ip: '127.0.0.1', remote: '203.0.113.9', token: METRICS_TOKEN }, METRICS_TOKEN);
+    expect(spoofed.next).toHaveBeenCalledTimes(1);
+
+    const wrong = run({ ip: '127.0.0.1', remote: '203.0.113.9', token: 'nope' }, METRICS_TOKEN);
+    expect(wrong.next).not.toHaveBeenCalled();
+    expect(wrong.res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('treats a missing socket address as non-loopback', () => {
+    const { next, res } = run({ ip: '127.0.0.1', remote: undefined }, METRICS_TOKEN);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });
 
