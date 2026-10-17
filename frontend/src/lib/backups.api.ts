@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { api } from './axios';
 
 interface ApiOk<T> {
@@ -36,19 +37,47 @@ export interface BackupDownload {
 }
 
 /**
- * `downloadUrl` is server-absolute (it starts with the API's own path, e.g.
- * `/api/v1/...`). Make it relative to the axios `baseURL` when it shares that
- * prefix, otherwise resolve it against the API origin, so the request never
- * doubles the `/api/v1` segment.
+ * Turn a server-supplied `downloadUrl` into something the axios instance can
+ * request. The instance attaches the Bearer token, so only a relative path or
+ * a URL on the API's own origin is followed — anything else throws before a
+ * request is made. A path under the `baseURL` path (e.g. `/api/v1/...`) is
+ * made relative to it so the `/api/v1` segment is not doubled.
  */
 function toApiRequestUrl(downloadUrl: string): string {
-  if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
   const base = new URL(api.defaults.baseURL ?? '/', window.location.origin);
-  const basePath = base.pathname.replace(/\/+$/, '');
-  if (basePath && downloadUrl.startsWith(`${basePath}/`)) {
-    return downloadUrl.slice(basePath.length);
+  const target = new URL(downloadUrl, base);
+  if (target.origin !== base.origin) {
+    throw new Error('Refusing to download a backup from another origin');
   }
-  return new URL(downloadUrl, base.origin).toString();
+  const basePath = base.pathname.replace(/\/+$/, '');
+  if (basePath && target.pathname.startsWith(`${basePath}/`)) {
+    return target.pathname.slice(basePath.length) + target.search;
+  }
+  return target.toString();
+}
+
+interface ErrorEnvelope {
+  error?: { message?: unknown };
+}
+
+/**
+ * With `responseType: 'blob'` an error body arrives as a Blob, so the global
+ * toast would only say "Request failed with status code 404". Read the JSON
+ * envelope out of it and rethrow with the server's message (or the status text).
+ */
+async function withReadableBlobError(err: unknown): Promise<never> {
+  if (!isAxiosError(err) || !(err.response?.data instanceof Blob)) throw err;
+  const fallback = err.response.statusText || err.message;
+  let message = fallback;
+  try {
+    const parsed = JSON.parse(await err.response.data.text()) as ErrorEnvelope;
+    if (typeof parsed.error?.message === 'string' && parsed.error.message) {
+      message = parsed.error.message;
+    }
+  } catch {
+    // Not the JSON envelope (e.g. a proxy's HTML page) — keep the fallback.
+  }
+  throw new Error(message, { cause: err });
 }
 
 /** `attachment; filename="x.tar.gz"` → `x.tar.gz` (null if absent or unreadable). */
@@ -94,9 +123,9 @@ export const backupsApi = {
   /** Fetch a backup archive with the caller's credentials. */
   download: async (backup: Pick<BackupRow, '_id' | 'downloadUrl'>): Promise<BackupDownload> => {
     if (!backup.downloadUrl) throw new Error('This backup has no downloadable file');
-    const res = await api.get<Blob>(toApiRequestUrl(backup.downloadUrl), {
-      responseType: 'blob',
-    });
+    const res = await api
+      .get<Blob>(toApiRequestUrl(backup.downloadUrl), { responseType: 'blob' })
+      .catch(withReadableBlobError);
     return {
       blob: res.data,
       filename:

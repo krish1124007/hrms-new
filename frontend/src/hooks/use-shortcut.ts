@@ -63,16 +63,33 @@ function eventSignature(e: KeyboardEvent): string {
   return parts.sort().join('+');
 }
 
+// One buffer shared by every registered shortcut. Each keydown must be
+// recorded once — not once per listener, or `g d` would see `g, d, d`.
 const sequenceBuffer: string[] = [];
 let lastKeyAt = 0;
+let lastRecorded: KeyboardEvent | null = null;
 const SEQUENCE_TIMEOUT_MS = 1200;
+
+function record(e: KeyboardEvent): void {
+  if (e === lastRecorded) return;
+  lastRecorded = e;
+  const now = Date.now();
+  if (now - lastKeyAt > SEQUENCE_TIMEOUT_MS) sequenceBuffer.length = 0;
+  sequenceBuffer.push(eventSignature(e));
+  lastKeyAt = now;
+  if (sequenceBuffer.length > 4) sequenceBuffer.shift();
+}
 
 export function useShortcut(
   combo: string,
   handler: (e: KeyboardEvent) => void,
-  options: { label?: string; group?: string } = {},
+  options: { label?: string; group?: string; enabled?: boolean } = {},
 ): void {
+  // `enabled: false` binds nothing and lists nothing — for shortcuts whose
+  // target the current user cannot open (hooks can't be called conditionally).
+  const enabled = options.enabled ?? true;
   useEffect(() => {
+    if (!enabled) return undefined;
     // Register in the help overlay
     const entry = {
       combo,
@@ -94,11 +111,7 @@ export function useShortcut(
       if (inEditableField && !usesMod) return;
 
       // Append to rolling buffer for multi-key sequences (`g d`)
-      const now = Date.now();
-      if (now - lastKeyAt > SEQUENCE_TIMEOUT_MS) sequenceBuffer.length = 0;
-      sequenceBuffer.push(eventSignature(e));
-      lastKeyAt = now;
-      if (sequenceBuffer.length > 4) sequenceBuffer.shift();
+      record(e);
 
       if (matches(sequenceBuffer, combo)) {
         e.preventDefault();
@@ -112,7 +125,7 @@ export function useShortcut(
       document.removeEventListener('keydown', onKey);
       _registry.delete(entry);
     };
-  }, [combo, handler, options.label, options.group]);
+  }, [combo, handler, options.label, options.group, enabled]);
 }
 
 /** Return a pretty version of the combo for display (⌘K vs Ctrl+K). */

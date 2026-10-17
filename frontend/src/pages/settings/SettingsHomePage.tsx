@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
+import { NAV_ACCESS } from '@/config/navigation';
+import { usePermissions } from '@/hooks/use-permissions';
 
 interface SettingGroup {
   title: string;
@@ -18,6 +20,8 @@ interface SettingGroup {
     description: string;
     href: string;
     icon: React.ComponentType<{ className?: string }>;
+    /** Same any-of list as the card's route guard; omitted = self-service, shown to all. */
+    anyOf?: string[];
   }[];
 }
 
@@ -31,12 +35,14 @@ const GROUPS: SettingGroup[] = [
         description: 'Define custom roles and assign granular permissions',
         href: '/settings/roles',
         icon: ShieldCheck,
+        anyOf: NAV_ACCESS.roles,
       },
       {
         title: 'Audit Logs',
         description: 'Review every change made across the workspace',
         href: '/settings/audit',
         icon: FileClock,
+        anyOf: NAV_ACCESS.audit,
       },
       {
         title: 'Privacy & Compliance',
@@ -55,12 +61,20 @@ const GROUPS: SettingGroup[] = [
         description: 'Download and schedule automated database backups',
         href: '/backups',
         icon: Database,
+        anyOf: NAV_ACCESS.backups,
       },
     ],
   },
 ];
 
 export default function SettingsHomePage(): ReactElement {
+  const { hasAny } = usePermissions();
+  // Only cards whose page the user can open; drop sections left empty.
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.anyOf || hasAny(item.anyOf)),
+  })).filter((group) => group.items.length > 0);
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -69,7 +83,7 @@ export default function SettingsHomePage(): ReactElement {
       />
 
       <div className="flex flex-col gap-8">
-        {GROUPS.map((group) => (
+        {groups.map((group) => (
           <section key={group.title} className="space-y-3">
             <div>
               <h2 className="text-lg font-semibold tracking-tight">{group.title}</h2>

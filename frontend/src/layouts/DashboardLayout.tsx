@@ -7,20 +7,33 @@ import { PageTransition } from '@/components/common/PageTransition';
 import { ShortcutHelp } from '@/components/common/ShortcutHelp';
 import { useShortcut } from '@/hooks/use-shortcut';
 import { useDirection } from '@/hooks/use-direction';
+import { usePermissions } from '@/hooks/use-permissions';
+import { NAV_ACCESS } from '@/config/navigation';
 import { useNavigate } from 'react-router-dom';
 
 export function DashboardLayout(): ReactElement {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { hasAny } = usePermissions();
   useDirection();
   const enabledModules: string[] | undefined = undefined;
 
   // Gmail-style two-key navigation shortcuts. These are the universe of
   // "jump to X" hotkeys; pages can register their own in-context ones.
+  // Each is bound only for users whose route guard (same NAV_ACCESS list)
+  // would let them in — otherwise it would just bounce them with a toast.
   useShortcut('g d', () => navigate('/dashboard'), { label: 'Go to dashboard', group: 'Navigation' });
-  useShortcut('g e', () => navigate('/employees'), { label: 'Go to employees', group: 'Navigation' });
-  useShortcut('g s', () => navigate('/settings'), { label: 'Go to settings', group: 'Navigation' });
+  useShortcut('g e', () => navigate('/employees'), {
+    label: 'Go to employees',
+    group: 'Navigation',
+    enabled: hasAny(NAV_ACCESS.employees),
+  });
+  useShortcut('g s', () => navigate('/settings'), {
+    label: 'Go to settings',
+    group: 'Navigation',
+    enabled: hasAny(NAV_ACCESS.settings),
+  });
 
   return (
     <div className="flex min-h-screen bg-background">

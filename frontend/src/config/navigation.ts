@@ -80,7 +80,8 @@ export const NAV_ACCESS = {
   attendanceView: ['attendance.view'],
   attendanceConfig: ['attendance.config'],
   leaveRequests: ['leaves.approve'],
-  leaveBalances: ['leaves.update'],
+  // Either may read balances on the API; seeded managers hold only leaves.approve.
+  leaveBalances: ['leaves.approve', 'leaves.update'],
   leaveTypes: ['leaves.update'],
   payrollAdmin: ['payroll.process', 'payroll.config'],
   expensesManage: ['expenses.approve'],
