@@ -7,6 +7,8 @@
 import { Notification, type NotificationType } from '../models/notification.model.js';
 import { logger } from '../config/logger.js';
 import { getIO } from '../sockets/io-registry.js';
+import { BUSINESS_TZ } from '../lib/business-day.js';
+import { appBaseUrl } from '../lib/app-url.js';
 
 /* ─────────────── Core ─────────────── */
 
@@ -58,20 +60,90 @@ export async function createNotification(params: CreateNotificationParams): Prom
 
 /* ─────────────── Trigger Helpers ─────────────── */
 
+const leaveDateFormat = new Intl.DateTimeFormat('en-IN', {
+  timeZone: BUSINESS_TZ,
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+
+/** "19 Oct 2026", or "23 Oct 2026 – 27 Oct 2026" for a range (business timezone). */
+export function formatLeaveDates(startDate: Date, endDate: Date): string {
+  const from = leaveDateFormat.format(startDate);
+  const to = leaveDateFormat.format(endDate);
+  return from === to ? from : `${from} – ${to}`;
+}
+
 export async function notifyLeaveRequest(
   managerId: string,
   employeeName: string,
   leaveType: string,
   dates: string,
+  metadata: Record<string, unknown> = {},
 ): Promise<void> {
   await createNotification({
     userId: managerId,
     type: 'leave_request',
     title: 'New Leave Request',
-    message: `${employeeName} has requested ${leaveType} leave for ${dates}.`,
+    message: `${employeeName} has applied for ${leaveType} (${dates}).`,
     link: '/leaves/requests',
-    metadata: { employeeName, leaveType, dates },
+    metadata: { employeeName, leaveType, dates, ...metadata },
   });
+}
+
+export interface LeaveDecision {
+  status: 'approved' | 'rejected';
+  leaveTypeName: string;
+  startDate: Date;
+  endDate: Date;
+  /** Where the employee sees their leave (`/leaves`). */
+  link: string;
+  /** The approver's reason, for a rejection. */
+  reason?: string;
+  leaveRequestId?: string;
+}
+
+function decisionSentence(d: LeaveDecision): string {
+  return `Your ${d.leaveTypeName} request for ${formatLeaveDates(d.startDate, d.endDate)} was ${d.status}.`;
+}
+
+/** Tell an employee their leave request was approved or rejected (in-app). */
+export async function notifyLeaveDecision(userId: string, d: LeaveDecision): Promise<void> {
+  await createNotification({
+    userId,
+    type: 'leave_request',
+    title: d.status === 'approved' ? 'Leave approved' : 'Leave rejected',
+    message: d.reason ? `${decisionSentence(d)} Reason: ${d.reason}` : decisionSentence(d),
+    link: d.link,
+    metadata: {
+      status: d.status,
+      leaveTypeName: d.leaveTypeName,
+      dates: formatLeaveDates(d.startDate, d.endDate),
+      ...(d.reason ? { reason: d.reason } : {}),
+      ...(d.leaveRequestId ? { leaveRequestId: d.leaveRequestId } : {}),
+    },
+  });
+}
+
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** The e-mail that goes with `notifyLeaveDecision`. */
+export function leaveDecisionEmail(
+  firstName: string,
+  d: LeaveDecision,
+): { subject: string; html: string; text: string } {
+  const sentence = decisionSentence(d);
+  const url = `${appBaseUrl()}${d.link}`;
+  const reasonText = d.reason ? `\nReason: ${d.reason}` : '';
+  return {
+    subject: `Your leave request was ${d.status}`,
+    html:
+      `<p>Hi ${escapeHtml(firstName)},</p><p>${escapeHtml(sentence)}</p>` +
+      (d.reason ? `<p>Reason: ${escapeHtml(d.reason)}</p>` : '') +
+      `<p><a href="${escapeHtml(url)}">View your leave</a></p>`,
+    text: `Hi ${firstName},\n\n${sentence}${reasonText}\n\nView your leave: ${url}`,
+  };
 }
 
 export async function notifyExpenseRequest(

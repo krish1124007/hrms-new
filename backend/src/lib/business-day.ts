@@ -99,3 +99,27 @@ export function atBusinessTime(dayLabel: Date, hhmm: string): Date {
   const guess = wall - businessOffsetMinutes(new Date(wall)) * 60_000;
   return new Date(wall - businessOffsetMinutes(new Date(guess)) * 60_000);
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A Date whose *server-local* calendar date is the label's date (local noon),
+ * for `classifyDay` / `listHolidaysBetween`, which read local `getDay()` and
+ * `getDate()`. Noon keeps it on the right date whatever the server timezone.
+ */
+export function localDateOf(dayLabel: Date): Date {
+  return new Date(dayLabel.getUTCFullYear(), dayLabel.getUTCMonth(), dayLabel.getUTCDate(), 12);
+}
+
+/**
+ * The day label of every business day from the one `start` falls on through
+ * the one `end` falls on, inclusive (empty when `end` is on an earlier day).
+ * Date-only values stored at UTC midnight and at IST midnight both resolve to
+ * the calendar day they name.
+ */
+export function businessDayLabels(start: Date, end: Date): Date[] {
+  const last = startOfBusinessDay(end).getTime();
+  const labels: Date[] = [];
+  for (let t = startOfBusinessDay(start).getTime(); t <= last; t += DAY_MS) labels.push(new Date(t));
+  return labels;
+}

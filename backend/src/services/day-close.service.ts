@@ -39,10 +39,11 @@ import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
 import type { IShift } from '../models/shift.model.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
-import { atBusinessTime, endOfBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
+import { atBusinessTime, endOfBusinessDay, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
 import { applyShiftRules, computeHours, isOvernightShift } from '../lib/attendance-hours.js';
 import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
+import { stampLeaveDay } from './leave-attendance.service.js';
 
 export interface DayCloseCounts {
   /** `absent` rows written for working days with no row. */
@@ -96,20 +97,8 @@ export const DEFAULT_AUTO_CHECKOUT_TIME = '23:59';
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * A Date whose *server-local* calendar date is the label's date (local noon),
- * for `classifyDay` / `listHolidaysBetween`, which read local `getDay()` and
- * `getDate()`. Noon keeps it on the right date whatever the server timezone.
- */
-function localDateOf(dayLabel: Date): Date {
-  return new Date(dayLabel.getUTCFullYear(), dayLabel.getUTCMonth(), dayLabel.getUTCDate(), 12);
-}
-
 /** The business day a stored date (joining, exit, leave start/end) falls on. */
 const dayOf = (d: Date): number => startOfBusinessDay(d).getTime();
-
-const isDuplicateKey = (err: unknown): boolean =>
-  (err as { code?: number } | null)?.code === 11000;
 
 /**
  * Insert rows, ignoring any that lose a race to a row written meanwhile (a
@@ -132,39 +121,6 @@ async function insertIgnoringDuplicates(docs: Record<string, unknown>[]): Promis
       writeErrors.length > 0 && writeErrors.every((w) => (w.err?.code ?? w.code) === 11000);
     if (!onlyDuplicates) throw err;
     return e.insertedDocs?.length ?? e.result?.insertedCount ?? docs.length - writeErrors.length;
-  }
-}
-
-/**
- * Write the attendance row an approved leave produces for one working day:
- * paid → `on_leave`, unpaid → `absent`, half-day → `half_day`. Returns
- * whether a row was written (false when one already holds the day).
- *
- * Stand-in for the leave-attendance service's stamping; replace this one
- * call when leave approval writes its rows itself.
- */
-async function stampApprovedLeaveDay(
-  employeeId: Types.ObjectId,
-  day: Date,
-  request: ILeaveRequest,
-  leaveType: ILeaveType | null,
-  dryRun: boolean,
-): Promise<boolean> {
-  const paid = leaveType?.paidLeave !== false;
-  if (dryRun) return true;
-  try {
-    await Attendance.create({
-      employeeId,
-      date: day,
-      status: request.isHalfDay ? 'half_day' : paid ? 'on_leave' : 'absent',
-      isPaidLeave: paid,
-      leaveRequestId: request._id,
-      source: 'leave',
-    });
-    return true;
-  } catch (err) {
-    if (isDuplicateKey(err)) return false;
-    throw err;
   }
 }
 
@@ -280,8 +236,9 @@ export async function closeBusinessDay(
     if (leave) {
       const type = leaveTypes.get(String(leave.leaveTypeId)) ?? null;
       try {
+        // The same stamp leave approval writes; false = a soft-deleted row holds the day.
         // eslint-disable-next-line no-await-in-loop
-        if (await stampApprovedLeaveDay(emp._id as Types.ObjectId, day, leave, type, dryRun)) {
+        if (dryRun || (await stampLeaveDay(leave, type, emp._id as Types.ObjectId, day))) {
           counts.leaveStamped += 1;
         } else {
           counts.skipped += 1;

@@ -29,6 +29,8 @@ export interface ILeaveRequest extends Document {
   approvedBy?: Types.ObjectId;
   approvedAt?: Date;
   rejectedReason?: string;
+  /** Why HR cancelled the request (required when it is not the owner withdrawing it). */
+  cancelReason?: string;
   appliedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -61,6 +63,7 @@ const leaveRequestSchema = new Schema<ILeaveRequest>({
   approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   approvedAt: { type: Date },
   rejectedReason: { type: String },
+  cancelReason: { type: String, trim: true },
   appliedAt: { type: Date, default: Date.now },
 });
 leaveRequestSchema.plugin(timestampPlugin);

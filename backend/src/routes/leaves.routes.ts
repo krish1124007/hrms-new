@@ -98,8 +98,10 @@ router.patch(
   validate(ctrl.rejectLeaveSchema),
   asyncHandler(ctrl.rejectLeaveRequest),
 );
+// Owner or `leaves.update` — checked per record in the controller.
 router.patch(
   '/requests/:id/cancel',
+  validate(ctrl.cancelLeaveSchema),
   asyncHandler(ctrl.cancelLeaveRequest),
 );
 router.delete(
