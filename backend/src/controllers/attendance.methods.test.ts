@@ -555,6 +555,28 @@ describe('check-out method handling', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('check-out with a break still open', () => {
+  it('ends the break at the check-out and deducts it from the hours', async () => {
+    await configure();
+    const s = await shift({ startTime: '09:30', endTime: '18:00' });
+    const who = await staff({ shift: s._id });
+    await punch('in', who, ist('2026-10-12', '09:30'));
+    vi.setSystemTime(ist('2026-10-12', '13:00'));
+    const started = await request(app).post('/api/v1/attendance/breaks/start').set(who.auth()).send({ type: 'lunch' });
+    expect(started.status).toBe(201);
+
+    const out = await punch('out', who, ist('2026-10-12', '14:00'));
+
+    expect(out.status).toBe(200);
+    const [row] = await rowsOf(who);
+    expect(row!.breaks).toHaveLength(1);
+    expect(row!.breaks[0]!.endTime!.toISOString()).toBe(ist('2026-10-12', '14:00').toISOString());
+    expect(row!.breaks[0]!.duration).toBe(60);
+    // 09:30 → 14:00 is 4.5 h, less the 1 h break.
+    expect(row!.totalWorkingHours).toBe(3.5);
+  });
+});
+
 describe('expense before check-out', () => {
   async function dayWithGate(gate: 'all' | 'field' | 'none', fields: Record<string, unknown> = {}) {
     await configure({ settings: { expenseBeforeCheckout: gate } });

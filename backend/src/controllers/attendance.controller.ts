@@ -28,6 +28,7 @@ import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { isDuplicateKey } from '../lib/leave-allocation.js';
 import { logger } from '../config/logger.js';
 import {
   formatBusinessDate,
@@ -533,6 +534,33 @@ async function assertExpenseFiled(
   }
 }
 
+/**
+ * Settle a day's figures after its punches changed: end any break still open
+ * at the check-out (so it is deducted rather than counted as work), store the
+ * worked hours — they are only persisted once the day is closed, so a
+ * check-in on its own keeps them derived — and re-judge the day from scratch
+ * with the employee's shift (late, early leave, overtime, status). Shared by
+ * check-out, HR corrections and approved regularizations so all three agree.
+ * Mutates `att`; the caller saves it.
+ */
+function settleDay(
+  att: IAttendance,
+  closedAt: Date | undefined,
+  shift: IShift | null,
+  cfg: IAttendanceConfig | null,
+): void {
+  if (closedAt) {
+    for (const b of att.breaks) {
+      if (b.startTime && !b.endTime) {
+        b.endTime = closedAt < b.startTime ? b.startTime : closedAt;
+        b.duration = Math.round((b.endTime.getTime() - b.startTime.getTime()) / 60_000);
+      }
+    }
+    att.totalWorkingHours = computeHours(att, closedAt);
+  }
+  applyShiftRules(att, shift, cfg);
+}
+
 export async function checkOut(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkOutSchema>;
   const emp = await getCurrentEmployee();
@@ -570,11 +598,9 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
     metadata: {},
   } as ICheckinRecord;
 
-  // total working hours = (out - in) - break time, including a break that is
-  // still open at check-out (previously such a break was never deducted).
-  att.totalWorkingHours = computeHours(att, now);
-  // Late / early leave / half day / overtime against the employee's shift.
-  applyShiftRules(att, await resolveShift(emp.doc), cfg);
+  // Hours = (out - in) - break time, an open break included; then late /
+  // early leave / half day / overtime against the employee's shift.
+  settleDay(att, now, await resolveShift(emp.doc), cfg);
 
   await att.save();
   void audit({ action: 'update', entity: 'Attendance', entityId: String(att._id), after: { checkOut: now } });
@@ -910,43 +936,64 @@ export async function monthlyAttendance(req: Request, res: Response): Promise<vo
 // REGULARIZATION — ask for a day's punches to be corrected; an approver decides
 // ============================================================================
 
-export const regularizeSchema = z
-  .object({
-    date: z.coerce.date(),
-    reason: z.string().min(3),
-    // The punches being asked for. Nothing is written to the row until an
-    // approver agrees; a request without them is a reason-only request.
-    checkIn: z.coerce.date().optional(),
-    checkOut: z.coerce.date().optional(),
-  })
-  .refine((v) => !v.checkOut || v.checkIn, {
-    message: 'A check-out time needs a check-in time',
-    path: ['checkIn'],
-  });
+export const regularizeSchema = z.object({
+  date: z.coerce.date(),
+  reason: z.string().min(3),
+  // The punches being asked for — either one, or both. Nothing is written to
+  // the row until an approver agrees; a request with neither is reason-only.
+  checkIn: z.coerce.date().optional(),
+  checkOut: z.coerce.date().optional(),
+});
 
 /** A regularized check-out is at most this long after the check-in: one shift, not a day. */
 const MAX_REQUESTED_SPAN_MS = 12 * 60 * 60 * 1000;
 
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own regularization request';
 const LEAVE_DAY_MESSAGE = 'Cancel the leave before regularizing this day';
+const DECIDED_MEANWHILE_MESSAGE = 'This request was decided meanwhile — reload and try again';
+
+const leaveDayError = (): AppError => new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
+const pendingError = (): AppError =>
+  new AppError('A regularization request is already pending for this day', 409, 'REGULARIZATION_PENDING');
 
 /**
  * The punches a request asks for must be believable for `day` (a day label):
- * the check-in on that business day, the check-out no earlier than it and
- * within a shift of it (it may cross midnight), and neither in the future.
+ * a check-in on that business day, a check-out strictly after the check-in
+ * and within a shift of it (it may cross midnight), and neither in the
+ * future. A request may carry one punch only: the other is then the one
+ * already `recorded` on the row, and the pair that would result is what is
+ * checked.
  */
-function assertRequestedTimes(day: Date, checkIn: Date | undefined, checkOut: Date | undefined, now: Date): void {
-  if (!checkIn) return;
-  if (startOfBusinessDay(checkIn).getTime() !== day.getTime()) {
+function assertRequestedTimes(
+  day: Date,
+  requested: { checkIn?: Date; checkOut?: Date },
+  recorded: { checkIn?: Date; checkOut?: Date },
+  now: Date,
+): void {
+  const { checkIn, checkOut } = requested;
+  if (!checkIn && !checkOut) return;
+  if (checkIn && startOfBusinessDay(checkIn).getTime() !== day.getTime()) {
     throw new ValidationAppError('The check-in must fall on the day being regularized');
   }
-  if (checkOut) {
-    const span = checkOut.getTime() - checkIn.getTime();
-    if (span < 0) throw new ValidationAppError('The check-out cannot be before the check-in');
-    if (span > MAX_REQUESTED_SPAN_MS) throw new ValidationAppError('The check-out must be within 12 hours of the check-in');
-  }
-  if (checkIn.getTime() > now.getTime() || (checkOut && checkOut.getTime() > now.getTime())) {
+  if ((checkIn && checkIn.getTime() > now.getTime()) || (checkOut && checkOut.getTime() > now.getTime())) {
     throw new ValidationAppError('A requested time cannot be in the future');
+  }
+  const inAt = checkIn ?? recorded.checkIn;
+  const outAt = checkOut ?? recorded.checkOut;
+  if (!inAt) throw new ValidationAppError('A check-out time needs a check-in time');
+  if (!outAt) return;
+  const span = outAt.getTime() - inAt.getTime();
+  if (span <= 0) {
+    throw new ValidationAppError(
+      !checkOut
+        ? 'The requested check-in must be before the check-out already recorded for this day'
+        : !checkIn
+          ? 'The requested check-out must be after the check-in already recorded for this day'
+          : 'The check-out must be after the check-in',
+    );
+  }
+  if (span > MAX_REQUESTED_SPAN_MS) {
+    throw new ValidationAppError('The check-out must be within 12 hours of the check-in');
   }
 }
 
@@ -994,20 +1041,33 @@ export async function requestRegularization(req: Request, res: Response): Promis
   if (date.getTime() > startOfBusinessDay(now).getTime()) {
     throw new ValidationAppError('Cannot regularize a future date');
   }
-  assertRequestedTimes(date, body.checkIn, body.checkOut, now);
 
-  const pending = () => new AppError('A regularization request is already pending for this day', 409, 'REGULARIZATION_PENDING');
   let att = await Attendance.findOne({ employeeId: emp.id, date }).exec();
-  if (att?.leaveRequestId) throw new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
-  if (att?.regularization?.status === 'pending') throw pending();
+  if (att?.leaveRequestId) throw leaveDayError();
+  if (att?.regularization?.status === 'pending') throw pendingError();
+  assertRequestedTimes(
+    date,
+    body,
+    { checkIn: att?.checkIn?.time, checkOut: att?.checkOut?.time },
+    now,
+  );
   if (!att) {
-    att = await Attendance.create({ employeeId: emp.id, date, status: 'absent' });
+    try {
+      att = await Attendance.create({ employeeId: emp.id, date, status: 'absent' });
+    } catch (err) {
+      // Another submit for the same day created the row first. It will claim
+      // it (or already has), so this one is told a request is pending.
+      if (isDuplicateKey(err)) throw pendingError();
+      throw err;
+    }
   }
 
-  // Claim the row only if no request is pending *now*: two submits racing past
-  // the check above (a double tap) must not both land, nor both notify.
+  // Claim the row only if no request is pending *now* and no leave covers the
+  // day: two submits racing past the checks above (a double tap) must not both
+  // land, nor both notify, and a leave approved meanwhile must not be hidden
+  // under a new request.
   const claimed = await Attendance.findOneAndUpdate(
-    { _id: att._id, 'regularization.status': { $ne: 'pending' } },
+    { _id: att._id, 'regularization.status': { $ne: 'pending' }, leaveRequestId: null },
     {
       $set: {
         regularization: {
@@ -1021,7 +1081,10 @@ export async function requestRegularization(req: Request, res: Response): Promis
     },
     { new: true },
   ).exec();
-  if (!claimed) throw pending();
+  if (!claimed) {
+    const onLeave = await Attendance.exists({ _id: att._id, leaveRequestId: { $ne: null } });
+    throw onLeave ? leaveDayError() : pendingError();
+  }
 
   void audit({
     action: 'create',
@@ -1075,7 +1138,7 @@ export async function decideRegularization(req: Request, res: Response): Promise
   if (att.regularization.status !== 'pending') {
     throw new ValidationAppError(`This regularization request was already ${att.regularization.status}`);
   }
-  if (status === 'approved' && att.leaveRequestId) throw new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
+  if (status === 'approved' && att.leaveRequestId) throw leaveDayError();
 
   const before = {
     status: att.status,
@@ -1085,39 +1148,59 @@ export async function decideRegularization(req: Request, res: Response): Promise
   };
   const owner = await Employee.findById(att.employeeId).setOptions({ withDeleted: true }).select('userId shift').exec();
 
+  // The write below only lands if this exact request is still pending, so two
+  // deciders racing cannot both succeed (one would leave punches and a
+  // `present` day under a rejection).
+  att.$where = {
+    'regularization.status': 'pending',
+    'regularization.requestedAt': att.regularization.requestedAt,
+  };
+
   const { requestedCheckIn, requestedCheckOut } = att.regularization;
-  if (status === 'approved' && requestedCheckIn) {
-    // The requested check-out, else the one already on the row, must not
-    // precede the check-in being written.
-    const closesAt = requestedCheckOut ?? att.checkOut?.time;
-    if (closesAt && closesAt.getTime() < requestedCheckIn.getTime()) {
-      throw new ValidationAppError('The requested check-in is after the check-out recorded for this day');
+  if (status === 'approved') {
+    if (requestedCheckIn || requestedCheckOut) {
+      // Only the punches the employee asked for are written; the other one,
+      // when the row has it, stays exactly as recorded (method, location,
+      // photo, device).
+      const inAt = requestedCheckIn ?? att.checkIn?.time;
+      const outAt = requestedCheckOut ?? att.checkOut?.time;
+      if (!inAt) throw new ValidationAppError('The day has no check-in to pair the requested check-out with');
+      if (outAt && outAt.getTime() <= inAt.getTime()) {
+        throw new ValidationAppError('The requested punches leave the check-out at or before the check-in');
+      }
+      if (requestedCheckIn) {
+        att.checkIn = { time: requestedCheckIn, method: 'manual', metadata: { regularized: true } };
+      }
+      if (requestedCheckOut) {
+        att.checkOut = { time: requestedCheckOut, method: 'manual', metadata: { regularized: true } };
+      }
+      att.source = 'regularization';
+      // Re-judge the day with the owner's shift, as a self-service punch would:
+      // an `absent` auto row becomes present / late / half day.
+      const cfg = await AttendanceConfig.findOne({}).exec();
+      settleDay(att, att.checkOut?.time, await resolveShift(owner), cfg);
+    } else {
+      // Reason-only request: there are no times to write or judge, so the
+      // approver is vouching for the day. Punches and hours stay as they are
+      // (none, on an auto-absent row) and the shift rules are not run.
+      att.status = 'present';
+      att.source = 'regularization';
     }
-    att.checkIn = { time: requestedCheckIn, method: 'manual', metadata: { regularized: true } };
-    if (requestedCheckOut) {
-      att.checkOut = { time: requestedCheckOut, method: 'manual', metadata: { regularized: true } };
-    }
-    att.source = 'regularization';
-    // Hours are only stored once the day is closed (see `correctRecord`).
-    if (att.checkOut?.time) att.totalWorkingHours = computeHours(att, att.checkOut.time);
-    // Re-judge the day from scratch with the owner's shift, as a self-service
-    // punch would: an `absent` auto row becomes present / late / half day.
-    const cfg = await AttendanceConfig.findOne({}).exec();
-    applyShiftRules(att, await resolveShift(owner), cfg);
-  } else if (status === 'approved') {
-    // Reason-only request: there are no times to write or judge, so the
-    // approver is vouching for the day. Punches and hours stay as they are
-    // (none, on an auto-absent row) and `applyShiftRules` is not run.
-    att.status = 'present';
-    att.source = 'regularization';
+    att.isRegularized = true;
   }
-  if (status === 'approved') att.isRegularized = true;
 
   const userId = getUserId();
   att.regularization.status = status;
   att.regularization.approvedAt = new Date();
   if (userId) att.regularization.approvedBy = new Types.ObjectId(userId);
-  await att.save();
+  try {
+    await att.save();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'DocumentNotFoundError') {
+      throw new AppError(DECIDED_MEANWHILE_MESSAGE, 409, 'DECIDED_MEANWHILE');
+    }
+    throw err;
+  }
 
   void audit({
     action: 'update',
@@ -1160,6 +1243,11 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
   const body = req.body as z.infer<typeof correctRecordSchema>;
   const att = await Attendance.findById(String(req.params.id)).exec();
   if (!att) throw new NotFoundError('Attendance record not found');
+  // A correction rewrites `regularization`; doing so over an open request
+  // would silently discard what the employee asked for.
+  if (att.regularization?.status === 'pending') {
+    throw new AppError('Decide the pending regularization request first', 409, 'REGULARIZATION_PENDING');
+  }
 
   const before = {
     checkIn: att.checkIn?.time,
@@ -1181,19 +1269,6 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
     throw new ValidationAppError('Check-out must be after check-in');
   }
 
-  // Close any break left open, so it is deducted rather than counted as work.
-  if (outTime) {
-    for (const b of att.breaks) {
-      if (b.startTime && !b.endTime) {
-        b.endTime = outTime < b.startTime ? b.startTime : outTime;
-        b.duration = Math.round((b.endTime.getTime() - b.startTime.getTime()) / 60_000);
-      }
-    }
-  }
-
-  // Hours are only stored once the day is closed; a clock-in set on its own
-  // (employee forgot to punch in) keeps them derived until check-out.
-  if (outTime) att.totalWorkingHours = computeHours(att, outTime);
   // Re-judge the day from scratch with the owner's shift — the rules a
   // self-service punch uses — so an `absent` or `half_day` that the
   // corrected times no longer support becomes present / late.
@@ -1201,7 +1276,7 @@ export async function correctRecord(req: Request, res: Response): Promise<void> 
     AttendanceConfig.findOne({}).exec(),
     Employee.findById(att.employeeId).setOptions({ withDeleted: true }).select('shift').exec(),
   ]);
-  applyShiftRules(att, await resolveShift(owner), cfg);
+  settleDay(att, outTime, await resolveShift(owner), cfg);
 
   // Mark it as an HR correction so the row is not mistaken for a clean punch.
   att.isRegularized = true;

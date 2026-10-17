@@ -79,6 +79,59 @@ const decide = (who: Pick<Person, 'auth'>, id: unknown, status: 'approved' | 're
 const rowOf = (who: Person, iso: string) =>
   Attendance.findOne({ employeeId: who.emp._id, date: label(iso) }).lean().exec();
 
+/** The 400 a refused request / decision returns. */
+function expectRefused(res: request.Response, message: string): void {
+  expect(res.status).toBe(400);
+  expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  expect(res.body.error.message).toBe(message);
+}
+
+/** An attendance row with a real check-in — the punch details a correction must not lose. */
+const REAL_CHECK_IN = {
+  time: ist(YESTERDAY, '09:30'),
+  method: 'qr',
+  location: { lat: 19.07, lng: 72.87, address: 'Head Office' },
+  photo: 'in.jpg',
+  deviceInfo: { model: 'Pixel 8' },
+};
+const REAL_CHECK_OUT = {
+  time: ist(YESTERDAY, '13:00'),
+  method: 'qr',
+  location: { lat: 19.07, lng: 72.87, address: 'Head Office' },
+  photo: 'out.jpg',
+  deviceInfo: { model: 'Pixel 8' },
+};
+
+/**
+ * Hold the first `count` `Attendance.<method>().exec()` reads until all of them
+ * have returned, so that many requests are certain to have read the row before
+ * any of them writes. This is how a race is forced rather than hoped for.
+ */
+function holdReads(method: 'findById' | 'findOne', count = 2): void {
+  const original = Attendance[method].bind(Attendance) as unknown as (
+    ...args: unknown[]
+  ) => { exec: () => Promise<unknown> };
+  let held = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(Attendance, method).mockImplementation(((...args: unknown[]) => {
+    const query = original(...args);
+    const exec = query.exec.bind(query);
+    query.exec = async () => {
+      const doc = await exec();
+      if (held < count) {
+        held += 1;
+        if (held === count) release();
+        await gate;
+      }
+      return doc;
+    };
+    return query;
+  }) as never);
+}
+
 /** Request a full 09:30 → 18:00 day yesterday and return the stored row id. */
 async function requestDay(
   who: Person,
@@ -246,21 +299,29 @@ describe('requesting a regularization', () => {
         checkIn: ist(TODAY, '09:30').toISOString(),
       });
 
-      expect(res.status).toBe(400);
+      expectRefused(res, 'The check-in must fall on the day being regularized');
       expect(await rowOf(who, YESTERDAY)).toBeNull();
     });
 
-    it('a check-out before the check-in is refused', async () => {
+    it('a check-out before, or at, the check-in is refused', async () => {
       const who = await person();
 
-      const res = await requestRegularization(who, {
+      const before = await requestRegularization(who, {
         date: YESTERDAY,
         reason: 'Swapped',
         checkIn: ist(YESTERDAY, '18:00').toISOString(),
         checkOut: ist(YESTERDAY, '09:30').toISOString(),
       });
+      expectRefused(before, 'The check-out must be after the check-in');
 
-      expect(res.status).toBe(400);
+      const same = await requestRegularization(who, {
+        date: YESTERDAY,
+        reason: 'A zero-hour day',
+        checkIn: ist(YESTERDAY, '09:30').toISOString(),
+        checkOut: ist(YESTERDAY, '09:30').toISOString(),
+      });
+      expectRefused(same, 'The check-out must be after the check-in');
+      expect(await rowOf(who, YESTERDAY)).toBeNull();
     });
 
     it('a check-out more than 12 hours after the check-in is refused; exactly 12 is fine', async () => {
@@ -272,7 +333,7 @@ describe('requesting a regularization', () => {
         checkIn: ist(YESTERDAY, '09:00').toISOString(),
         checkOut: ist(YESTERDAY, '21:01').toISOString(),
       });
-      expect(tooLong.status).toBe(400);
+      expectRefused(tooLong, 'The check-out must be within 12 hours of the check-in');
 
       const edge = await requestRegularization(who, {
         date: YESTERDAY,
@@ -298,19 +359,6 @@ describe('requesting a regularization', () => {
       expect(row!.regularization!.requestedCheckOut!.toISOString()).toBe(ist(TODAY, '04:00').toISOString());
     });
 
-    it('a check-out without a check-in is refused', async () => {
-      const who = await person();
-
-      const res = await requestRegularization(who, {
-        date: YESTERDAY,
-        reason: 'Only the end',
-        checkOut: ist(YESTERDAY, '18:00').toISOString(),
-      });
-
-      expect(res.status).toBe(400);
-      expect(await rowOf(who, YESTERDAY)).toBeNull();
-    });
-
     it('a time that has not happened yet is refused', async () => {
       const who = await person();
 
@@ -321,7 +369,214 @@ describe('requesting a regularization', () => {
         checkOut: ist(TODAY, '18:00').toISOString(),
       });
 
+      expectRefused(res, 'A requested time cannot be in the future');
+    });
+
+    it('a future date is refused with its own message', async () => {
+      const who = await person();
+
+      const res = await requestRegularization(who, { date: TOMORROW, reason: 'Planning ahead' });
+
+      expectRefused(res, 'Cannot regularize a future date');
+    });
+  });
+
+  describe('partial punch requests', () => {
+    const withCheckIn = (who: Person, extra: Record<string, unknown> = {}) =>
+      Attendance.create({
+        employeeId: who.emp._id,
+        date: label(YESTERDAY),
+        status: 'present',
+        checkIn: REAL_CHECK_IN,
+        ...extra,
+      });
+
+    it('a check-out alone is refused when the day has no check-in, and no row is left behind', async () => {
+      const who = await person();
+
+      const res = await requestRegularization(who, {
+        date: YESTERDAY,
+        reason: 'Only the end',
+        checkOut: ist(YESTERDAY, '18:00').toISOString(),
+      });
+
+      expectRefused(res, 'A check-out time needs a check-in time');
+      expect(await rowOf(who, YESTERDAY)).toBeNull();
+    });
+
+    it("a check-out alone is checked against the day's recorded check-in: after it, within 12 h", async () => {
+      const who = await person();
+      await withCheckIn(who);
+      const ask = (at: string, day = YESTERDAY) =>
+        requestRegularization(who, { date: YESTERDAY, reason: 'Forgot to punch out', checkOut: ist(day, at).toISOString() });
+
+      expectRefused(await ask('09:30'), 'The requested check-out must be after the check-in already recorded for this day');
+      expectRefused(await ask('08:00'), 'The requested check-out must be after the check-in already recorded for this day');
+      expectRefused(await ask('21:31'), 'The check-out must be within 12 hours of the check-in');
+      expect((await ask('18:00')).status).toBe(201);
+    });
+
+    it('a check-out alone: approving keeps the recorded check-in intact and computes the hours', async () => {
+      const who = await person();
+      const hr = await approver();
+      await withCheckIn(who);
+      const res = await requestRegularization(who, {
+        date: YESTERDAY,
+        reason: 'Forgot to punch out',
+        checkOut: ist(YESTERDAY, '18:00').toISOString(),
+      });
+      expect(res.status).toBe(201);
+      const stored = await rowOf(who, YESTERDAY);
+      expect(stored!.regularization!.requestedCheckIn).toBeUndefined();
+      expect(stored!.regularization!.requestedCheckOut!.toISOString()).toBe(ist(YESTERDAY, '18:00').toISOString());
+
+      const decided = await decide(hr, res.body.data._id, 'approved');
+
+      expect(decided.status).toBe(200);
+      const row = await rowOf(who, YESTERDAY);
+      expect(row!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '09:30').toISOString());
+      expect(row!.checkIn!.method).toBe('qr');
+      expect(row!.checkIn!.location).toMatchObject({ lat: 19.07, lng: 72.87, address: 'Head Office' });
+      expect(row!.checkIn!.photo).toBe('in.jpg');
+      expect(row!.checkIn!.deviceInfo).toMatchObject({ model: 'Pixel 8' });
+      expect(row!.checkIn!.metadata?.regularized).toBeFalsy();
+      expect(row!.checkOut!.time!.toISOString()).toBe(ist(YESTERDAY, '18:00').toISOString());
+      expect(row!.checkOut!.method).toBe('manual');
+      expect(row!.checkOut!.metadata!.regularized).toBe(true);
+      expect(row!.totalWorkingHours).toBe(8.5);
+      expect(row!.status).toBe('present');
+      expect(row!.source).toBe('regularization');
+      expect(row!.isRegularized).toBe(true);
+    });
+
+    it('a check-out alone ends a break left open at the requested check-out and deducts it', async () => {
+      const who = await person();
+      const hr = await approver();
+      await withCheckIn(who, { breaks: [{ startTime: ist(YESTERDAY, '13:00'), type: 'lunch' }] });
+      const res = await requestRegularization(who, {
+        date: YESTERDAY,
+        reason: 'Forgot to end the break and punch out',
+        checkOut: ist(YESTERDAY, '18:00').toISOString(),
+      });
+
+      await decide(hr, res.body.data._id, 'approved');
+
+      const row = await rowOf(who, YESTERDAY);
+      expect(row!.breaks).toHaveLength(1);
+      expect(row!.breaks[0]!.endTime!.toISOString()).toBe(ist(YESTERDAY, '18:00').toISOString());
+      expect(row!.breaks[0]!.duration).toBe(300);
+      // 09:30 → 18:00 is 8.5 h; the 5 h break comes off.
+      expect(row!.totalWorkingHours).toBe(3.5);
+      expect(row!.status).toBe('half_day');
+    });
+
+    it("a check-in alone is checked against the day's recorded check-out, at request time", async () => {
+      const who = await person();
+      await withCheckIn(who, { checkOut: REAL_CHECK_OUT, checkIn: { ...REAL_CHECK_IN, time: ist(YESTERDAY, '10:30') } });
+      const ask = (at: string) =>
+        requestRegularization(who, { date: YESTERDAY, reason: 'Scanned in late', checkIn: ist(YESTERDAY, at).toISOString() });
+
+      expectRefused(await ask('15:00'), 'The requested check-in must be before the check-out already recorded for this day');
+      expectRefused(await ask('13:00'), 'The requested check-in must be before the check-out already recorded for this day');
+      expect((await ask('09:30')).status).toBe(201);
+    });
+
+    it('a check-in alone: approving keeps the recorded check-out intact and recomputes the hours', async () => {
+      const who = await person();
+      const hr = await approver();
+      await withCheckIn(who, {
+        status: 'half_day',
+        checkIn: { ...REAL_CHECK_IN, time: ist(YESTERDAY, '10:30') },
+        checkOut: REAL_CHECK_OUT,
+        totalWorkingHours: 2.5,
+      });
+      const res = await requestRegularization(who, {
+        date: YESTERDAY,
+        reason: 'Scanned in late',
+        checkIn: ist(YESTERDAY, '09:30').toISOString(),
+      });
+
+      await decide(hr, res.body.data._id, 'approved');
+
+      const row = await rowOf(who, YESTERDAY);
+      expect(row!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '09:30').toISOString());
+      expect(row!.checkIn!.method).toBe('manual');
+      expect(row!.checkIn!.metadata!.regularized).toBe(true);
+      expect(row!.checkOut!.time!.toISOString()).toBe(ist(YESTERDAY, '13:00').toISOString());
+      expect(row!.checkOut!.method).toBe('qr');
+      expect(row!.checkOut!.location).toMatchObject({ address: 'Head Office' });
+      expect(row!.checkOut!.photo).toBe('out.jpg');
+      expect(row!.checkOut!.metadata?.regularized).toBeFalsy();
+      expect(row!.totalWorkingHours).toBe(3.5);
+      expect(row!.status).toBe('half_day');
+    });
+  });
+
+  describe('racing requests', () => {
+    it('two submits that both read an open day: one is accepted, the other is REGULARIZATION_PENDING, one notification', async () => {
+      const manager = await person('manager');
+      const who = await person('employee', { reportingManager: manager.emp._id });
+      await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent' });
+      holdReads('findOne');
+
+      const [a, b] = await Promise.all([
+        requestRegularization(who, { date: YESTERDAY, reason: 'First tap' }),
+        requestRegularization(who, { date: YESTERDAY, reason: 'Second tap' }),
+      ]);
+      vi.restoreAllMocks();
+
+      expect([a.status, b.status].sort()).toEqual([201, 409]);
+      const loser = a.status === 409 ? a : b;
+      expect(loser.body.error.code).toBe('REGULARIZATION_PENDING');
+      expect(await Notification.countDocuments({ userId: manager.user._id })).toBe(1);
+      expect(await Attendance.countDocuments({ employeeId: who.emp._id })).toBe(1);
+    });
+
+    it("two first-time submits that both create the day's row: one row, one accepted, the other REGULARIZATION_PENDING", async () => {
+      await Attendance.init();
+      const manager = await person('manager');
+      const who = await person('employee', { reportingManager: manager.emp._id });
+      holdReads('findOne');
+
+      const [a, b] = await Promise.all([
+        requestRegularization(who, { date: YESTERDAY, reason: 'First tap' }),
+        requestRegularization(who, { date: YESTERDAY, reason: 'Second tap' }),
+      ]);
+      vi.restoreAllMocks();
+
+      expect([a.status, b.status].sort()).toEqual([201, 409]);
+      const loser = a.status === 409 ? a : b;
+      expect(loser.body.error.code).toBe('REGULARIZATION_PENDING');
+      expect(await Attendance.countDocuments({ employeeId: who.emp._id })).toBe(1);
+      expect(await Notification.countDocuments({ userId: manager.user._id })).toBe(1);
+    });
+
+    it('a leave stamped between reading the day and claiming it is refused, LEAVE_DAY', async () => {
+      const who = await person();
+      const row = await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent' });
+      const original = Attendance.findOne.bind(Attendance) as unknown as (
+        ...args: unknown[]
+      ) => { exec: () => Promise<unknown> };
+      vi.spyOn(Attendance, 'findOne').mockImplementation(((...args: unknown[]) => {
+        const query = original(...args);
+        const exec = query.exec.bind(query);
+        query.exec = async () => {
+          const doc = await exec();
+          await Attendance.updateOne(
+            { _id: row._id },
+            { $set: { leaveRequestId: new Types.ObjectId(), isPaidLeave: true, status: 'on_leave', source: 'leave' } },
+          );
+          return doc;
+        };
+        return query;
+      }) as never);
+
+      const res = await requestRegularization(who, { date: YESTERDAY, reason: 'I did work that day' });
+      vi.restoreAllMocks();
+
       expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('LEAVE_DAY');
+      expect((await rowOf(who, YESTERDAY))!.regularization).toBeUndefined();
     });
   });
 });
@@ -486,29 +741,47 @@ describe('approving a regularization', () => {
     expect(row!.regularization!.status).toBe('pending');
   });
 
-  it('refuses to put a check-in after the check-out already on the row', async () => {
+  it('refuses to put a check-in at or after the check-out now on the row, leaving the request pending', async () => {
     const who = await person();
     const hr = await approver();
-    await Attendance.create({
+    // Filed when the row had no check-out; a check-out was punched since.
+    const row = await Attendance.create({
       employeeId: who.emp._id,
       date: label(YESTERDAY),
       status: 'half_day',
       checkIn: { time: ist(YESTERDAY, '09:30'), method: 'qr' },
       checkOut: { time: ist(YESTERDAY, '13:00'), method: 'qr' },
       totalWorkingHours: 3.5,
-    });
-    const res = await requestRegularization(who, {
-      date: YESTERDAY,
-      reason: 'Wrong time',
-      checkIn: ist(YESTERDAY, '15:00').toISOString(),
+      regularization: {
+        requestedAt: ist(YESTERDAY, '12:00'),
+        reason: 'Wrong time',
+        status: 'pending',
+        requestedCheckIn: ist(YESTERDAY, '15:00'),
+      },
     });
 
-    const decided = await decide(hr, res.body.data._id, 'approved');
+    const decided = await decide(hr, row._id, 'approved');
 
-    expect(decided.status).toBe(400);
+    expectRefused(decided, 'The requested punches leave the check-out at or before the check-in');
+    const after = await rowOf(who, YESTERDAY);
+    expect(after!.regularization!.status).toBe('pending');
+    expect(after!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '09:30').toISOString());
+  });
+
+  it('requested times on an auto-absent row: approving makes it a regularized present day', async () => {
+    const who = await person();
+    const hr = await approver();
+    await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent', source: 'auto_absent' });
+    const id = await requestDay(who);
+
+    await decide(hr, id, 'approved');
+
     const row = await rowOf(who, YESTERDAY);
-    expect(row!.regularization!.status).toBe('pending');
-    expect(row!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '09:30').toISOString());
+    expect(await Attendance.countDocuments({ employeeId: who.emp._id })).toBe(1);
+    expect(row!.status).toBe('present');
+    expect(row!.source).toBe('regularization');
+    expect(row!.isRegularized).toBe(true);
+    expect(row!.totalWorkingHours).toBe(8.5);
   });
 
   it('refuses when a leave has been stamped on the day since the request', async () => {
@@ -604,7 +877,7 @@ describe('who may decide', () => {
 
     const again = await decide(hr, id, 'rejected');
 
-    expect(again.status).toBe(400);
+    expectRefused(again, 'This regularization request was already approved');
     const row = await rowOf(who, YESTERDAY);
     expect(row!.regularization!.status).toBe('approved');
     expect(row!.checkIn).toBeDefined();
@@ -615,8 +888,99 @@ describe('who may decide', () => {
     const hr = await approver();
     const bare = await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent' });
 
-    expect((await decide(hr, bare._id, 'approved')).status).toBe(400);
+    expectRefused(await decide(hr, bare._id, 'approved'), 'No regularization request on this record');
     expect((await decide(hr, new Types.ObjectId(), 'approved')).status).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('racing decisions', () => {
+  it('an approve and a reject that both read the pending request: one wins, the other is 409 DECIDED_MEANWHILE', async () => {
+    const who = await person();
+    const hr = await approver();
+    const otherHr = await approver();
+    const id = await requestDay(who);
+    holdReads('findById');
+
+    const [approve, reject] = await Promise.all([decide(hr, id, 'approved'), decide(otherHr, id, 'rejected')]);
+    vi.restoreAllMocks();
+
+    expect([approve.status, reject.status].sort()).toEqual([200, 409]);
+    const loser = approve.status === 409 ? approve : reject;
+    expect(loser.body.error.code).toBe('DECIDED_MEANWHILE');
+    // The row is exactly what the winner decided: the loser changed nothing.
+    const row = await rowOf(who, YESTERDAY);
+    if (approve.status === 200) {
+      expect(row!.regularization!.status).toBe('approved');
+      expect(row!.status).toBe('present');
+      expect(row!.isRegularized).toBe(true);
+      expect(row!.checkIn!.time).toBeInstanceOf(Date);
+    } else {
+      expect(row!.regularization!.status).toBe('rejected');
+      expect(row!.status).toBe('absent');
+      expect(row!.isRegularized).toBe(false);
+      expect(row!.checkIn).toBeUndefined();
+      expect(row!.source).toBe('punch');
+    }
+    // And the employee hears about that one decision only.
+    const notes = await Notification.find({ userId: who.user._id }).lean().exec();
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.message).toContain(row!.regularization!.status);
+  });
+
+  it('two approvals racing: one 200, one 409, the punches written once', async () => {
+    const who = await person();
+    const hr = await approver();
+    const otherHr = await approver();
+    const id = await requestDay(who);
+    holdReads('findById');
+
+    const [a, b] = await Promise.all([decide(hr, id, 'approved'), decide(otherHr, id, 'approved')]);
+    vi.restoreAllMocks();
+
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(await Notification.countDocuments({ userId: who.user._id })).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('HR correction while a request is pending', () => {
+  const correct = (hr: Pick<Person, 'auth'>, id: unknown) =>
+    request(app)
+      .patch(`/api/v1/attendance/records/${String(id)}`)
+      .set(hr.auth())
+      .send({ checkIn: ist(YESTERDAY, '10:00').toISOString(), checkOut: ist(YESTERDAY, '17:00').toISOString(), reason: 'Fixed by HR' });
+
+  it('is refused with REGULARIZATION_PENDING, leaving the request and the row alone', async () => {
+    const who = await person();
+    const hr = await approver();
+    const id = await requestDay(who);
+
+    const res = await correct(hr, id);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('REGULARIZATION_PENDING');
+    expect(res.body.error.message).toBe('Decide the pending regularization request first');
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.regularization!.status).toBe('pending');
+    expect(row!.regularization!.reason).toBe('Biometric was down');
+    expect(row!.checkIn).toBeUndefined();
+  });
+
+  it('works again once the request is decided', async () => {
+    const who = await person();
+    const hr = await approver();
+    const id = await requestDay(who);
+    expect((await decide(hr, id, 'rejected')).status).toBe(200);
+
+    const res = await correct(hr, id);
+
+    expect(res.status).toBe(200);
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.checkIn!.time!.toISOString()).toBe(ist(YESTERDAY, '10:00').toISOString());
+    expect(row!.regularization!.reason).toBe('Fixed by HR');
   });
 });
 

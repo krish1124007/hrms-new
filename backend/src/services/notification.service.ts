@@ -82,7 +82,7 @@ export async function reportingManagerUserId(
 
 /* ─────────────── Trigger Helpers ─────────────── */
 
-const leaveDateFormat = new Intl.DateTimeFormat('en-IN', {
+const businessDateFormat = new Intl.DateTimeFormat('en-IN', {
   timeZone: BUSINESS_TZ,
   day: 'numeric',
   month: 'short',
@@ -91,7 +91,7 @@ const leaveDateFormat = new Intl.DateTimeFormat('en-IN', {
 
 /** "19 Oct 2026" — a day label or an instant, in the business timezone. */
 export function formatBusinessDate(date: Date): string {
-  return leaveDateFormat.format(date);
+  return businessDateFormat.format(date);
 }
 
 /** "19 Oct 2026", or "23 Oct 2026 – 27 Oct 2026" for a range (business timezone). */
@@ -173,7 +173,6 @@ export interface RegularizationDecision {
   /** The day the request was about (a day label). */
   date: Date;
   status: 'approved' | 'rejected';
-  reason?: string;
   attendanceId?: string;
 }
 
@@ -183,17 +182,15 @@ export async function notifyRegularizationDecision(
   d: RegularizationDecision,
 ): Promise<void> {
   const date = formatBusinessDate(d.date);
-  const sentence = `Your attendance regularization for ${date} was ${d.status}.`;
   await createNotification({
     userId: employeeUserId,
     type: 'regularization_decision',
     title: d.status === 'approved' ? 'Regularization approved' : 'Regularization rejected',
-    message: d.reason ? `${sentence} Reason: ${d.reason}` : sentence,
+    message: `Your attendance regularization for ${date} was ${d.status}.`,
     link: '/attendance',
     metadata: {
       status: d.status,
       date,
-      ...(d.reason ? { reason: d.reason } : {}),
       ...(d.attendanceId ? { attendanceId: d.attendanceId } : {}),
     },
   });
