@@ -1,11 +1,18 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
+import { ExpenseCategory, ExpenseClaim, Employee, type IExpenseClaim } from '../models/index.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { cycleHoldingClaim } from '../services/payroll-compute.service.js';
 import { cycleLabel } from '../lib/payroll-cycle.js';
+import { logger } from '../config/logger.js';
+import {
+  formatInr,
+  notifyEmployeeDecision,
+  notifyExpenseRequest,
+  reportingManagerUserId,
+} from '../services/notification.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
 import {
@@ -23,6 +30,36 @@ const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
  * only on their own.
  */
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
+
+/**
+ * Tell the claimant's reporting manager about a claim waiting for them — not
+ * when the manager is the one who filed it. Never throws.
+ */
+async function notifyManagerOfClaim(claim: IExpenseClaim): Promise<void> {
+  try {
+    const emp = await Employee.findById(claim.employeeId).select('firstName lastName userId reportingManager').lean().exec();
+    if (!emp) return;
+    const managerUserId = await reportingManagerUserId(emp);
+    if (!managerUserId || managerUserId === getUserId()) return;
+    await notifyExpenseRequest(managerUserId, `${emp.firstName} ${emp.lastName}`, claim.amount, {
+      claimId: String(claim._id),
+    });
+  } catch (err) {
+    logger.warn({ err, claimId: String(claim._id) }, 'expense claim: manager notification failed');
+  }
+}
+
+/** Tell the claimant how their claim was decided — in-app and by e-mail. Never throws. */
+function notifyClaimant(claim: IExpenseClaim, status: 'approved' | 'rejected' | 'reimbursed', outcome: string): Promise<void> {
+  return notifyEmployeeDecision(claim.employeeId, {
+    module: 'expense',
+    status,
+    title: `Expense claim ${status}`,
+    message: `Your expense claim of ${formatInr(claim.amount)} ${outcome}`,
+    link: '/expense-claims',
+    metadata: { claimId: String(claim._id) },
+  });
+}
 
 async function getCurrentEmployee(): Promise<typeof Employee.prototype | null> {
   const userId = getUserId();
@@ -264,6 +301,8 @@ export async function createClaim(req: Request, res: Response): Promise<void> {
     ...(body.amount === 0 ? { approvedAt: new Date() } : {}),
   });
   void audit({ action: 'create', entity: 'ExpenseClaim', entityId: String(doc._id) });
+  // A draft is still the claimant's own; a zero-amount entry needs no approval.
+  if (doc.status === 'pending') await notifyManagerOfClaim(doc);
   res.status(201).json({ success: true, data: doc });
 }
 
@@ -285,6 +324,7 @@ export async function updateClaim(req: Request, res: Response): Promise<void> {
   if (doc.status !== 'draft' && doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
   }
+  const submitting = doc.status === 'draft';
   Object.assign(doc, req.body);
   // Same rule as create: a claim for an amount can only leave draft with a
   // bill attached, so editing can't be used to strip the receipt off a
@@ -294,6 +334,8 @@ export async function updateClaim(req: Request, res: Response): Promise<void> {
   }
   await doc.save();
   void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id) });
+  // A draft the claimant has just submitted is news for their manager, like a new claim.
+  if (submitting && doc.status === 'pending' && doc.amount > 0) await notifyManagerOfClaim(doc);
   res.json({ success: true, data: doc });
 }
 
@@ -334,6 +376,12 @@ export async function approveClaim(req: Request, res: Response): Promise<void> {
   doc.approvedAt = new Date();
   await doc.save();
   void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'approved' } });
+  const accepted = doc.acceptedAmount;
+  await notifyClaimant(
+    doc,
+    'approved',
+    accepted !== undefined && accepted !== doc.amount ? `was approved for ${formatInr(accepted)}.` : 'was approved.',
+  );
   res.json({ success: true, data: doc });
 }
 
@@ -353,6 +401,7 @@ export async function rejectClaim(req: Request, res: Response): Promise<void> {
   doc.approvedAt = new Date();
   await doc.save();
   void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'rejected' } });
+  await notifyClaimant(doc, 'rejected', `was rejected. Reason: ${body.reason}`);
   res.json({ success: true, data: doc });
 }
 
@@ -383,6 +432,11 @@ export async function reimburseClaim(req: Request, res: Response): Promise<void>
   doc.reimbursementRef = body.reimbursementRef;
   await doc.save();
   void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'reimbursed' } });
+  await notifyClaimant(
+    doc,
+    'reimbursed',
+    body.reimbursementRef ? `has been reimbursed (ref ${body.reimbursementRef}).` : 'has been reimbursed.',
+  );
   res.json({ success: true, data: doc });
 }
 

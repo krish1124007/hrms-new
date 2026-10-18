@@ -1,10 +1,18 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { OvertimeRequest } from '../models/overtime-request.model.js';
+import { OvertimeRequest, type IOvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
 import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
+import { getUserId } from '../lib/async-context.js';
+import { logger } from '../config/logger.js';
+import {
+  formatBusinessDate,
+  notifyEmployeeDecision,
+  notifyOvertimeRequest,
+  reportingManagerUserId,
+} from '../services/notification.service.js';
 import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
 import {
   assertCanDecide,
@@ -15,6 +23,40 @@ import {
 } from '../lib/approvals.js';
 
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own overtime request';
+
+/**
+ * Tell the employee's reporting manager about a request waiting for them —
+ * not when the manager is the one who filed it. Never throws.
+ */
+async function notifyManagerOfRequest(otReq: IOvertimeRequest): Promise<void> {
+  try {
+    const emp = await Employee.findById(otReq.employee).select('firstName lastName userId reportingManager').lean().exec();
+    if (!emp) return;
+    const managerUserId = await reportingManagerUserId(emp);
+    if (!managerUserId || managerUserId === getUserId()) return;
+    await notifyOvertimeRequest(
+      managerUserId,
+      `${emp.firstName} ${emp.lastName}`,
+      otReq.hours,
+      formatBusinessDate(otReq.date),
+      { overtimeId: String(otReq._id) },
+    );
+  } catch (err) {
+    logger.warn({ err, overtimeId: String(otReq._id) }, 'overtime: manager notification failed');
+  }
+}
+
+/** Tell the employee how their request was decided — in-app and by e-mail. Never throws. */
+function notifyEmployee(otReq: IOvertimeRequest, status: 'approved' | 'rejected', outcome: string): Promise<void> {
+  return notifyEmployeeDecision(otReq.employee, {
+    module: 'overtime',
+    status,
+    title: `Overtime ${status}`,
+    message: `Your overtime request for ${otReq.hours} h on ${formatBusinessDate(otReq.date)} ${outcome}`,
+    link: '/overtime',
+    metadata: { overtimeId: String(otReq._id) },
+  });
+}
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
@@ -167,6 +209,7 @@ export async function create(req: Request, res: Response): Promise<void> {
     appliedAt: new Date(),
   });
   void audit({ action: 'create', entity: 'OvertimeRequest', entityId: String(otReq._id) });
+  await notifyManagerOfRequest(otReq);
   res.status(201).json({ success: true, data: otReq });
 }
 
@@ -234,6 +277,7 @@ export async function approve(req: Request, res: Response): Promise<void> {
     entityId: String(otReq._id),
     metadata: { event: 'approved' },
   });
+  await notifyEmployee(otReq, 'approved', 'was approved.');
   res.json({ success: true, data: otReq });
 }
 
@@ -259,5 +303,6 @@ export async function reject(req: Request, res: Response): Promise<void> {
     entityId: String(otReq._id),
     metadata: { event: 'rejected', reason: body.reason },
   });
+  await notifyEmployee(otReq, 'rejected', `was rejected. Reason: ${body.reason}`);
   res.json({ success: true, data: otReq });
 }

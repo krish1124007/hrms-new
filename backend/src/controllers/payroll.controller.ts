@@ -7,6 +7,7 @@ import {
   PayrollCycle,
   PayrollRecord,
   Employee,
+  type IPayrollCycle,
   type IPayrollLine,
   type IPayrollRecord,
 } from '../models/index.js';
@@ -43,6 +44,8 @@ import {
 } from '../services/payslip-pdf.service.js';
 import { deleteFile } from '../lib/local-storage.js';
 import { logger } from '../config/logger.js';
+import { payslipReadyEmail } from '../services/email-templates.js';
+import { notifyPayslipReady, sendMailQuietly } from '../services/notification.service.js';
 
 /* ──────────────────────────────────────────────────────────── */
 /* Helpers                                                       */
@@ -645,6 +648,43 @@ export async function generatePayslips(req: Request, res: Response): Promise<voi
 /* Lock / Mark paid                                              */
 /* ──────────────────────────────────────────────────────────── */
 
+/** How many employees are told at once that their payslip is ready. */
+const PAYSLIP_NOTICE_BATCH = 50;
+
+/**
+ * Tell every employee on a freshly locked cycle that their payslip is ready —
+ * in-app and by e-mail. Employees without a login are skipped (they could not
+ * open it). One query for the cycle's records, one for those employees, then
+ * in batches. Never throws: the lock has already happened.
+ */
+async function announcePayslips(cycle: Pick<IPayrollCycle, '_id' | 'month' | 'year'>): Promise<void> {
+  try {
+    const records = await PayrollRecord.find({ cycleId: cycle._id }).select('employeeId').lean().exec();
+    if (records.length === 0) return;
+    const employees = await Employee.find({
+      _id: { $in: records.map((r) => r.employeeId) },
+      userId: { $ne: null },
+    })
+      .setOptions({ withDeleted: true })
+      .select('userId email')
+      .lean()
+      .exec();
+
+    const period = { month: cycle.month, year: cycle.year };
+    const mail = payslipReadyEmail({ ...period, link: '/payroll/my-payslips' });
+    for (let i = 0; i < employees.length; i += PAYSLIP_NOTICE_BATCH) {
+      await Promise.all(
+        employees.slice(i, i + PAYSLIP_NOTICE_BATCH).map(async (emp) => {
+          await notifyPayslipReady(String(emp.userId), period);
+          if (emp.email) sendMailQuietly({ to: emp.email, ...mail });
+        }),
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, cycleId: String(cycle._id) }, 'payroll: payslip-ready notifications failed');
+  }
+}
+
 /** processed → locked. From here the figures are final and employees can see them. */
 export async function lockCycle(req: Request, res: Response): Promise<void> {
   const found = await PayrollCycle.findById(String(req.params.id)).exec();
@@ -656,6 +696,7 @@ export async function lockCycle(req: Request, res: Response): Promise<void> {
     ...(by ? { lockedBy: by } : {}),
   });
   void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { status: 'locked' } });
+  void announcePayslips(cycle);
   res.json({ success: true, data: cycle });
 }
 

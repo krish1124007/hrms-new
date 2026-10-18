@@ -14,7 +14,9 @@ export type NotificationType =
   | 'system_alert'
   | 'approval_request'
   | 'regularization_request'
-  | 'regularization_decision';
+  | 'regularization_decision'
+  | 'decision'
+  | 'payslip_ready';
 
 export interface INotification extends Document {
   userId: Types.ObjectId;
@@ -43,6 +45,8 @@ const notificationSchema = new Schema<INotification>({
       'approval_request',
       'regularization_request',
       'regularization_decision',
+      'decision',
+      'payslip_ready',
     ],
     required: true,
   },

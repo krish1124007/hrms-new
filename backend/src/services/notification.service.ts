@@ -11,6 +11,9 @@ import { logger } from '../config/logger.js';
 import { getIO } from '../sockets/io-registry.js';
 import { BUSINESS_TZ } from '../lib/business-day.js';
 import { appBaseUrl } from '../lib/app-url.js';
+import { cycleLabel } from '../lib/payroll-cycle.js';
+import { decisionEmail, escapeHtml } from './email-templates.js';
+import { sendMail, type SendMailInput } from './email.service.js';
 
 /* ─────────────── Core ─────────────── */
 
@@ -80,6 +83,80 @@ export async function reportingManagerUserId(
   }
 }
 
+/* ─────────────── Decisions ─────────────── */
+
+export type DecisionModule = 'expense' | 'overtime' | 'leave' | 'regularization';
+
+export interface DecisionNotice {
+  module: DecisionModule;
+  /** What was decided: `approved`, `rejected`, `reimbursed`. */
+  status: string;
+  title: string;
+  /** The sentence under the title; the title alone when omitted. */
+  message?: string;
+  /** Where the employee sees the item: an app path. */
+  link: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Leave and regularization decisions keep the type they have always had (the
+ * bell icon keys on it); expense and overtime decisions are plain `decision`s.
+ */
+const DECISION_TYPE: Record<DecisionModule, NotificationType> = {
+  leave: 'leave_request',
+  regularization: 'regularization_decision',
+  expense: 'decision',
+  overtime: 'decision',
+};
+
+/**
+ * Tell a user how a request of theirs was decided. Whatever the module, the
+ * notification's metadata carries `module` and `status` (plus `metadata`), so
+ * a client can filter on them.
+ */
+export async function notifyDecision(userId: string, notice: DecisionNotice): Promise<void> {
+  await createNotification({
+    userId,
+    type: DECISION_TYPE[notice.module],
+    title: notice.title,
+    message: notice.message ?? notice.title,
+    link: notice.link,
+    metadata: { module: notice.module, status: notice.status, ...notice.metadata },
+  });
+}
+
+/** Fire-and-forget: `sendMail` already logs its own failures; this keeps a rejection from going unhandled. */
+export function sendMailQuietly(input: SendMailInput): void {
+  void sendMail(input).catch((err: unknown) => {
+    logger.warn({ err, to: input.to, subject: input.subject }, 'notification: e-mail failed');
+  });
+}
+
+/**
+ * Tell an employee how a request of theirs was decided, in-app and by e-mail.
+ * Nothing happens for an employee without a login (they could not open the
+ * link). A courtesy, never a failure: errors are logged, not thrown.
+ */
+export async function notifyEmployeeDecision(
+  employeeId: Types.ObjectId | string,
+  notice: DecisionNotice,
+): Promise<void> {
+  try {
+    const emp = await Employee.findById(employeeId).setOptions({ withDeleted: true }).select('userId email').lean().exec();
+    if (!emp?.userId) return;
+    await notifyDecision(String(emp.userId), notice);
+    if (emp.email) {
+      sendMailQuietly({
+        to: emp.email,
+        ...decisionEmail({ title: notice.title, body: notice.message ?? notice.title, link: notice.link }),
+      });
+    }
+  } catch (err) {
+    logger.warn({ err, module: notice.module, employeeId: String(employeeId) }, 'notification: decision notification failed');
+  }
+}
+
 /* ─────────────── Trigger Helpers ─────────────── */
 
 const businessDateFormat = new Intl.DateTimeFormat('en-IN', {
@@ -136,14 +213,13 @@ function decisionSentence(d: LeaveDecision): string {
 
 /** Tell an employee their leave request was approved or rejected (in-app). */
 export async function notifyLeaveDecision(userId: string, d: LeaveDecision): Promise<void> {
-  await createNotification({
-    userId,
-    type: 'leave_request',
+  await notifyDecision(userId, {
+    module: 'leave',
+    status: d.status,
     title: d.status === 'approved' ? 'Leave approved' : 'Leave rejected',
     message: d.reason ? `${decisionSentence(d)} Reason: ${d.reason}` : decisionSentence(d),
     link: d.link,
     metadata: {
-      status: d.status,
       leaveTypeName: d.leaveTypeName,
       dates: formatLeaveDates(d.startDate, d.endDate),
       ...(d.reason ? { reason: d.reason } : {}),
@@ -182,22 +258,18 @@ export async function notifyRegularizationDecision(
   d: RegularizationDecision,
 ): Promise<void> {
   const date = formatBusinessDate(d.date);
-  await createNotification({
-    userId: employeeUserId,
-    type: 'regularization_decision',
+  await notifyDecision(employeeUserId, {
+    module: 'regularization',
+    status: d.status,
     title: d.status === 'approved' ? 'Regularization approved' : 'Regularization rejected',
     message: `Your attendance regularization for ${date} was ${d.status}.`,
     link: '/attendance',
     metadata: {
-      status: d.status,
       date,
       ...(d.attendanceId ? { attendanceId: d.attendanceId } : {}),
     },
   });
 }
-
-const escapeHtml = (value: string): string =>
-  value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 /** The e-mail that goes with `notifyLeaveDecision`. */
 export function leaveDecisionEmail(
@@ -217,24 +289,60 @@ export function leaveDecisionEmail(
   };
 }
 
+const inrFormat = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' });
+
+/** "₹1,200.00" */
+export function formatInr(amount: number): string {
+  return inrFormat.format(amount);
+}
+
 export async function notifyExpenseRequest(
   approverId: string,
   employeeName: string,
   amount: number,
+  metadata: Record<string, unknown> = {},
 ): Promise<void> {
-  const formatted = new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-  }).format(amount);
-
   await createNotification({
     userId: approverId,
     type: 'expense_request',
     title: 'Expense Claim Submitted',
-    message: `${employeeName} submitted an expense claim of ${formatted}.`,
+    message: `${employeeName} submitted an expense claim of ${formatInr(amount)}.`,
     // Route is /expense-claims/requests — '/expenses/claims' 404s.
     link: '/expense-claims/requests',
-    metadata: { employeeName, amount },
+    metadata: { employeeName, amount, ...metadata },
+  });
+}
+
+/** Tell a manager an employee asked for overtime to be approved. */
+export async function notifyOvertimeRequest(
+  managerUserId: string,
+  employeeName: string,
+  hours: number,
+  dateLabel: string,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  await createNotification({
+    userId: managerUserId,
+    type: 'approval_request',
+    title: 'New Overtime Request',
+    message: `${employeeName} has requested ${hours} h of overtime for ${dateLabel}.`,
+    link: '/overtime',
+    metadata: { employeeName, hours, date: dateLabel, ...metadata },
+  });
+}
+
+/** Tell an employee their payslip for a locked payroll cycle can be opened. */
+export async function notifyPayslipReady(
+  userId: string,
+  period: { month: number; year: number },
+): Promise<void> {
+  await createNotification({
+    userId,
+    type: 'payslip_ready',
+    title: 'Payslip ready',
+    message: `Your payslip for ${cycleLabel(period)} is ready.`,
+    link: '/payroll/my-payslips',
+    metadata: { module: 'payroll', month: period.month, year: period.year },
   });
 }
 
@@ -274,10 +382,7 @@ export async function notifyPaymentDue(
   amount: number,
   dueDate: string,
 ): Promise<void> {
-  const formatted = new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-  }).format(amount);
+  const formatted = formatInr(amount);
 
   await createNotification({
     userId: adminId,
