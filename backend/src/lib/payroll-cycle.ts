@@ -130,6 +130,12 @@ export async function claimTransition(
   return updated;
 }
 
+/** "September 2026" for a cycle, in messages. */
+export function cycleLabel(cycle: Pick<IPayrollCycle, 'year' | 'month'>): string {
+  const name = new Date(Date.UTC(cycle.year, cycle.month - 1, 1)).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+  return `${name} ${cycle.year}`;
+}
+
 /** Marks a run as alive: refreshes `updatedAt` while the cycle is still `processing`. */
 export async function touchProcessing(cycleId: Types.ObjectId): Promise<void> {
   await PayrollCycle.updateOne({ _id: cycleId, status: 'processing' }, { $set: { status: 'processing' } }).exec();
@@ -206,10 +212,23 @@ export const DEDUCTION_FIELD_LINES: ReadonlyArray<{ field: LineField; name: stri
   { field: 'loanDeduction', name: 'Loan Deduction' },
 ];
 
-/** A TDS deduction line: typed `tds`, or — on lines written before types — named "TDS". */
-export function isTdsLine(line: Pick<IPayrollLine, 'name' | 'statutoryType'>): boolean {
+/**
+ * A TDS deduction line: typed `tds`, or — on lines written before types — named
+ * "TDS". A salary-structure line (it carries a `componentId`) is never one.
+ */
+export function isTdsLine(line: Pick<IPayrollLine, 'name' | 'statutoryType' | 'componentId'>): boolean {
   if (line.statutoryType) return line.statutoryType === 'tds';
+  if (line.componentId) return false;
   return line.name.trim().toUpperCase() === 'TDS';
+}
+
+/**
+ * A line `applyManualAdjustments` builds from a record field (Over Time,
+ * Arrears, Loan Deduction …): matched by name, but never a salary-structure
+ * line — those carry a `componentId`, whatever the component is called.
+ */
+function isFieldLine(line: Pick<IPayrollLine, 'name' | 'componentId'>, names: ReadonlySet<string>): boolean {
+  return !line.componentId && names.has(line.name);
 }
 
 /** The parts of a payroll record (document or plain object) adjustments touch. */
@@ -238,7 +257,8 @@ function copyLine(line: IPayrollLine): IPayrollLine {
  * 1. every non-null override (0 included) replaces its field;
  * 2. the field lines (Over Time, Expense, Arrears, Reimbursements / Advance,
  *    Late Deduction, Loan Deduction) are stripped and re-added from the
- *    fields; the TDS line takes the `tds` override in place (added as
+ *    fields (a structure line of the same name — it has a `componentId` —
+ *    stays); the TDS line takes the `tds` override in place (added as
  *    `{ name: 'TDS', statutoryType: 'tds' }` when there is none, dropped at 0);
  * 3. totals are recomputed from the lines.
  *
@@ -254,7 +274,7 @@ export function applyManualAdjustments<T extends AdjustableRecord>(record: T): T
 
   // Earnings: computed lines, then one line per positive field.
   const earningNames = new Set(EARNING_FIELD_LINES.map((l) => l.name));
-  const earnings = record.earnings.filter((l) => !earningNames.has(l.name)).map(copyLine);
+  const earnings = record.earnings.filter((l) => !isFieldLine(l, earningNames)).map(copyLine);
   for (const { field, name } of EARNING_FIELD_LINES) {
     const amount = round2(record[field] || 0);
     if (amount > 0) earnings.push({ name, amount });
@@ -262,7 +282,7 @@ export function applyManualAdjustments<T extends AdjustableRecord>(record: T): T
 
   // Deductions: computed lines with TDS kept in its place, then field lines.
   const deductionNames = new Set(DEDUCTION_FIELD_LINES.map((l) => l.name));
-  const base = record.deductions.filter((l) => !deductionNames.has(l.name)).map(copyLine);
+  const base = record.deductions.filter((l) => !isFieldLine(l, deductionNames)).map(copyLine);
   const tdsAt = base.findIndex(isTdsLine);
   const tdsTemplate = tdsAt >= 0 ? base[tdsAt]! : undefined;
   const deductions = base.filter((l) => !isTdsLine(l));

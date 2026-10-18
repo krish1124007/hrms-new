@@ -12,21 +12,22 @@
  *   - claims: reimbursed while the amount still covers the whole claim (a
  *     claim cannot be part-reimbursed); an override of 0 reimburses none.
  * Every write is conditional on the item not having been settled by this
- * cycle (and records the cycle), so settling twice — `markCyclePaid`, then a
- * retry through POST /payroll/cycles/:id/settle — never pays twice. No
- * transactions (standalone Mongo): a failure part-way leaves the rest open
- * for the retry.
+ * cycle (and records the cycle), and a record is marked
+ * `settlement.settledAt` once all of it is done, so settling twice —
+ * `markCyclePaid`, then a retry through POST /payroll/cycles/:id/settle —
+ * never pays twice. No transactions (standalone Mongo): a failure part-way
+ * leaves that record (and the rest) unsettled for the retry.
  *
- * While a cycle is not yet paid, the items it will settle are held: a manual
- * claim reimbursement or loan payment of the same item is refused
- * (`payrollReimbursingClaim` / `payrollDeductingInstallment`).
+ * Until its record is settled an item stays HELD by it (see
+ * payroll-compute.service): no other cycle counts it and it cannot be paid by
+ * hand.
  */
 import type { Types } from 'mongoose';
 import { logger } from '../config/logger.js';
 import { assertTransition } from '../lib/payroll-cycle.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { Loan, type LoanStatus } from '../models/loan.model.js';
-import { PayrollCycle, type IPayrollCycle } from '../models/payroll-cycle.model.js';
+import type { IPayrollCycle } from '../models/payroll-cycle.model.js';
 import { PayrollRecord, type IPayrollSettlement } from '../models/payroll-record.model.js';
 import { claimValue } from './payroll-compute.service.js';
 
@@ -51,10 +52,12 @@ interface SettlingRecord {
 }
 
 /**
- * Settles every record of a `paid` cycle (409 `CYCLE_NOT_EDITABLE` for any
- * other status). Instalments are paid on, and claims reimbursed at, the
- * cycle's `paidAt`; claims get `reimbursementRef` `PAYROLL-<year>-<month>`.
- * Idempotent: returns how much THIS call settled.
+ * Settles every record of a `paid` cycle not settled yet (409
+ * `CYCLE_NOT_EDITABLE` for any other status) and marks it
+ * `settlement.settledAt`, which releases what it held. Instalments are paid
+ * on, and claims reimbursed at, the cycle's `paidAt`; claims get
+ * `reimbursementRef` `PAYROLL-<year>-<month>`. Idempotent: returns how much
+ * THIS call settled.
  */
 export async function settleCycle(cycle: SettlingCycle): Promise<SettlementResult> {
   assertTransition(cycle, 'settle');
@@ -68,8 +71,13 @@ export async function settleCycle(cycle: SettlingCycle): Promise<SettlementResul
     .exec();
   const result: SettlementResult = { installmentsPaid: 0, claimsReimbursed: 0 };
   for (const record of records) {
+    if (record.settlement?.settledAt) continue;
     result.installmentsPaid += await settleInstallments(record, cycleId, paidOn);
     result.claimsReimbursed += await settleClaims(record, cycleId, paidOn, ref);
+    await PayrollRecord.updateOne(
+      { _id: record._id, 'settlement.settledAt': null },
+      { $set: { 'settlement.settledAt': new Date() } },
+    ).exec();
   }
   return result;
 }
@@ -198,43 +206,11 @@ async function settleClaims(
     left = round2(left - value);
     if (modifiedCount > 0) reimbursed += 1;
   }
+  if (left > EPSILON) {
+    logger.warn(
+      { recordId: String(record._id), unapplied: left },
+      'payroll settlement: reimbursements do not match the claims they counted; the remainder was not applied to a claim',
+    );
+  }
   return reimbursed;
-}
-
-/* ──────────────────────────────────────────────────────────── */
-/* Items held by an unpaid cycle                                 */
-/* ──────────────────────────────────────────────────────────── */
-
-/** The first cycle not yet paid among those with a record matching `filter`. */
-async function unpaidCycleWith(filter: Record<string, unknown>): Promise<Pick<IPayrollCycle, 'year' | 'month'> | null> {
-  const cycleIds = await PayrollRecord.find(filter).distinct('cycleId').exec();
-  if (cycleIds.length === 0) return null;
-  return PayrollCycle.findOne({ _id: { $in: cycleIds }, status: { $ne: 'paid' } })
-    .select('year month')
-    .lean<Pick<IPayrollCycle, 'year' | 'month'>>()
-    .exec();
-}
-
-/**
- * The unpaid cycle that will reimburse this claim when it is paid out — a
- * record counted it and pays reimbursements — or `null`.
- */
-export function payrollReimbursingClaim(claimId: Types.ObjectId): Promise<Pick<IPayrollCycle, 'year' | 'month'> | null> {
-  return unpaidCycleWith({ 'settlement.claimIds': claimId, reimbursements: { $gt: 0 } });
-}
-
-/**
- * The unpaid cycle that will pay into this loan instalment when it is paid
- * out — a record counted it and makes a loan deduction — or `null`.
- */
-export function payrollDeductingInstallment(
-  installmentId: Types.ObjectId,
-): Promise<Pick<IPayrollCycle, 'year' | 'month'> | null> {
-  return unpaidCycleWith({ 'settlement.loanInstallments.installmentId': installmentId, loanDeduction: { $gt: 0 } });
-}
-
-/** "September 2026" for a cycle, in messages. */
-export function cycleLabel(cycle: Pick<IPayrollCycle, 'year' | 'month'>): string {
-  const name = new Date(Date.UTC(cycle.year, cycle.month - 1, 1)).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
-  return `${name} ${cycle.year}`;
 }

@@ -30,11 +30,13 @@ import { ExpenseClaim, type IExpenseClaim } from '../models/expense-claim.model.
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
 import { Loan, type ILoan } from '../models/loan.model.js';
+import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { PayrollCycle, type IPayrollCycle } from '../models/payroll-cycle.model.js';
 import { PayrollRecord, type IPayrollLine } from '../models/payroll-record.model.js';
 import { SalaryComponent } from '../models/salary-component.model.js';
 import { SalaryStructure } from '../models/salary-structure.model.js';
 import { invalidateWeekOffRule } from './week-off.service.js';
+import { payslipLines } from './payslip-pdf.service.js';
 import {
   computeRecord,
   dayTally,
@@ -323,15 +325,18 @@ describe('days paid', () => {
   });
 });
 
-describe('earnings from a salary structure', () => {
-  async function structure(components: Array<{ code: string; name: string; type?: string; calculationType: string; value: number }>) {
-    const docs = [];
-    for (const c of components) {
-      const comp = await SalaryComponent.create({ name: c.name, code: c.code, type: c.type ?? 'earning' });
-      docs.push({ componentId: comp._id, calculationType: c.calculationType, value: c.value });
-    }
-    return SalaryStructure.create({ name: `Structure ${seq}`, components: docs });
+let structureSeq = 0;
+async function structure(components: Array<{ code: string; name: string; type?: string; calculationType: string; value: number }>) {
+  structureSeq += 1;
+  const docs = [];
+  for (const c of components) {
+    const comp = await SalaryComponent.create({ name: c.name, code: `${c.code}${structureSeq}`, type: c.type ?? 'earning' });
+    docs.push({ componentId: comp._id, calculationType: c.calculationType, value: c.value });
   }
+  return SalaryStructure.create({ name: `Structure ${structureSeq}`, components: docs });
+}
+
+describe('earnings from a salary structure', () => {
 
   it('basic 20,000 + HRA 40% of basic + fixed 2,000 → lines 20,000 / 8,000 / 2,000', async () => {
     const s = await structure([
@@ -393,6 +398,83 @@ describe('earnings from a salary structure', () => {
       ['DA', 1000],
       ['Other Allowance', 3000],
     ]);
+  });
+
+  it('a structure component named "Arrears" stays on the payslip next to the Arrears override', async () => {
+    const s = await structure([
+      { code: 'BASIC', name: 'Basic', calculationType: 'percentage_of_basic', value: 100 },
+      { code: 'ARR', name: 'Arrears', calculationType: 'fixed', value: 1000 },
+    ]);
+    const emp = await makeEmployee({ salary: { basic: 30000 }, salaryStructureId: s._id });
+    const c = await september();
+    await processCycle(c);
+    const rec = (await recordOf(c, emp))!;
+    expect(rec.earnings.map((l) => [l.name, l.amount])).toEqual([
+      ['Basic', 30000],
+      ['Arrears', 1000],
+    ]);
+    expect(rec.grossSalary).toBe(31000);
+
+    const res = await request(app)
+      .patch(`${API}/payroll/cycles/${String(c._id)}/records/${String(rec._id)}`)
+      .set(auth)
+      .send({ arrears: 500 });
+
+    expect(res.status).toBe(200);
+    const after = (await recordOf(c, emp))!;
+    expect(after.earnings.map((l) => [l.name, l.amount, !!l.componentId])).toEqual([
+      ['Basic', 30000, true],
+      ['Arrears', 1000, true],
+      ['Arrears', 500, false],
+    ]);
+    expect(after.grossSalary).toBe(31500);
+    // The PDF prints exactly these rows, and they add up to the gross.
+    const printed = payslipLines(after).earnings;
+    expect(printed).toHaveLength(3);
+    expect(printed.reduce((sum, l) => sum + l.amount, 0)).toBe(31500);
+  });
+
+  it('PF is on the structure’s basic / DA lines: Basic 20,000 (salary basic 10,000) → PF 1,800', async () => {
+    const s = await structure([
+      { code: 'BASIC', name: 'Basic Salary', calculationType: 'fixed', value: 20000 },
+      { code: 'HRA', name: 'HRA', calculationType: 'fixed', value: 5000 },
+    ]);
+    const emp = await makeEmployee({ salary: { basic: 10000 }, salaryStructureId: s._id });
+
+    const r = (await computeRecord(emp, await september(), cfg))!;
+
+    expect(r.deductions).toContainEqual(expect.objectContaining({ name: 'PF Employee', amount: 1800, statutoryType: 'pf' }));
+    expect(r.employerContributions).toContainEqual(expect.objectContaining({ name: 'PF Employer', amount: 1800 }));
+  });
+
+  it('PF falls back to the salary basic + DA when no structure line is a basic or DA', async () => {
+    const s = await structure([{ code: 'CONS', name: 'Consolidated Pay', calculationType: 'fixed', value: 20000 }]);
+    const emp = await makeEmployee({ salary: { basic: 10000, da: 1000 }, salaryStructureId: s._id });
+
+    const r = (await computeRecord(emp, await september(), cfg))!;
+
+    // 12% of 11,000.
+    expect(r.deductions).toContainEqual(expect.objectContaining({ name: 'PF Employee', amount: 1320 }));
+  });
+});
+
+describe('overtime', () => {
+  it('is paid on the full-month basis: a joiner on the 30th earns the same for 2 h as a full-month employee', async () => {
+    const joiner = await makeEmployee({ joiningDate: new Date('2026-09-30') });
+    const fullMonth = await makeEmployee();
+    for (const emp of [joiner, fullMonth]) {
+      await OvertimeRequest.create({ employee: emp._id, date: label('2026-09-30'), hours: 2, reason: 'month end', status: 'approved' });
+    }
+    const c = await september();
+
+    const j = (await computeRecord(joiner, c, cfg))!;
+    const f = (await computeRecord(fullMonth, c, cfg))!;
+
+    // 30,000 × 120 min / (30 days × 480 min).
+    expect(f.overtimeAmount).toBe(250);
+    expect(j.overtimeAmount).toBe(250);
+    expect(j.daysPaid).toBe(1);
+    expect(j.earnings).toContainEqual({ name: 'Over Time', amount: 250 });
   });
 });
 
@@ -644,6 +726,28 @@ describe('HR overrides and settlement', () => {
     expect((await ExpenseClaim.findById(second._id).lean())!.status).toBe('approved');
   });
 
+  it('logs a warning when the reimbursements cannot be applied to the claims in full', async () => {
+    const emp = await makeEmployee();
+    const claim = await claimFor(emp, { amount: 1500 });
+    const c = await september();
+    await processCycle(c);
+    const rec = (await recordOf(c, emp))!;
+    await request(app)
+      .patch(`${API}/payroll/cycles/${String(c._id)}/records/${String(rec._id)}`)
+      .set(auth)
+      .send({ reimbursements: 1000 })
+      .expect(200);
+    const warn = vi.spyOn(logger, 'warn');
+
+    await payCycle(c);
+
+    expect((await ExpenseClaim.findById(claim._id).lean())!.status).toBe('approved');
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ recordId: String(rec._id), unapplied: 1000 }),
+      expect.any(String),
+    );
+  });
+
   it('clearing an override puts the computed EMI and reimbursements back', async () => {
     const emp = await makeEmployee();
     await loanFor(emp, ['2026-09']);
@@ -709,8 +813,117 @@ describe('settlement failures and retries', () => {
   });
 });
 
+describe('items held until settled', () => {
+  it('(a) a paid cycle whose settlement failed still holds its claim: the next month does not count it, and it is reimbursed once', async () => {
+    const emp = await makeEmployee();
+    const claim = await claimFor(emp, { amount: 1500 });
+    const sep = await september();
+    await processCycle(sep);
+    vi.spyOn(ExpenseClaim, 'updateOne').mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    expect((await payCycle(sep)).body.settlement).toEqual({ ok: false });
+
+    const oct = await PayrollCycle.create({ year: 2026, month: 10, status: 'draft' });
+    await processCycle(oct);
+    expect((await recordOf(oct, emp))!.reimbursements).toBe(0);
+    const manual = await request(app)
+      .patch(`${API}/expense-claims/requests/${String(claim._id)}/reimburse`)
+      .set(auth)
+      .send({ reimbursementRef: 'CASH-1' });
+    expect(manual.status).toBe(409);
+    expect(manual.body.error.code).toBe('CLAIM_IN_PAYROLL');
+
+    const retry = await request(app).post(`${API}/payroll/cycles/${String(sep._id)}/settle`).set(auth);
+    expect(retry.body.data).toEqual({ installmentsPaid: 0, claimsReimbursed: 1 });
+    const after = (await ExpenseClaim.findById(claim._id).lean())!;
+    expect(after.status).toBe('reimbursed');
+    expect(String(after.payrollCycleId)).toBe(String(sep._id));
+    expect((await recordOf(sep, emp))!.settlement.settledAt).toBeInstanceOf(Date);
+
+    // October, re-processed after the settlement, still does not pay it.
+    await processCycle(oct);
+    expect((await recordOf(oct, emp))!.reimbursements).toBe(0);
+  });
+
+  it('the same holds for a loan instalment', async () => {
+    const emp = await makeEmployee();
+    const loan = await loanFor(emp, ['2026-09']);
+    const sep = await september();
+    await processCycle(sep);
+    vi.spyOn(Loan, 'findById').mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    expect((await payCycle(sep)).body.settlement).toEqual({ ok: false });
+
+    const manual = await request(app)
+      .post(`${API}/loans/${String(loan._id)}/payments`)
+      .set(auth)
+      .send({ installmentId: String(loan.installments[0]!._id), amount: 2000 });
+    expect(manual.status).toBe(409);
+    expect(manual.body.error.code).toBe('INSTALLMENT_IN_PAYROLL');
+
+    await request(app).post(`${API}/payroll/cycles/${String(sep._id)}/settle`).set(auth).expect(200);
+    expect((await Loan.findById(loan._id).lean())!).toMatchObject({ status: 'closed', totalPaid: 2000 });
+  });
+
+  it('(b) an override of 0 does not release the claim to the next month; clearing it then pays it once', async () => {
+    const emp = await makeEmployee();
+    const claim = await claimFor(emp, { amount: 1500 });
+    const sep = await september();
+    await processCycle(sep);
+    const sepUrl = `${API}/payroll/cycles/${String(sep._id)}/records/${String((await recordOf(sep, emp))!._id)}`;
+    await request(app).patch(sepUrl).set(auth).send({ reimbursements: 0 }).expect(200);
+
+    const oct = await PayrollCycle.create({ year: 2026, month: 10, status: 'draft' });
+    await processCycle(oct);
+    expect((await recordOf(oct, emp))!.reimbursements).toBe(0);
+
+    const cleared = await request(app).patch(sepUrl).set(auth).send({ reimbursements: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.data.reimbursements).toBe(1500);
+
+    await payCycle(sep);
+    const after = (await ExpenseClaim.findById(claim._id).lean())!;
+    expect(after.status).toBe('reimbursed');
+    expect(String(after.payrollCycleId)).toBe(String(sep._id));
+  });
+
+  it('clearing an override is refused (409 ITEM_HELD) while another cycle holds the item', async () => {
+    const emp = await makeEmployee();
+    const claim = await claimFor(emp, { amount: 1500 });
+    const sep = await september();
+    await processCycle(sep);
+    const sepRecord = (await recordOf(sep, emp))!;
+    const sepUrl = `${API}/payroll/cycles/${String(sep._id)}/records/${String(sepRecord._id)}`;
+    await request(app).patch(sepUrl).set(auth).send({ reimbursements: 0 }).expect(200);
+    // September falls back to draft (a run that failed part-way): its records no longer hold anything.
+    await PayrollCycle.updateOne({ _id: sep._id }, { $set: { status: 'draft' } });
+    const oct = await PayrollCycle.create({ year: 2026, month: 10, status: 'draft' });
+    await processCycle(oct);
+    expect((await recordOf(oct, emp))!.reimbursements).toBe(1500);
+
+    const cleared = await request(app).patch(sepUrl).set(auth).send({ reimbursements: null });
+    expect(cleared.status).toBe(409);
+    expect(cleared.body.error.code).toBe('ITEM_HELD');
+    expect(cleared.body.error.message).toContain('October 2026');
+    const unchanged = (await recordOf(sep, emp))!;
+    expect(unchanged.reimbursements).toBe(0);
+    expect(unchanged.manualAdjustments.reimbursements).toBe(0);
+    // Setting an amount would pay it just the same.
+    expect((await request(app).patch(sepUrl).set(auth).send({ reimbursements: 1500 })).status).toBe(409);
+
+    await payCycle(oct);
+    const after = (await ExpenseClaim.findById(claim._id).lean())!;
+    expect(after.status).toBe('reimbursed');
+    expect(String(after.payrollCycleId)).toBe(String(oct._id));
+  });
+});
+
 describe('manual payments of what payroll is about to pay', () => {
-  it('a claim in an unpaid payroll cannot also be reimbursed by hand — unless HR took it out of that payroll', async () => {
+  it('a claim a payroll record holds cannot be reimbursed by hand until that record is settled', async () => {
     const emp = await makeEmployee();
     const claim = await claimFor(emp, { amount: 1500 });
     const c = await september();
@@ -720,14 +933,21 @@ describe('manual payments of what payroll is about to pay', () => {
     const refused = await request(app).patch(url).set(auth).send({ reimbursementRef: 'CASH-1' });
     expect(refused.status).toBe(409);
     expect(refused.body.error.code).toBe('CLAIM_IN_PAYROLL');
+    expect(refused.body.error.message).toContain('September 2026');
     expect((await ExpenseClaim.findById(claim._id).lean())!.status).toBe('approved');
 
+    // Taking it out of the payroll (override 0) does not release it: the record still holds it…
     const rec = (await recordOf(c, emp))!;
     await request(app)
       .patch(`${API}/payroll/cycles/${String(c._id)}/records/${String(rec._id)}`)
       .set(auth)
       .send({ reimbursements: 0 })
       .expect(200);
+    expect((await request(app).patch(url).set(auth).send({ reimbursementRef: 'CASH-1' })).status).toBe(409);
+
+    // …until the cycle is paid and settled (which, at 0, reimbursed nothing).
+    await payCycle(c);
+    expect((await ExpenseClaim.findById(claim._id).lean())!.status).toBe('approved');
     expect((await request(app).patch(url).set(auth).send({ reimbursementRef: 'CASH-1' })).status).toBe(200);
   });
 

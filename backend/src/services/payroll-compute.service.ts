@@ -11,7 +11,8 @@
  *                 the month
  *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS
  *   loans/claims  the EMIs due in the month and the approved claims not yet
- *                 reimbursed (nor counted by another unpaid cycle)
+ *                 reimbursed — except what another record holds (counted
+ *                 and not settled yet; see "Items held by a payroll record")
  *
  * The figures computed for the overridable fields are kept in
  * `record.computed`, HR's overrides go on top (`applyManualAdjustments`),
@@ -39,6 +40,7 @@ import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { PayrollCycle, type IPayrollCycle } from '../models/payroll-cycle.model.js';
 import {
   PayrollRecord,
+  type IPayrollRecord,
   type IPayrollComputedFigures,
   type IPayrollLine,
   type IPayrollManualAdjustments,
@@ -46,7 +48,8 @@ import {
   type IPayrollSettlementInstallment,
 } from '../models/payroll-record.model.js';
 import type { CalculationType, ComponentType, ISalaryComponent } from '../models/salary-component.model.js';
-import { applyManualAdjustments } from '../lib/payroll-cycle.js';
+import { applyManualAdjustments, cycleLabel } from '../lib/payroll-cycle.js';
+import { AppError } from '../lib/errors.js';
 import { DAY_MS, atBusinessTime, startOfBusinessDay } from '../lib/business-day.js';
 import {
   esiEligibility,
@@ -353,14 +356,14 @@ function proRater(daysPaid: number, monthDays: number): (amount: number) => numb
 }
 
 /**
- * The earning lines for `daysPaid` paid days of a `monthDays`-day month.
- * With a populated salary structure: one line per earning component (named
- * after it, carrying its `componentId`), pro-rated. Without: Basic, HRA, DA
- * (when there is one) and Other Allowance (`specialAllowance`), pro-rated.
+ * The earning lines, from the structure's amounts (`structureAmounts`) when
+ * there are any, else from the salary components.
  */
-export function earningsFor(employee: SalaryEmployee, daysPaid: number, monthDays: number): IPayrollLine[] {
-  const proRate = proRater(daysPaid, monthDays);
-  const structure = structureAmounts(employee);
+function earningLines(
+  employee: SalaryEmployee,
+  structure: StructureAmount[] | null,
+  proRate: (amount: number) => number,
+): IPayrollLine[] {
   if (structure) {
     return structure
       .filter((a) => a.component.type === 'earning')
@@ -376,35 +379,68 @@ export function earningsFor(employee: SalaryEmployee, daysPaid: number, monthDay
   return lines;
 }
 
+/**
+ * The earning lines for `daysPaid` paid days of a `monthDays`-day month.
+ * With a populated salary structure: one line per earning component (named
+ * after it, carrying its `componentId`), pro-rated. Without: Basic, HRA, DA
+ * (when there is one) and Other Allowance (`specialAllowance`), pro-rated.
+ */
+export function earningsFor(employee: SalaryEmployee, daysPaid: number, monthDays: number): IPayrollLine[] {
+  return earningLines(employee, structureAmounts(employee), proRater(daysPaid, monthDays));
+}
+
 /** The full-month gross: the structure's earnings, or the salary components. */
-export function fullMonthGrossOf(employee: SalaryEmployee): number {
-  const structure = structureAmounts(employee);
+function fullMonthGrossOf(employee: SalaryEmployee, structure: StructureAmount[] | null): number {
   if (!structure) return salaryComponentsGross(employee);
   return round2(structure.filter((a) => a.component.type === 'earning').reduce((s, a) => s + a.fullMonth, 0));
 }
 
 /** A structure's deduction or employer-contribution components, at their full-month amount. */
-function structureLines(employee: SalaryEmployee, type: Exclude<ComponentType, 'earning'>): IPayrollLine[] {
-  return (structureAmounts(employee) ?? [])
+function structureLines(structure: StructureAmount[] | null, type: Exclude<ComponentType, 'earning'>): IPayrollLine[] {
+  return (structure ?? [])
     .filter((a) => a.component.type === type)
     .map((a) => ({ componentId: a.component._id, name: a.component.name, amount: round2(a.fullMonth) }))
     .filter((l) => l.amount > 0);
 }
 
+/** Structure components that are PF wages: the basic and the dearness allowance. */
+const PF_WAGE_COMPONENT = /basic|dearness|^da$/i;
+
 /**
- * Overtime pay using the company formula:
- *   (Gross / 2) / actualWorkingDays / 8 / 60 × OT_minutes × 2
- * Simplifies to:
- *   Gross × OT_minutes / (actualWorkingDays × 480)
- *
- * Worked example (gross 50,000, 26 days, 50 OT min):
- *   50,000 × 50 / (26 × 480) = 200.32  ✓
- *
- * Returns 0 if any divisor is zero (no presence ⇒ no OT pay).
+ * The earned wage PF is on. With a structure: its earned lines whose
+ * component is a basic or DA (`PF_WAGE_COMPONENT`); when none is, and without
+ * a structure, the pro-rated `salary.basic + salary.da`.
  */
-export function computeOvertimePay(fullMonthGross: number, otMinutes: number, actualWorkingDays: number): number {
-  if (fullMonthGross <= 0 || otMinutes <= 0 || actualWorkingDays <= 0) return 0;
-  return round2((fullMonthGross * otMinutes) / (actualWorkingDays * 480));
+function pfWageOf(
+  employee: SalaryEmployee,
+  earnings: IPayrollLine[],
+  proRate: (amount: number) => number,
+): number {
+  const fromStructure = earnings.filter((l) => l.componentId && PF_WAGE_COMPONENT.test(l.name.trim()));
+  if (fromStructure.length > 0) return round2(fromStructure.reduce((s, l) => s + l.amount, 0));
+  return round2(proRate(num(employee.salary?.basic)) + proRate(num(employee.salary?.da)));
+}
+
+/** Overtime pays on an 8-hour day (480 minutes). */
+const OVERTIME_DAY_MINUTES = 480;
+
+/**
+ * Overtime pay at the company rate:
+ *   (Gross / 2) / monthDays / 8 / 60 × OT_minutes × 2
+ * which simplifies to
+ *   Gross × OT_minutes / (monthDays × 480)
+ * on the FULL-month gross and the calendar days of the month — never the
+ * paid window, so a joiner's or leaver's overtime hour is worth what anyone
+ * else's is.
+ *
+ * Worked example (gross 30,000, a 30-day month, 120 OT min):
+ *   30,000 × 120 / (30 × 480) = 250
+ *
+ * Returns 0 when there is nothing to pay or no month to divide by.
+ */
+export function computeOvertimePay(fullMonthGross: number, otMinutes: number, monthDays: number): number {
+  if (fullMonthGross <= 0 || otMinutes <= 0 || monthDays <= 0) return 0;
+  return round2((fullMonthGross * otMinutes) / (monthDays * OVERTIME_DAY_MINUTES));
 }
 
 /* ──────────────────────────────────────────────────────────── */
@@ -445,38 +481,148 @@ export function claimValue(claim: { amount?: number | null; acceptedAmount?: num
   return round2(num(claim.acceptedAmount ?? claim.amount));
 }
 
-/**
- * The employee's approved claims another cycle — one not yet paid — will
- * reimburse: its record counted them and pays reimbursements.
- */
-async function claimsHeldElsewhere(employeeId: Types.ObjectId, cycleId: Types.ObjectId): Promise<Set<string>> {
-  const openCycles = await PayrollCycle.find({ _id: { $ne: cycleId }, status: { $ne: 'paid' } }).distinct('_id').exec();
-  if (openCycles.length === 0) return new Set();
-  const held = await PayrollRecord.find({
-    employeeId,
-    cycleId: { $in: openCycles },
-    reimbursements: { $gt: 0 },
-  })
-    .distinct('settlement.claimIds')
-    .exec();
-  return new Set(held.map(String));
-}
-
-/** Approved claims not reimbursed yet nor held by another unpaid cycle, oldest first. */
+/** Approved claims not reimbursed yet nor held by another record, oldest first. */
 async function claimsToReimburse(
   employeeId: Types.ObjectId,
-  cycleId: Types.ObjectId,
+  held: HeldItems,
 ): Promise<Array<{ id: Types.ObjectId; amount: number }>> {
   const claims = await ExpenseClaim.find({ employeeId, status: 'approved' })
     .select('amount acceptedAmount')
     .sort({ date: 1, _id: 1 })
     .lean()
     .exec();
-  if (claims.length === 0) return [];
-  const held = await claimsHeldElsewhere(employeeId, cycleId);
   return claims
-    .filter((c) => !held.has(String(c._id)))
+    .filter((c) => !held.claimIds.has(String(c._id)))
     .map((c) => ({ id: c._id as Types.ObjectId, amount: claimValue(c) }));
+}
+
+/* ──────────────────────────────────────────────────────────── */
+/* Items held by a payroll record                                */
+/* ──────────────────────────────────────────────────────────── */
+
+/*
+ * A record HOLDS the claims and loan instalments it counted
+ * (`record.settlement`) from processing until `settleCycle` settles it
+ * (`settlement.settledAt`) — whatever its cycle's status, except a draft
+ * (a run that failed part-way; re-processing replaces it). While held, an
+ * item is not counted by another cycle and cannot be paid by hand, so it is
+ * paid exactly once, by the record that holds it.
+ */
+
+/** The claims and instalments held by records, as id strings. */
+export interface HeldItems {
+  claimIds: Set<string>;
+  installmentIds: Set<string>;
+}
+
+interface HoldingRecord {
+  _id: Types.ObjectId;
+  cycleId: Types.ObjectId;
+  settlement?: Partial<IPayrollSettlement> | null;
+}
+
+type CycleName = Pick<IPayrollCycle, 'year' | 'month'>;
+
+/**
+ * The records holding items (not settled, of a cycle that is not a draft,
+ * counting something) that also match `filter`, leaving out the records of
+ * `exceptCycleId`; with each one's cycle. Two queries.
+ */
+async function holdingRecords(
+  filter: FilterQuery<IPayrollRecord>,
+  exceptCycleId?: Types.ObjectId,
+): Promise<Array<HoldingRecord & { cycle: CycleName }>> {
+  const cycles = await PayrollCycle.find({
+    status: { $ne: 'draft' },
+    ...(exceptCycleId ? { _id: { $ne: exceptCycleId } } : {}),
+  })
+    .select('year month')
+    .lean()
+    .exec();
+  if (cycles.length === 0) return [];
+  const byId = new Map(cycles.map((c) => [String(c._id), { year: c.year, month: c.month }]));
+  const records = await PayrollRecord.find({
+    ...filter,
+    cycleId: { $in: cycles.map((c) => c._id) },
+    'settlement.settledAt': null,
+    $or: [{ 'settlement.claimIds.0': { $exists: true } }, { 'settlement.loanInstallments.0': { $exists: true } }],
+  })
+    .select('cycleId settlement')
+    .lean<HoldingRecord[]>()
+    .exec();
+  return records.map((r) => ({ ...r, cycle: byId.get(String(r.cycleId))! }));
+}
+
+/**
+ * Every item held by a record of a cycle other than `exceptCycleId` (of one
+ * employee, when given). `processCycle` loads this once per run.
+ */
+export async function heldItems(exceptCycleId?: Types.ObjectId, employeeId?: Types.ObjectId): Promise<HeldItems> {
+  const held: HeldItems = { claimIds: new Set(), installmentIds: new Set() };
+  for (const record of await holdingRecords(employeeId ? { employeeId } : {}, exceptCycleId)) {
+    for (const id of record.settlement?.claimIds ?? []) held.claimIds.add(String(id));
+    for (const item of record.settlement?.loanInstallments ?? []) held.installmentIds.add(String(item.installmentId));
+  }
+  return held;
+}
+
+/** The cycle whose record holds this claim, or `null`. */
+export async function cycleHoldingClaim(claimId: Types.ObjectId): Promise<CycleName | null> {
+  const [holder] = await holdingRecords({ 'settlement.claimIds': claimId });
+  return holder?.cycle ?? null;
+}
+
+/** The cycle whose record holds this loan instalment, or `null`. */
+export async function cycleHoldingInstallment(installmentId: Types.ObjectId): Promise<CycleName | null> {
+  const [holder] = await holdingRecords({ 'settlement.loanInstallments.installmentId': installmentId });
+  return holder?.cycle ?? null;
+}
+
+const itemHeld = (message: string): AppError => new AppError(message, 409, 'ITEM_HELD');
+
+/**
+ * Before an edit that makes the record pay what it counted — its
+ * reimbursements or loan deduction back to the computed figure (override
+ * cleared) or set to an amount — 409 `ITEM_HELD` when one of the counted
+ * claims / instalments is held by another record, or was settled meanwhile:
+ * paying this record would pay it a second time.
+ */
+export async function assertCountedItemsPayable(
+  record: {
+    _id: unknown;
+    reimbursements?: number;
+    loanDeduction?: number;
+    settlement?: Partial<IPayrollSettlement> | null;
+  },
+  fields: ReadonlyArray<'reimbursements' | 'loanDeduction'>,
+): Promise<void> {
+  const otherRecords = { _id: { $ne: record._id } };
+
+  const claimIds = record.settlement?.claimIds ?? [];
+  if (fields.includes('reimbursements') && (record.reimbursements ?? 0) > 0 && claimIds.length > 0) {
+    const [holder] = await holdingRecords({ ...otherRecords, 'settlement.claimIds': { $in: claimIds } });
+    if (holder) {
+      throw itemHeld(`An expense claim this record reimburses is held by the ${cycleLabel(holder.cycle)} payroll.`);
+    }
+    if (await ExpenseClaim.exists({ _id: { $in: claimIds }, status: { $ne: 'approved' } }).exec()) {
+      throw itemHeld('An expense claim this record reimburses is no longer awaiting reimbursement. Re-process the cycle.');
+    }
+  }
+
+  const installmentIds = (record.settlement?.loanInstallments ?? []).map((i) => i.installmentId);
+  if (fields.includes('loanDeduction') && (record.loanDeduction ?? 0) > 0 && installmentIds.length > 0) {
+    const [holder] = await holdingRecords({
+      ...otherRecords,
+      'settlement.loanInstallments.installmentId': { $in: installmentIds },
+    });
+    if (holder) {
+      throw itemHeld(`A loan instalment this record deducts is held by the ${cycleLabel(holder.cycle)} payroll.`);
+    }
+    const settled = await Loan.exists({
+      installments: { $elemMatch: { _id: { $in: installmentIds }, status: { $nin: PENDING_INSTALLMENTS } } },
+    }).exec();
+    if (settled) throw itemHeld('A loan instalment this record deducts has been paid meanwhile. Re-process the cycle.');
+  }
 }
 
 /* ──────────────────────────────────────────────────────────── */
@@ -486,12 +632,20 @@ async function claimsToReimburse(
 export interface PayrollComputeConfig {
   /** Late check-ins a month that cost nothing; each one beyond costs half a day. */
   freeLateDaysPerMonth: number;
+  /**
+   * The items other cycles' records hold (`heldItems(cycleId)`), loaded once
+   * per run; without it `computeRecord` loads the employee's own.
+   */
+  held?: HeldItems;
 }
 
-/** The attendance settings payroll reads — load once per run. */
-export async function loadComputeConfig(): Promise<PayrollComputeConfig> {
+/** What a run of `cycleId` reads once: the attendance settings and the held items. */
+export async function loadComputeConfig(cycleId?: Types.ObjectId): Promise<PayrollComputeConfig> {
   const cfg = await AttendanceConfig.findOne({}).lean().exec();
-  return { freeLateDaysPerMonth: cfg?.settings?.freeLateDaysPerMonth ?? 3 };
+  return {
+    freeLateDaysPerMonth: cfg?.settings?.freeLateDaysPerMonth ?? 3,
+    ...(cycleId ? { held: await heldItems(cycleId) } : {}),
+  };
 }
 
 export type ManualAdjustments = Partial<IPayrollManualAdjustments>;
@@ -556,8 +710,9 @@ export async function computeRecord(
   const daysPaid = round2(Math.max(0, window.calendarDays - lopDays));
   const proRate = proRater(daysPaid, monthDays);
 
-  const earnings = earningsFor(employee, daysPaid, monthDays);
-  const fullMonthGross = fullMonthGrossOf(employee);
+  const structure = structureAmounts(employee);
+  const earnings = earningLines(employee, structure, proRate);
+  const fullMonthGross = fullMonthGrossOf(employee, structure);
 
   // Overtime: only formally approved requests are paid, at the company rate.
   const { from, to } = instantsOf(window.start, window.end);
@@ -570,12 +725,12 @@ export async function computeRecord(
     .lean()
     .exec();
   const overtimeHours = round2(overtime.reduce((s, r) => s + (r.hours ?? 0), 0));
-  const overtimeAmount = computeOvertimePay(fullMonthGross, overtimeHours * 60, daysPaid);
+  const overtimeAmount = computeOvertimePay(fullMonthGross, overtimeHours * 60, monthDays);
 
   // Statutory deductions are on the wages earned: the pro-rated salary plus overtime.
   const earnedGross = round2(earnings.reduce((s, l) => s + l.amount, 0) + overtimeAmount);
   // PF on the earned basic + DA (capped at the wage ceiling in lib/statutory).
-  const pfWage = round2(proRate(num(employee.salary?.basic)) + proRate(num(employee.salary?.da)));
+  const pfWage = pfWageOf(employee, earnings, proRate);
 
   // ESI applicability is decided once per contribution period from the full-month gross.
   const periodKey = esiPeriodKey(new Date(Date.UTC(cycle.year, cycle.month - 1, 1)));
@@ -598,12 +753,12 @@ export async function computeRecord(
   deductions.push({ name: 'PF Employee', amount: pfEmployee(pfWage), statutoryType: 'pf' });
   deductions.push({ name: 'ESI Employee', amount: esiEmployee(earnedGross, esi.eligible), statutoryType: 'esi' });
   if (tds > 0) deductions.push({ name: 'TDS', amount: tds, statutoryType: 'tds' });
-  deductions.push(...structureLines(employee, 'deduction'));
+  deductions.push(...structureLines(structure, 'deduction'));
 
   const employerContributions: IPayrollLine[] = [
     { name: 'PF Employer', amount: pfEmployer(pfWage), statutoryType: 'pf' },
     { name: 'ESI Employer', amount: esiEmployer(earnedGross, esi.eligible), statutoryType: 'esi' },
-    ...structureLines(employee, 'employer_contribution'),
+    ...structureLines(structure, 'employer_contribution'),
   ];
 
   // Every late check-in beyond the monthly free quota costs half a day's gross.
@@ -611,8 +766,12 @@ export async function computeRecord(
   const penalisableLate = Math.max(0, tally.lateLogins - cfg.freeLateDaysPerMonth);
   const lateDeduction = round2(dayRate * 0.5 * penalisableLate);
 
-  const loanInstallments = await installmentsDue(employeeId, periodOf(cycle.year, cycle.month));
-  const claims = await claimsToReimburse(employeeId, cycle._id as Types.ObjectId);
+  // Nothing another record holds (until it is settled) is counted again.
+  const held = cfg.held ?? (await heldItems(cycle._id as Types.ObjectId, employeeId));
+  const loanInstallments = (await installmentsDue(employeeId, periodOf(cycle.year, cycle.month))).filter(
+    (i) => !held.installmentIds.has(String(i.installmentId)),
+  );
+  const claims = await claimsToReimburse(employeeId, held);
 
   const computed: IPayrollComputedFigures = {
     arrears: 0,

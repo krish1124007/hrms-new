@@ -59,7 +59,8 @@ export function payslipLines(record: PayslipLineSource): {
   ): void => {
     for (const { field, name } of defs) {
       const amount = Number(record[field]) || 0;
-      if (amount > 0 && !lines.some((l) => l.name === name)) lines.push({ name, amount });
+      // A structure line of the same name (it has a componentId) is not the field's line.
+      if (amount > 0 && !lines.some((l) => l.name === name && !l.componentId)) lines.push({ name, amount });
     }
   };
   fill(earnings, EARNING_FIELD_LINES);

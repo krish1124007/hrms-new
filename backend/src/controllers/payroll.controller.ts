@@ -32,6 +32,7 @@ import {
 import { settleCycle, type SettlementResult } from '../services/payroll-settlement.service.js';
 import {
   STRUCTURE_POPULATE,
+  assertCountedItemsPayable,
   computeRecord,
   loadComputeConfig,
   payrollEmployeeFilter,
@@ -337,7 +338,8 @@ export async function processCycle(req: Request, res: Response): Promise<void> {
 
     // Compute everything before touching the stored records, so a failure
     // here leaves them (and their overrides) exactly as they were.
-    const cfg = await loadComputeConfig();
+    // The items other cycles hold are read once for the whole run.
+    const cfg = await loadComputeConfig(cycleId);
     const employees = await Employee.find(payrollEmployeeFilter(cycle.year, cycle.month))
       .populate(STRUCTURE_POPULATE)
       .exec();
@@ -527,6 +529,12 @@ export async function updateRecord(req: Request, res: Response): Promise<void> {
   }
   if (body.note !== undefined) record.manualAdjustments.note = body.note || undefined;
   applyManualAdjustments(record);
+  // Clearing (or setting) the reimbursements / loan deduction makes the record
+  // pay the claims / EMIs it counted: refused while another record holds one.
+  await assertCountedItemsPayable(
+    record,
+    (['reimbursements', 'loanDeduction'] as const).filter((field) => body[field] !== undefined),
+  );
   // A generated payslip shows the old figures: drop it. The next download
   // (or generate-payslips run) renders it again from the edited record.
   const stalePayslip = record.payslipUrl;

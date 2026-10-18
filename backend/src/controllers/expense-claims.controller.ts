@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { cycleLabel, payrollReimbursingClaim } from '../services/payroll-settlement.service.js';
+import { cycleHoldingClaim } from '../services/payroll-compute.service.js';
+import { cycleLabel } from '../lib/payroll-cycle.js';
 import { getUserId } from '../lib/async-context.js';
 import {
   assertNotSelfApproval,
@@ -350,9 +351,9 @@ export async function rejectClaim(req: Request, res: Response): Promise<void> {
 
 /**
  * Manual reimbursement (cash, a separate transfer). Approved claims are
- * otherwise paid with payroll and settled when the cycle is paid
- * (payroll-settlement.service), so a claim an unpaid cycle is about to
- * reimburse is refused here — 409 `CLAIM_IN_PAYROLL` — rather than paid twice.
+ * otherwise paid with payroll: a payroll record that counted the claim holds
+ * it until its cycle is paid and settled, and meanwhile it is refused here —
+ * 409 `CLAIM_IN_PAYROLL` — rather than paid twice.
  */
 export async function reimburseClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof reimburseClaimSchema>;
@@ -361,10 +362,10 @@ export async function reimburseClaim(req: Request, res: Response): Promise<void>
   if (doc.status !== 'approved') {
     throw new ValidationAppError(`Can only reimburse approved claims (current: ${doc.status})`);
   }
-  const payroll = await payrollReimbursingClaim(doc._id as Types.ObjectId);
+  const payroll = await cycleHoldingClaim(doc._id as Types.ObjectId);
   if (payroll) {
     throw new AppError(
-      `This claim is reimbursed with the ${cycleLabel(payroll)} payroll. Set that record's reimbursements to 0 to pay it here instead.`,
+      `This claim is held by the ${cycleLabel(payroll)} payroll until that payroll is paid and settled.`,
       409,
       'CLAIM_IN_PAYROLL',
     );

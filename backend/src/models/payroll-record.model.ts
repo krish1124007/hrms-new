@@ -53,11 +53,15 @@ export interface IPayrollSettlementInstallment {
 /**
  * What the record counted, so paying the cycle settles exactly that: the loan
  * instalments behind `loanDeduction` and the expense claims behind
- * `reimbursements`, in the order they are settled.
+ * `reimbursements`, in the order they are settled. From processing until
+ * `settledAt` the record HOLDS these items (unless its cycle is a draft): no
+ * other cycle counts them and they cannot be paid by hand.
  */
 export interface IPayrollSettlement {
   loanInstallments: IPayrollSettlementInstallment[];
   claimIds: Types.ObjectId[];
+  /** When `settleCycle` settled this record (after the cycle was paid). */
+  settledAt?: Date | null;
 }
 
 export interface IPayrollBank {
@@ -162,6 +166,7 @@ const settlementSchema = new Schema<IPayrollSettlement>(
       default: [],
     },
     claimIds: { type: [{ type: Schema.Types.ObjectId, ref: 'ExpenseClaim' }], default: [] },
+    settledAt: { type: Date, default: null },
   },
   { _id: false },
 );
