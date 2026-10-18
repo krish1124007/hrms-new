@@ -67,6 +67,16 @@ export interface LeaveBalance {
   balance: number;
 }
 
+/** What opening a leave year did. */
+export interface OpenLeaveYearResult {
+  /** Balance rows created. */
+  created: number;
+  /** Balances that received a carried-forward figure. */
+  carried: number;
+  /** Pairs left as they were (already open, or nothing to allocate). */
+  skipped: number;
+}
+
 export interface AllocateBalanceInput {
   employeeIds: string[];
   leaveTypeId: string;
@@ -94,6 +104,13 @@ export const leaveBalancesApi = {
     leaveTypeId?: string,
   ): Promise<{ success: boolean; data: { modifiedCount: number } }> =>
     (await api.post('/leaves/balances/reset', { year, leaveTypeId })).data,
+  /**
+   * Open a leave year for every active employee: allocate the balances still
+   * missing (pro-rated for joiners) and carry last year's unused days forward.
+   * Idempotent — nothing already set is overwritten.
+   */
+  openYear: async (year: number): Promise<{ success: boolean; data: OpenLeaveYearResult }> =>
+    (await api.post('/leaves/balances/open-year', { year })).data,
 };
 
 /* ── Leave Request ── */
@@ -121,6 +138,8 @@ export interface LeaveRequest {
   approvedBy?: string | { _id: string; firstName: string; lastName: string; email: string };
   approvedAt?: string;
   rejectedReason?: string;
+  /** Why HR cancelled it (owners may withdraw without one). */
+  cancelReason?: string;
   appliedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -164,8 +183,12 @@ export const leaveRequestsApi = {
     (await api.patch(`/leaves/requests/${id}/approve`)).data,
   reject: async (id: string, reason: string): Promise<ItemResponse<LeaveRequest>> =>
     (await api.patch(`/leaves/requests/${id}/reject`, { reason })).data,
-  cancel: async (id: string): Promise<ItemResponse<LeaveRequest>> =>
-    (await api.patch(`/leaves/requests/${id}/cancel`)).data,
+  /**
+   * The owner may withdraw a pending request, or an approved one before it
+   * starts; HR (`leaves.update`) may cancel anyone's at any time with a reason.
+   */
+  cancel: async (id: string, reason?: string): Promise<ItemResponse<LeaveRequest>> =>
+    (await api.patch(`/leaves/requests/${id}/cancel`, reason ? { reason } : {})).data,
   remove: async (id: string): Promise<{ success: boolean; message: string }> =>
     (await api.delete(`/leaves/requests/${id}`)).data,
   reports: async (year?: number): Promise<{ success: boolean; data: LeaveReports }> =>

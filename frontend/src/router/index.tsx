@@ -105,6 +105,7 @@ const OvertimePage = lazy(() => import('@/pages/overtime/OvertimePage'));
 // Attendance
 const AttendanceDashboardPage = lazy(() => import('@/pages/attendance/AttendanceDashboardPage'));
 const AttendanceListPage = lazy(() => import('@/pages/attendance/AttendanceListPage'));
+const RegularizationsPage = lazy(() => import('@/pages/attendance/RegularizationsPage'));
 const EmployeeAttendancePage = lazy(() => import('@/pages/attendance/EmployeeAttendancePage'));
 const AttendanceConfigPage = lazy(() => import('@/pages/attendance/AttendanceConfigPage'));
 const AttendanceSitesPage = lazy(() => import('@/pages/attendance/AttendanceSitesPage'));
@@ -190,6 +191,7 @@ export function AppRouter(): ReactElement {
             {/* Attendance */}
             <Route path="/attendance" element={guard(NAV_ACCESS.attendanceView, <AttendanceDashboardPage />)} />
             <Route path="/attendance/records" element={guard(NAV_ACCESS.attendanceView, <AttendanceListPage />)} />
+            <Route path="/attendance/regularizations" element={guard(NAV_ACCESS.attendanceApprove, <RegularizationsPage />)} />
             <Route path="/attendance/my" element={<EmployeeAttendancePage />} />
             <Route path="/attendance/timesheet" element={<AttendanceTimesheetPage />} />
             <Route path="/attendance/employee/:id" element={<EmployeeAttendancePage />} />

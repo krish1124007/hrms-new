@@ -19,6 +19,8 @@ import {
   useCreateEmployee,
   useUpdateEmployee,
 } from '@/hooks/use-systemcore';
+import { useSalaryStructures } from '@/hooks/use-payroll';
+import { usePermissions } from '@/hooks/use-permissions';
 import { cn } from '@/lib/utils';
 
 const schema = z.object({
@@ -41,6 +43,7 @@ const schema = z.object({
   designation: z.string().optional(),
   shift: z.string().optional(),
   requireLocation: z.boolean().optional(),
+  isFieldStaff: z.boolean().optional(),
   reportingManager: z.string().optional(),
   joiningDate: z.string().min(1, 'Required'),
   confirmationDate: z.string().optional(),
@@ -71,6 +74,9 @@ const schema = z.object({
   hra: z.coerce.number().min(0).default(0),
   da: z.coerce.number().min(0).default(0),
   specialAllowance: z.coerce.number().min(0).default(0),
+  tdsMonthly: z.coerce.number().min(0, 'Cannot be negative').default(0),
+  /** '' = no structure (the salary breakdown above is used as-is). */
+  salaryStructureId: z.string().optional(),
 
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
@@ -88,6 +94,12 @@ const STEPS = [
 
 const STORAGE_KEY = 'opencore.employee.draft';
 
+/** A reference as an id, whether the API sent the id or the populated document. */
+function refId(ref: string | { _id: string } | null | undefined): string {
+  if (!ref) return '';
+  return typeof ref === 'string' ? ref : ref._id;
+}
+
 export default function EmployeeFormPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const isEdit = !!id;
@@ -98,6 +110,16 @@ export default function EmployeeFormPage(): ReactElement {
   const { data: deptData } = useDepartments({ limit: 100 });
   const { data: shiftData } = useShifts({ limit: 100 });
   const { data: empListData } = useEmployees({ limit: 500 });
+  // Listing structures needs payroll.process; without it the field is not shown (or sent).
+  const { has } = usePermissions();
+  const canPickStructure = has('payroll.process');
+  const { data: structuresData } = useSalaryStructures({ enabled: canPickStructure });
+  const currentStructureId = refId(existing?.data?.salaryStructureId);
+  // Inactive structures are not offered — except the one already assigned, so
+  // an unrelated edit never silently clears it.
+  const structures = (structuresData?.data ?? []).filter(
+    (st) => st.isActive || st._id === currentStructureId,
+  );
 
   const {
     register,
@@ -105,6 +127,7 @@ export default function EmployeeFormPage(): ReactElement {
     watch,
     reset,
     trigger,
+    setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema) as unknown as Resolver<FormValues>,
@@ -114,6 +137,9 @@ export default function EmployeeFormPage(): ReactElement {
       hra: 0,
       da: 0,
       specialAllowance: 0,
+      tdsMonthly: 0,
+      isFieldStaff: false,
+      salaryStructureId: '',
     },
   });
 
@@ -140,6 +166,7 @@ export default function EmployeeFormPage(): ReactElement {
         designation: e.designation?._id,
         shift: e.shift?._id,
         requireLocation: e.requireLocation ?? false,
+        isFieldStaff: e.isFieldStaff ?? false,
         reportingManager: e.reportingManager?._id,
         joiningDate: e.joiningDate?.slice(0, 10),
         confirmationDate: e.confirmationDate?.slice(0, 10),
@@ -166,6 +193,8 @@ export default function EmployeeFormPage(): ReactElement {
         hra: e.salary?.hra ?? 0,
         da: e.salary?.da ?? 0,
         specialAllowance: e.salary?.specialAllowance ?? 0,
+        tdsMonthly: e.salary?.tdsMonthly ?? 0,
+        salaryStructureId: refId(e.salaryStructureId),
         bankName: e.bankDetails?.bankName,
         accountNumber: e.bankDetails?.accountNumber,
         ifscCode: e.bankDetails?.ifscCode,
@@ -173,6 +202,11 @@ export default function EmployeeFormPage(): ReactElement {
       });
     }
   }, [existing, reset]);
+
+  // The structure list can arrive after the form was filled: show the assigned one once it does.
+  useEffect(() => {
+    if (structuresData && currentStructureId) setValue('salaryStructureId', currentStructureId);
+  }, [structuresData, currentStructureId, setValue]);
 
   // Auto-save draft (create only)
   useEffect(() => {
@@ -228,6 +262,7 @@ export default function EmployeeFormPage(): ReactElement {
       designation: values.designation || undefined,
       shift: values.shift || undefined,
       requireLocation: values.requireLocation ?? false,
+      isFieldStaff: values.isFieldStaff ?? false,
       reportingManager: values.reportingManager || undefined,
       joiningDate: values.joiningDate,
       confirmationDate: values.confirmationDate || undefined,
@@ -263,7 +298,12 @@ export default function EmployeeFormPage(): ReactElement {
         hra: values.hra,
         da: values.da,
         specialAllowance: values.specialAllowance,
+        tdsMonthly: values.tdsMonthly,
       },
+      // Only someone who could see the list may change it; '' clears it on edit.
+      ...(canPickStructure
+        ? { salaryStructureId: values.salaryStructureId || (isEdit ? null : undefined) }
+        : {}),
       bankDetails: {
         bankName: values.bankName,
         accountNumber: values.accountNumber,
@@ -305,7 +345,7 @@ export default function EmployeeFormPage(): ReactElement {
     }
     if (step === 2) {
       fields = [
-        'department', 'designation', 'shift', 'requireLocation', 'reportingManager', 'joiningDate',
+        'department', 'designation', 'shift', 'requireLocation', 'isFieldStaff', 'reportingManager', 'joiningDate',
         'confirmationDate', 'probationEndDate', 'noticePeriod', 'employmentType', 'workLocation'
       ];
     }
@@ -578,6 +618,18 @@ export default function EmployeeFormPage(): ReactElement {
                     </span>
                   </label>
                 </div>
+                <div className="sm:col-span-2">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3">
+                    <input type="checkbox" className="mt-0.5" {...register('isFieldStaff')} />
+                    <span>
+                      <span className="text-sm font-medium">Field staff</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Works away from the office. Attendance settings can require field staff to
+                        file the day's expenses before checking out.
+                      </span>
+                    </span>
+                  </label>
+                </div>
                 <div>
                   <Label htmlFor="shift">Shift</Label>
                   <Select id="shift" {...register('shift')}>
@@ -671,6 +723,36 @@ export default function EmployeeFormPage(): ReactElement {
                     <span className="font-semibold text-foreground">
                       ₹{totals.toLocaleString('en-IN')}
                     </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {canPickStructure && (
+                      <div>
+                        <Label htmlFor="salaryStructureId">Salary structure</Label>
+                        <Select id="salaryStructureId" {...register('salaryStructureId')}>
+                          <option value="">None — use the breakdown above</option>
+                          {structures.map((st) => (
+                            <option key={st._id} value={st._id}>
+                              {st.name}
+                              {st.isDefault ? ' (default)' : ''}
+                            </option>
+                          ))}
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Payroll takes this employee's earning and deduction components from it.
+                        </p>
+                      </div>
+                    )}
+                    <div>
+                      <Label htmlFor="tdsMonthly">Monthly TDS</Label>
+                      <Input id="tdsMonthly" type="number" min={0} step="0.01" {...register('tdsMonthly')} />
+                      {errors.tdsMonthly ? (
+                        <p className="mt-1 text-xs text-destructive">{errors.tdsMonthly.message}</p>
+                      ) : (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Deducted every month as a TDS line; HR can override it per payslip.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
 

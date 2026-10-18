@@ -140,6 +140,7 @@ export interface Holiday {
   _id: string;
   name: string;
   date: string;
+  /** Only `public` holidays are days off (for `departments`, or everyone when empty). */
   type: 'public' | 'optional' | 'restricted';
   departments: { _id: string; name: string; code: string }[];
   isRecurring: boolean;
@@ -168,6 +169,9 @@ export const holidaysApi = {
     (await api.patch(`/holidays/${id}`, input)).data,
   remove: async (id: string): Promise<{ success: boolean; message: string }> =>
     (await api.delete(`/holidays/${id}`)).data,
+  /** Copy every recurring holiday into `year` (the target), skipping ones already there. */
+  rollover: async (year: number): Promise<{ success: boolean; data: { created: number; skipped: number } }> =>
+    (await api.post('/holidays/rollover', { year })).data,
 };
 
 /* ── Employee ── */
@@ -187,6 +191,8 @@ export interface EmployeeSalary {
   specialAllowance?: number;
   otherAllowances?: Record<string, number>;
   grossSalary?: number;
+  /** Monthly TDS payroll deducts. */
+  tdsMonthly?: number;
 }
 
 export interface EmployeeBank {
@@ -243,6 +249,14 @@ export interface Employee {
   status: 'active' | 'inactive' | 'terminated' | 'resigned' | 'onNotice';
   exitDate?: string;
   exitReason?: string;
+  /** The status a scheduled exit (`exitDate` in the future) applies on that day. */
+  exitStatus?: 'inactive' | 'terminated' | 'resigned';
+  /** Field staff — e.g. the expense-before-check-out rule can target them. */
+  isFieldStaff?: boolean;
+  /** Salary structure payroll takes this employee's components from. */
+  salaryStructureId?: string | null;
+  /** Soft-deleted; `POST /employees/:id/restore` brings it back. */
+  isDeleted?: boolean;
   probationEndDate?: string;
   noticePeriod?: number;
   // Populated by the API (`getEmployee` does `.populate('userId', 'email status lastLogin')`).
@@ -264,6 +278,9 @@ export interface EmployeeInput {
   address?: { current?: EmployeeAddress; permanent?: EmployeeAddress };
   /** Location is mandatory for this employee's check-in / check-out. */
   requireLocation?: boolean;
+  isFieldStaff?: boolean;
+  /** `null` clears the structure. */
+  salaryStructureId?: string | null;
   department?: string;
   designation?: string;
   shift?: string;
@@ -282,6 +299,13 @@ export interface EmployeeInput {
   /** Optional admin-set login password (≥8 chars). If omitted on create the
    *  backend issues an invite link by email instead. */
   password?: string;
+}
+
+export interface EmployeeStatusInput {
+  status: Employee['status'];
+  reason?: string;
+  /** `YYYY-MM-DD`. */
+  exitDate?: string;
 }
 
 export interface EmployeeStats {
@@ -310,10 +334,15 @@ export const employeesApi = {
     (await api.patch(`/employees/${id}`, input)).data,
   remove: async (id: string): Promise<{ success: boolean; message: string }> =>
     (await api.delete(`/employees/${id}`)).data,
-  updateStatus: async (
-    id: string,
-    body: { status: Employee['status']; reason?: string; exitDate?: string },
-  ): Promise<ItemResponse<Employee>> => (await api.patch(`/employees/${id}/status`, body)).data,
+  /**
+   * A future `exitDate` schedules the exit: the employee stays as they are
+   * (on notice stays on notice) until that day, then takes the exit status.
+   */
+  updateStatus: async (id: string, body: EmployeeStatusInput): Promise<ItemResponse<Employee>> =>
+    (await api.patch(`/employees/${id}/status`, body)).data,
+  /** Bring back a soft-deleted employee (and reactivate their login). */
+  restore: async (id: string): Promise<ItemResponse<Employee>> =>
+    (await api.post(`/employees/${id}/restore`)).data,
   addDocument: async (
     id: string,
     body: { type: string; name: string; fileUrl: string },

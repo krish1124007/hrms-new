@@ -83,6 +83,7 @@ export interface PayrollCycle {
   totalNet: number;
   employeeCount: number;
   payslipGeneratedAt?: string;
+  lockedAt?: string;
   paidAt?: string;
   paymentRef?: string;
   createdAt: string;
@@ -93,6 +94,39 @@ export interface PayrollLine {
   componentId?: string;
   name: string;
   amount: number;
+  statutoryType?: 'pf' | 'esi' | 'pt' | 'tds';
+}
+
+/** The record fields HR may override; everything else is computed. */
+export const ADJUSTABLE_FIELDS = [
+  'arrears',
+  'advance',
+  'expense',
+  'reimbursements',
+  'loanDeduction',
+  'tds',
+] as const;
+export type AdjustableField = (typeof ADJUSTABLE_FIELDS)[number];
+
+/** HR overrides on a record. `null` = not overridden, the computed figure applies. */
+export type PayrollManualAdjustments = Record<AdjustableField, number | null> & { note?: string };
+
+/** What payroll computed for each overridable field, before any override. */
+export type PayrollComputedFigures = Record<AdjustableField, number>;
+
+/**
+ * `PATCH /payroll/cycles/:id/records/:recordId`. Send only what changed: a
+ * number (≥ 0) sets an override, `null` clears it (back to the computed
+ * figure). Never send `""` — the API coerces it to 0.
+ */
+export type RecordAdjustmentsInput = Partial<Record<AdjustableField, number | null>> & {
+  note?: string | null;
+};
+
+/** What a settlement run paid out: loan instalments and expense claims. */
+export interface SettlementResult {
+  installmentsPaid: number;
+  claimsReimbursed: number;
 }
 
 export interface PayrollRecord {
@@ -117,8 +151,19 @@ export interface PayrollRecord {
   overtimeHours: number;
   overtimeAmount: number;
   arrears: number;
+  advance: number;
+  expense: number;
   reimbursements: number;
   loanDeduction: number;
+  tds: number;
+  /** Absent on records processed before overrides existed. */
+  manualAdjustments?: PayrollManualAdjustments;
+  computed?: PayrollComputedFigures;
+  settlement?: {
+    loanInstallments: { loanId: string; installmentId: string; amount: number }[];
+    claimIds: string[];
+    settledAt?: string | null;
+  };
   payslipUrl?: string;
   paymentStatus: 'pending' | 'paid';
   paymentRef?: string;
@@ -126,16 +171,6 @@ export interface PayrollRecord {
   bankDetails: { bankName?: string; accountNumber?: string; ifscCode?: string };
   createdAt: string;
   updatedAt: string;
-}
-
-export interface RecordUpdate {
-  earnings?: { name: string; amount: number }[];
-  deductions?: { name: string; amount: number }[];
-  arrears?: number;
-  reimbursements?: number;
-  loanDeduction?: number;
-  overtimeAmount?: number;
-  overtimeHours?: number;
 }
 
 export interface MonthlyReport {
@@ -209,7 +244,7 @@ export const payrollApi = {
   updateCycleRecord: async (
     cycleId: string,
     recordId: string,
-    input: RecordUpdate,
+    input: RecordAdjustmentsInput,
   ): Promise<ItemResponse<PayrollRecord>> =>
     (await api.patch(`/payroll/cycles/${cycleId}/records/${recordId}`, input)).data,
   generatePayslips: async (
@@ -218,11 +253,15 @@ export const payrollApi = {
     (await api.post(`/payroll/cycles/${id}/generate-payslips`)).data,
   lockCycle: async (id: string): Promise<ItemResponse<PayrollCycle>> =>
     (await api.post(`/payroll/cycles/${id}/lock`)).data,
+  /** locked → paid. `settlement.ok === false` means loans/claims did not settle: retry with `settleCycle`. */
   markCyclePaid: async (
     id: string,
     input: { paymentRef: string; paidAt?: string },
-  ): Promise<ItemResponse<PayrollCycle>> =>
+  ): Promise<ItemResponse<PayrollCycle> & { settlement?: { ok: boolean } & Partial<SettlementResult> }> =>
     (await api.post(`/payroll/cycles/${id}/mark-paid`, input)).data,
+  /** Settle a paid cycle's loans and claims again (only what is still open). */
+  settleCycle: async (id: string): Promise<{ success: boolean; data: SettlementResult }> =>
+    (await api.post(`/payroll/cycles/${id}/settle`)).data,
 
   // records
   getRecord: async (id: string): Promise<ItemResponse<PayrollRecord>> =>

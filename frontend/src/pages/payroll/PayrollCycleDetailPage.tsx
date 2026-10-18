@@ -1,42 +1,22 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useParams } from 'react-router-dom';
-import { Download, Pencil, FileDown } from 'lucide-react';
+import { AlertTriangle, Download, FileDown, Loader2, Pencil } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { CycleActions } from '@/components/payroll/CycleActions';
+import { RecordAdjustmentsDialog } from '@/components/payroll/RecordAdjustmentsDialog';
+import { usePayrollCycle, useCycleRecords } from '@/hooks/use-payroll';
+import { ADJUSTABLE_FIELDS, type PayrollRecord } from '@/lib/payroll.api';
 import {
-  Dialog,
-  DialogBody,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  usePayrollCycle,
-  useCycleRecords,
-  useUpdateCycleRecord,
-} from '@/hooks/use-payroll';
-import type { PayrollRecord } from '@/lib/payroll.api';
+  CYCLE_STATUS_VARIANT,
+  canRunCycleAction,
+  cyclePeriod,
+  isStaleProcessing,
+} from '@/lib/payroll-cycle';
 import { inr } from './PayrollDashboardPage';
-
-const MONTHS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
 
 function exportCSV(rows: PayrollRecord[]): void {
   const headers = [
@@ -80,40 +60,39 @@ function exportCSV(rows: PayrollRecord[]): void {
   URL.revokeObjectURL(url);
 }
 
+/** HR has overridden at least one figure on this record. */
+function isAdjusted(r: PayrollRecord): boolean {
+  const manual = r.manualAdjustments;
+  return !!manual && (ADJUSTABLE_FIELDS.some((f) => manual[f] != null) || !!manual.note);
+}
+
+/** A paid record whose loan instalments / expense claims have not been settled yet. */
+function isUnsettled(r: PayrollRecord): boolean {
+  const s = r.settlement;
+  if (!s || s.settledAt) return false;
+  return s.loanInstallments.length > 0 || s.claimIds.length > 0;
+}
+
 export default function PayrollCycleDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const { data: cycleData } = usePayrollCycle(id);
-  const { data: recordsData, isLoading } = useCycleRecords(id);
+  const { data: recordsData, isLoading, refetch: refetchRecords } = useCycleRecords(id);
   const cycle = cycleData?.data;
   const records = recordsData?.data ?? [];
 
   const [editing, setEditing] = useState<PayrollRecord | null>(null);
-  const [arrears, setArrears] = useState(0);
-  const [reimbursements, setReimbursements] = useState(0);
-  const [loanDeduction, setLoanDeduction] = useState(0);
-  const [overtimeAmount, setOvertimeAmount] = useState(0);
 
-  const updateMut = useUpdateCycleRecord();
+  // A run that finishes while the page is open rebuilt the records: reload
+  // them when the status moves on (not on the first load).
+  const status = cycle?.status;
+  const previousStatus = useRef(status);
+  useEffect(() => {
+    if (previousStatus.current && status && previousStatus.current !== status) void refetchRecords();
+    previousStatus.current = status;
+  }, [status, refetchRecords]);
 
-  const openEdit = (r: PayrollRecord): void => {
-    setEditing(r);
-    setArrears(r.arrears);
-    setReimbursements(r.reimbursements);
-    setLoanDeduction(r.loanDeduction);
-    setOvertimeAmount(r.overtimeAmount);
-  };
-
-  const submitEdit = (): void => {
-    if (!editing || !id) return;
-    updateMut.mutate(
-      {
-        cycleId: id,
-        recordId: editing._id,
-        input: { arrears, reimbursements, loanDeduction, overtimeAmount },
-      },
-      { onSuccess: () => setEditing(null) },
-    );
-  };
+  const editable = cycle ? canRunCycleAction(cycle, 'edit') : false;
+  const unsettled = cycle?.status === 'paid' && records.some(isUnsettled);
 
   const totals = records.reduce(
     (acc, r) => ({
@@ -159,7 +138,16 @@ export default function PayrollCycleDetailPage(): ReactElement {
     {
       key: 'net',
       header: 'Net',
-      cell: (r) => <span className="font-semibold">{inr(r.netSalary)}</span>,
+      cell: (r) => (
+        <div className="flex flex-col items-start gap-1">
+          <span className="font-semibold">{inr(r.netSalary)}</span>
+          {isAdjusted(r) && (
+            <Badge variant="warning" title={r.manualAdjustments?.note || 'HR adjusted this record'}>
+              adjusted
+            </Badge>
+          )}
+        </div>
+      ),
     },
     {
       key: 'status',
@@ -176,9 +164,12 @@ export default function PayrollCycleDetailPage(): ReactElement {
       cell: (r) => (
         <div className="flex justify-end gap-1">
           <button
-            onClick={() => openEdit(r)}
-            className="rounded p-1.5 hover:bg-muted"
-            disabled={cycle?.status === 'locked' || cycle?.status === 'paid'}
+            type="button"
+            onClick={() => setEditing(r)}
+            className="rounded p-1.5 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!editable}
+            aria-label="Edit adjustments"
+            title={editable || !cycle ? 'Edit adjustments' : `A ${cycle.status} cycle cannot be adjusted`}
           >
             <Pencil className="size-4" />
           </button>
@@ -188,6 +179,7 @@ export default function PayrollCycleDetailPage(): ReactElement {
               target="_blank"
               rel="noreferrer"
               className="rounded p-1.5 text-primary hover:bg-primary/10"
+              aria-label="Payslip"
             >
               <FileDown className="size-4" />
             </a>
@@ -200,22 +192,54 @@ export default function PayrollCycleDetailPage(): ReactElement {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={cycle ? `${MONTHS[cycle.month - 1]} ${cycle.year} payroll` : 'Payroll cycle'}
-        description={
-          cycle ? `${cycle.employeeCount} employees · ${cycle.status}` : undefined
+        title={cycle ? `${cyclePeriod(cycle)} payroll` : 'Payroll cycle'}
+        titleAddon={
+          cycle ? (
+            <Badge variant={CYCLE_STATUS_VARIANT[cycle.status]} data-testid="cycle-status">
+              {cycle.status}
+            </Badge>
+          ) : undefined
         }
+        description={cycle ? `${cycle.employeeCount} employees` : undefined}
         breadcrumbs={[
           { label: 'Home', to: '/dashboard' },
           { label: 'Payroll', to: '/payroll' },
           { label: 'Cycle' },
         ]}
         actions={
-          <Button variant="outline" onClick={() => exportCSV(records)}>
-            <Download className="mr-2 size-4" />
-            Export CSV
-          </Button>
+          <div className="flex flex-wrap justify-end gap-2">
+            {cycle && <CycleActions cycle={cycle} layout="header" />}
+            <Button variant="outline" onClick={() => exportCSV(records)}>
+              <Download className="size-4" />
+              Export CSV
+            </Button>
+          </div>
         }
       />
+
+      {cycle?.status === 'processing' && (
+        <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          {isStaleProcessing(cycle) ? (
+            <>
+              <AlertTriangle className="size-4" />
+              The last processing run stopped part-way. Process the cycle again to rebuild its records.
+            </>
+          ) : (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Processing — the records are being rebuilt. This page refreshes when the run finishes.
+            </>
+          )}
+        </div>
+      )}
+
+      {unsettled && (
+        <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          <AlertTriangle className="size-4" />
+          Some loan instalments or expense claims this cycle paid are not settled yet. Use “Retry
+          settlement”.
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -257,57 +281,9 @@ export default function PayrollCycleDetailPage(): ReactElement {
         emptyDescription="Process the payroll cycle to generate records."
       />
 
-      <Dialog open={!!editing} onClose={() => setEditing(null)} size="md">
-        <DialogHeader>
-          <DialogTitle>Adjust record</DialogTitle>
-        </DialogHeader>
-        <DialogBody className="space-y-3">
-          <div>
-            <Label htmlFor="ar">Arrears</Label>
-            <Input
-              id="ar"
-              type="number"
-              value={arrears}
-              onChange={(e) => setArrears(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor="re">Reimbursements</Label>
-            <Input
-              id="re"
-              type="number"
-              value={reimbursements}
-              onChange={(e) => setReimbursements(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor="ot">Overtime amount</Label>
-            <Input
-              id="ot"
-              type="number"
-              value={overtimeAmount}
-              onChange={(e) => setOvertimeAmount(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor="ld">Loan EMI deduction</Label>
-            <Input
-              id="ld"
-              type="number"
-              value={loanDeduction}
-              onChange={(e) => setLoanDeduction(Number(e.target.value))}
-            />
-          </div>
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setEditing(null)}>
-            Cancel
-          </Button>
-          <Button onClick={submitEdit} loading={updateMut.isPending}>
-            Save
-          </Button>
-        </DialogFooter>
-      </Dialog>
+      {cycle && (
+        <RecordAdjustmentsDialog record={editing} cycle={cycle} onClose={() => setEditing(null)} />
+      )}
     </div>
   );
 }

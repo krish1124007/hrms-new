@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, FileText } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileClock, FileText } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,6 +8,7 @@ import { useAttendanceConfig, useMonthlyAttendance } from '@/hooks/use-attendanc
 import { useEmployee } from '@/hooks/use-systemcore';
 import type { AttendanceStatus } from '@/lib/attendance.api';
 import { CheckInWidget } from '@/components/attendance/CheckInWidget';
+import { RegularizationRequestDialog } from '@/components/attendance/RegularizationRequestDialog';
 import { cn } from '@/lib/utils';
 import { DEFAULT_WEEK_OFF_RULE, isWeekOff } from '@/lib/week-off';
 
@@ -28,6 +29,7 @@ export default function EmployeeAttendancePage(): ReactElement {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1); // 1-12
+  const [regularizeOpen, setRegularizeOpen] = useState(false);
 
   const { data } = useMonthlyAttendance(year, month, id);
   const { data: employeeData } = useEmployee(id);
@@ -90,15 +92,24 @@ export default function EmployeeAttendancePage(): ReactElement {
         ]}
         actions={
           !id ? (
-            <Link
-              to="/attendance/timesheet"
-              className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted"
-            >
-              <FileText className="size-4" /> View Timesheet
-            </Link>
+            <>
+              <Button variant="outline" size="sm" onClick={() => setRegularizeOpen(true)}>
+                <FileClock className="size-4" /> Request regularization
+              </Button>
+              <Link
+                to="/attendance/timesheet"
+                className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted"
+              >
+                <FileText className="size-4" /> View Timesheet
+              </Link>
+            </>
           ) : null
         }
       />
+
+      {!id && (
+        <RegularizationRequestDialog open={regularizeOpen} onClose={() => setRegularizeOpen(false)} />
+      )}
 
       {!id && <CheckInWidget />}
 
@@ -195,6 +206,11 @@ export default function EmployeeAttendancePage(): ReactElement {
                       )}
                       {rec.totalWorkingHours > 0 && (
                         <span className="text-[9px] opacity-70">{rec.totalWorkingHours.toFixed(1)}h</span>
+                      )}
+                      {rec.regularization?.status === 'pending' && (
+                        <span className="truncate text-[9px] font-semibold text-amber-600" title={rec.regularization.reason}>
+                          Regularization pending
+                        </span>
                       )}
                     </>
                   )}

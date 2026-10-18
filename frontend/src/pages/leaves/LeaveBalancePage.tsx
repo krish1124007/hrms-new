@@ -2,6 +2,7 @@ import { useState, type ReactElement } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { CalendarPlus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +12,7 @@ import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import {
   Dialog,
   DialogBody,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -19,10 +21,13 @@ import {
   useLeaveBalances,
   useAllocateLeaveBalances,
   useLeaveTypes,
+  useOpenLeaveYear,
   useResetLeaveBalances,
 } from '@/hooks/use-leaves';
 import { useEmployees } from '@/hooks/use-systemcore';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { LeaveBalance } from '@/lib/leaves.api';
+import { todayKey } from '@/lib/business-day';
 
 const schema = z.object({
   leaveTypeId: z.string().min(1),
@@ -39,6 +44,17 @@ export default function LeaveBalancePage(): ReactElement {
   const { data: employees } = useEmployees({ limit: 500 });
   const allocate = useAllocateLeaveBalances();
   const resetBalances = useResetLeaveBalances();
+  const openYear = useOpenLeaveYear();
+  const { has } = usePermissions();
+  const canOpenYear = has('leaves.update');
+  // The API opens at most next year (in the business timezone).
+  const latestOpenable = Number(todayKey().slice(0, 4)) + 1;
+  const yearOpenable = Number.isInteger(year) && year >= 2000 && year <= latestOpenable;
+  const [openYearOpen, setOpenYearOpen] = useState(false);
+
+  const confirmOpenYear = (): void => {
+    openYear.mutate(year, { onSuccess: () => setOpenYearOpen(false) });
+  };
 
   const handleResetClick = (): void => {
     if (
@@ -136,6 +152,16 @@ export default function LeaveBalancePage(): ReactElement {
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Leaves' }, { label: 'Balances' }]}
         actions={
           <div className="flex gap-2">
+            {canOpenYear && (
+              <Button
+                variant="outline"
+                onClick={() => setOpenYearOpen(true)}
+                disabled={!yearOpenable}
+                title={yearOpenable ? undefined : `A leave year can be opened up to ${latestOpenable}`}
+              >
+                <CalendarPlus className="size-4" /> Open {year}
+              </Button>
+            )}
             <Button variant="destructive" onClick={handleResetClick} loading={resetBalances.isPending}>
               Reset Balances
             </Button>
@@ -163,6 +189,34 @@ export default function LeaveBalancePage(): ReactElement {
         emptyTitle="No balances allocated"
         emptyDescription="Click 'Allocate Leaves' to set up annual balances"
       />
+
+      <Dialog open={openYearOpen} onClose={() => setOpenYearOpen(false)} size="md">
+        <DialogHeader>
+          <DialogTitle>Open leave year {year}</DialogTitle>
+          <DialogDescription>
+            Opens {year}: allocates and carries forward for every active employee; run once.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-2 text-sm text-muted-foreground">
+          <p>
+            Every active employee (and those on notice) gets a {year} balance for each active paid
+            leave type — pro-rated for anyone who joined during the year — and the unused days of{' '}
+            {year - 1} are carried forward up to each type's limit.
+          </p>
+          <p>
+            Balances that already exist are left exactly as they are, so running it again only fills
+            gaps (an employee or leave type added since).
+          </p>
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpenYearOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={confirmOpenYear} loading={openYear.isPending}>
+            Open {year}
+          </Button>
+        </DialogFooter>
+      </Dialog>
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
         <DialogHeader>

@@ -2,6 +2,7 @@ import { api } from './axios';
 import type { ListResponse, ItemResponse } from './systemcore.api';
 import type { WeekOffRule } from './week-off';
 
+/** `face` is legacy: still accepted by the API, no longer offered in the UI. */
 export type AttendanceMethod =
   | 'face'
   | 'qr'
@@ -56,6 +57,26 @@ export interface AttendanceArea {
   inside: boolean;
 }
 
+export interface AttendanceRegularization {
+  requestedAt: string;
+  reason: string;
+  status: RegularizationStatus;
+  /** The punches asked for; neither means a reason-only request (HR vouches for the day). */
+  requestedCheckIn?: string;
+  requestedCheckOut?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+/** An employee's request to have a day's punches corrected. Times are ISO datetimes. */
+export interface RegularizationRequestInput {
+  /** The day, `YYYY-MM-DD`. */
+  date: string;
+  reason: string;
+  checkIn?: string;
+  checkOut?: string;
+}
+
 export interface Attendance {
   _id: string;
   /** Present on the admin records feed only. */
@@ -73,15 +94,14 @@ export interface Attendance {
   lateBy: number;
   earlyLeaveBy: number;
   isRegularized: boolean;
-  regularization?: {
-    requestedAt: string;
-    reason: string;
-    status: RegularizationStatus;
-    approvedAt?: string;
-  };
+  regularization?: AttendanceRegularization;
+  /** How the row came to be — `auto_absent` / `auto_checkout` are the nightly job's. */
+  source?: 'punch' | 'leave' | 'auto_absent' | 'auto_checkout' | 'regularization' | 'correction';
   createdAt: string;
   updatedAt: string;
 }
+
+export type ExpenseBeforeCheckout = 'all' | 'field' | 'none';
 
 export interface AttendanceConfig {
   _id: string;
@@ -95,6 +115,8 @@ export interface AttendanceConfig {
     requireLocation: boolean;
     requireNoteOnLateCheckIn: boolean;
     freeLateDaysPerMonth: number;
+    /** Who must file the day's expenses before checking out. */
+    expenseBeforeCheckout?: ExpenseBeforeCheckout;
   };
   liveTracking?: {
     enabled: boolean;
@@ -247,8 +269,15 @@ export const attendanceApi = {
     employeeId?: string,
   ): Promise<{ success: boolean; data: Attendance[] }> =>
     (await api.get('/attendance/monthly', { params: { year, month, employeeId } })).data,
-  regularize: async (date: string, reason: string): Promise<ItemResponse<Attendance>> =>
-    (await api.post('/attendance/regularize', { date, reason })).data,
+  regularize: async (input: RegularizationRequestInput): Promise<ItemResponse<Attendance>> =>
+    (await api.post('/attendance/regularize', input)).data,
+  /** The approval queue — HR sees everyone's, a manager their direct reports'. */
+  listRegularizations: async (params: {
+    status: RegularizationStatus;
+    page?: number;
+    limit?: number;
+  }): Promise<ListResponse<Attendance>> =>
+    (await api.get('/attendance/regularizations', { params })).data,
   decideRegularization: async (
     id: string,
     status: 'approved' | 'rejected',

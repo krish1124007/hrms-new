@@ -100,6 +100,21 @@ export function useAdjustLeaveBalance() {
   });
 }
 
+/** Opens a leave year (allocation + carry forward) for every active employee. */
+export function useOpenLeaveYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (year: number) => leaveBalancesApi.openYear(year),
+    onSuccess: (d, year) => {
+      qc.invalidateQueries({ queryKey: ['leave-balances'] });
+      const { created, carried, skipped } = d.data;
+      toast.success(
+        `Opened ${year}: ${created} balance(s) created, ${carried} carried forward, ${skipped} already set`,
+      );
+    },
+  });
+}
+
 export function useResetLeaveBalances() {
   const qc = useQueryClient();
   return useMutation({
@@ -184,7 +199,7 @@ export function useRejectLeave() {
 export function useCancelLeave() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => leaveRequestsApi.cancel(id),
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) => leaveRequestsApi.cancel(id, reason),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leave-requests'] });
       qc.invalidateQueries({ queryKey: ['leave-balances'] });

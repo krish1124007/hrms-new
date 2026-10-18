@@ -8,6 +8,8 @@ import {
   type AllowedIPInput,
   type AttendanceConfig,
   type BreakType,
+  type RegularizationRequestInput,
+  type RegularizationStatus,
 } from '@/lib/attendance.api';
 
 const errMsg = (err: unknown, fallback: string) => {
@@ -151,26 +153,46 @@ export function useAttendanceLiveTracking() {
 export function useRequestRegularization() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ date, reason }: { date: string; reason: string }) =>
-      attendanceApi.regularize(date, reason),
+    mutationFn: (input: RegularizationRequestInput) => attendanceApi.regularize(input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['attendance-my'] });
+      qc.invalidateQueries({ queryKey: ['attendance-monthly'] });
       qc.invalidateQueries({ queryKey: ['attendance-list'] });
+      qc.invalidateQueries({ queryKey: ['attendance-regularizations'] });
       toast.success('Regularization requested');
     },
     onError: (e) => toast.error(errMsg(e, 'Failed to request regularization')),
   });
 }
+
+/** The approval queue for one status, newest request first. */
+export function useRegularizations(params: { status: RegularizationStatus; page: number; limit?: number }) {
+  return useQuery({
+    queryKey: ['attendance-regularizations', params],
+    queryFn: () => attendanceApi.listRegularizations(params),
+  });
+}
+
 export function useDecideRegularization() {
   const qc = useQueryClient();
+  const refresh = (): void => {
+    qc.invalidateQueries({ queryKey: ['attendance-regularizations'] });
+    qc.invalidateQueries({ queryKey: ['attendance-list'] });
+    qc.invalidateQueries({ queryKey: ['attendance-monthly'] });
+  };
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'approved' | 'rejected' }) =>
       attendanceApi.decideRegularization(id, status),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['attendance-list'] });
-      toast.success('Regularization updated');
+    onSuccess: (_d, vars) => {
+      refresh();
+      toast.success(vars.status === 'approved' ? 'Regularization approved' : 'Regularization rejected');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update regularization')),
+    onError: (e) => {
+      // 409 DECIDED_MEANWHILE / an already-decided request: the row is stale,
+      // so reload the queue rather than leave it offering a dead decision.
+      refresh();
+      toast.error(errMsg(e, 'Failed to update regularization'));
+    },
   });
 }
 

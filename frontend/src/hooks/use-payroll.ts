@@ -4,7 +4,7 @@ import {
   payrollApi,
   type SalaryComponentInput,
   type SalaryStructureInput,
-  type RecordUpdate,
+  type RecordAdjustmentsInput,
 } from '@/lib/payroll.api';
 
 const errMsg = (err: unknown, fallback: string): string => {
@@ -55,10 +55,12 @@ export function useDeleteComponent() {
 }
 
 /* ── Structures ── */
-export function useSalaryStructures() {
+/** `enabled: false` for callers that may lack `payroll.process` (the list needs it). */
+export function useSalaryStructures(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['payroll-structures'],
     queryFn: () => payrollApi.listStructures(),
+    enabled: opts.enabled ?? true,
   });
 }
 export function useCreateStructure() {
@@ -108,6 +110,8 @@ export function usePayrollCycle(id: string | undefined) {
     queryKey: ['payroll-cycle', id],
     queryFn: () => payrollApi.getCycle(id as string),
     enabled: !!id,
+    // A processing run takes seconds: poll until it lands (or goes stale).
+    refetchInterval: (query) => (query.state.data?.data.status === 'processing' ? 5000 : false),
   });
 }
 export function useCreateCycle() {
@@ -141,16 +145,27 @@ export function useCycleRecords(cycleId: string | undefined) {
     enabled: !!cycleId,
   });
 }
+/** A cycle's status or totals changed: refresh every view of it. */
+function invalidateCycle(qc: ReturnType<typeof useQueryClient>, id: string): void {
+  qc.invalidateQueries({ queryKey: ['payroll-cycles'] });
+  qc.invalidateQueries({ queryKey: ['payroll-cycle', id] });
+  qc.invalidateQueries({ queryKey: ['payroll-cycle-records', id] });
+}
+
+/**
+ * HR adjustments on one record. Errors (409 `ITEM_HELD`, `CYCLE_NOT_EDITABLE`)
+ * are toasted by the app-wide mutation handler; the dialog also shows them inline.
+ */
 export function useUpdateCycleRecord() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { cycleId: string; recordId: string; input: RecordUpdate }) =>
+    mutationFn: (vars: { cycleId: string; recordId: string; input: RecordAdjustmentsInput }) =>
       payrollApi.updateCycleRecord(vars.cycleId, vars.recordId, vars.input),
     onSuccess: (_d, vars) => {
-      qc.invalidateQueries({ queryKey: ['payroll-cycle-records', vars.cycleId] });
-      toast.success('Record updated');
+      // The cycle's totals are the sum of its records.
+      invalidateCycle(qc, vars.cycleId);
+      toast.success('Adjustments saved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update record')),
   });
 }
 export function useGeneratePayslips() {
@@ -158,8 +173,7 @@ export function useGeneratePayslips() {
   return useMutation({
     mutationFn: (id: string) => payrollApi.generatePayslips(id),
     onSuccess: (d, id) => {
-      qc.invalidateQueries({ queryKey: ['payroll-cycle', id] });
-      qc.invalidateQueries({ queryKey: ['payroll-cycle-records', id] });
+      invalidateCycle(qc, id);
       toast.success(`Generated ${d.data.generated} payslip(s)`);
     },
     onError: (e) => toast.error(errMsg(e, 'Failed to generate payslips')),
@@ -169,8 +183,8 @@ export function useLockCycle() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => payrollApi.lockCycle(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['payroll-cycles'] });
+    onSuccess: (_d, id) => {
+      invalidateCycle(qc, id);
       toast.success('Cycle locked');
     },
     onError: (e) => toast.error(errMsg(e, 'Failed to lock cycle')),
@@ -180,12 +194,40 @@ export function useMarkCyclePaid() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { id: string; paymentRef: string; paidAt?: string }) =>
-      payrollApi.markCyclePaid(vars.id, { paymentRef: vars.paymentRef, paidAt: vars.paidAt }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['payroll-cycles'] });
-      toast.success('Cycle marked as paid');
+      payrollApi.markCyclePaid(
+        vars.id,
+        vars.paidAt ? { paymentRef: vars.paymentRef, paidAt: vars.paidAt } : { paymentRef: vars.paymentRef },
+      ),
+    onSuccess: (d, vars) => {
+      invalidateCycle(qc, vars.id);
+      // The money has gone out either way; a failed settlement only means the
+      // loans / expense claims are not marked paid yet.
+      if (d.settlement && !d.settlement.ok) {
+        toast.warning(
+          'Cycle marked as paid, but settling loans and expense claims failed — use "Retry settlement" on the cycle',
+        );
+      } else {
+        toast.success('Cycle marked as paid');
+      }
     },
     onError: (e) => toast.error(errMsg(e, 'Failed to mark as paid')),
+  });
+}
+
+/** Retry settling a paid cycle's loan instalments and expense claims. */
+export function useSettleCycle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => payrollApi.settleCycle(id),
+    onSuccess: (d, id) => {
+      invalidateCycle(qc, id);
+      const { installmentsPaid = 0, claimsReimbursed = 0 } = d.data ?? {};
+      toast.success(
+        installmentsPaid + claimsReimbursed === 0
+          ? 'Nothing left to settle'
+          : `Settled ${installmentsPaid} loan instalment(s) and ${claimsReimbursed} expense claim(s)`,
+      );
+    },
   });
 }
 

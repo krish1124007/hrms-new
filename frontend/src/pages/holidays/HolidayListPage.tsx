@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Plus, CalendarDays, Pencil, Trash2 } from 'lucide-react';
+import { Plus, CalendarDays, ChevronLeft, ChevronRight, Copy, Pencil, Trash2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -24,19 +24,30 @@ import {
   useCreateHoliday,
   useUpdateHoliday,
   useDeleteHoliday,
+  useDepartments,
+  useRolloverHolidays,
 } from '@/hooks/use-systemcore';
 import type { Holiday } from '@/lib/systemcore.api';
 import { cn } from '@/lib/utils';
 import { usePermissions } from '@/hooks/use-permissions';
+import { businessDayKey } from '@/lib/business-day';
 
 const schema = z.object({
   name: z.string().min(1),
   date: z.string().min(1),
   type: z.enum(['public', 'optional', 'restricted']).default('public'),
+  /** Empty = every department. */
+  departments: z.array(z.string()).default([]),
   isRecurring: z.boolean().default(false),
   description: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
+
+const TYPE_HINT: Record<Holiday['type'], string> = {
+  public: 'A paid day off for the departments below (everyone when none are ticked).',
+  optional: 'A working day; employees may take it off as leave.',
+  restricted: 'A working day; shown on the calendar only.',
+};
 
 const TYPE_VARIANT: Record<Holiday['type'], 'success' | 'warning' | 'secondary'> = {
   public: 'success',
@@ -60,13 +71,29 @@ const MONTHS = [
 ];
 
 export default function HolidayListPage(): ReactElement {
-  const year = new Date().getFullYear();
+  const [year, setYear] = useState(() => new Date().getFullYear());
   const { data, isLoading } = useHolidays({ limit: 200, year });
   const create = useCreateHoliday();
   const update = useUpdateHoliday();
   const remove = useDeleteHoliday();
+  const rollover = useRolloverHolidays();
   const { has } = usePermissions();
   const canManage = has('holidays.create');
+  // Only the holiday form needs them.
+  const { data: deptData } = useDepartments({ limit: 100 }, { enabled: canManage });
+  const departments = deptData?.data ?? [];
+
+  const copyToNextYear = (): void => {
+    const target = year + 1;
+    if (
+      !window.confirm(
+        `Copy every recurring holiday to ${target}? Holidays already in ${target} are skipped.`,
+      )
+    ) {
+      return;
+    }
+    rollover.mutate(target, { onSuccess: () => setYear(target) });
+  };
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Holiday | null>(null);
@@ -76,12 +103,26 @@ export default function HolidayListPage(): ReactElement {
     register,
     handleSubmit,
     reset,
+    watch,
+    setValue,
     formState: { errors },
-  } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: 'public' } });
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { type: 'public', departments: [] },
+  });
+  const formType = watch('type');
+  const formDepartments = watch('departments') ?? [];
+  const toggleDepartment = (id: string, on: boolean): void => {
+    setValue(
+      'departments',
+      on ? [...formDepartments, id] : formDepartments.filter((d) => d !== id),
+      { shouldDirty: true },
+    );
+  };
 
   const openCreate = (): void => {
     setEditing(null);
-    reset({ name: '', date: '', type: 'public', isRecurring: false, description: '' });
+    reset({ name: '', date: '', type: 'public', departments: [], isRecurring: false, description: '' });
     setOpen(true);
   };
 
@@ -89,8 +130,10 @@ export default function HolidayListPage(): ReactElement {
     setEditing(h);
     reset({
       name: h.name,
-      date: h.date.slice(0, 10),
+      // Holidays stored at IST midnight (the day before in UTC) still edit as their own day.
+      date: businessDayKey(h.date),
       type: h.type,
+      departments: (h.departments ?? []).map((d) => (typeof d === 'string' ? d : d._id)),
       isRecurring: h.isRecurring,
       description: h.description ?? '',
     });
@@ -116,6 +159,18 @@ export default function HolidayListPage(): ReactElement {
       key: 'type',
       header: 'Type',
       cell: (h) => <Badge variant={TYPE_VARIANT[h.type]}>{h.type}</Badge>,
+    },
+    {
+      key: 'departments',
+      header: 'Departments',
+      cell: (h) =>
+        h.departments?.length ? (
+          <span className="text-xs">
+            {h.departments.map((d) => (typeof d === 'string' ? d : d.name)).join(', ')}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">All</span>
+        ),
     },
     {
       key: 'recurring',
@@ -167,12 +222,32 @@ export default function HolidayListPage(): ReactElement {
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Holidays' }]}
         actions={
           canManage ? (
-            <Button size="sm" onClick={openCreate}>
-              <Plus className="size-4" /> New Holiday
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={copyToNextYear} loading={rollover.isPending}>
+                <Copy className="size-4" /> Copy recurring to {year + 1}
+              </Button>
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="size-4" /> New Holiday
+              </Button>
+            </>
           ) : null
         }
       />
+
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
+          <ChevronLeft className="size-4" />
+        </Button>
+        <span className="min-w-[4rem] text-center text-lg font-semibold">{year}</span>
+        <Button variant="outline" size="sm" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
+          <ChevronRight className="size-4" />
+        </Button>
+        {year !== new Date().getFullYear() && (
+          <Button variant="ghost" size="sm" onClick={() => setYear(new Date().getFullYear())}>
+            This year
+          </Button>
+        )}
+      </div>
 
       <Tabs value={view} onValueChange={(v) => setView(v as 'list' | 'calendar')}>
         <TabsList>
@@ -251,7 +326,30 @@ export default function HolidayListPage(): ReactElement {
                 <option value="optional">Optional</option>
                 <option value="restricted">Restricted</option>
               </Select>
+              <p className="mt-1 text-xs text-muted-foreground">{TYPE_HINT[formType ?? 'public']}</p>
             </div>
+            <fieldset>
+              <legend className="text-sm font-medium text-foreground">Departments</legend>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Leave all unticked for a company-wide holiday.
+              </p>
+              <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto rounded-md border border-border p-2">
+                {departments.length === 0 ? (
+                  <p className="col-span-2 text-xs text-muted-foreground">No departments</p>
+                ) : (
+                  departments.map((d) => (
+                    <label key={d._id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={formDepartments.includes(d._id)}
+                        onChange={(e) => toggleDepartment(d._id, e.target.checked)}
+                      />
+                      {d.name}
+                    </label>
+                  ))
+                )}
+              </div>
+            </fieldset>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" {...register('isRecurring')} />
               Recurring every year

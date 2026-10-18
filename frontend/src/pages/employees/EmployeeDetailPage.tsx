@@ -1,7 +1,20 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { Edit, FileText, KeyRound, Mail, MapPin, Phone, Trash2, Upload, UserMinus } from 'lucide-react';
+import {
+  ArchiveRestore,
+  CalendarClock,
+  Edit,
+  FileText,
+  KeyRound,
+  Mail,
+  MapPin,
+  Phone,
+  Trash2,
+  Upload,
+  UserCog,
+  UserMinus,
+} from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -24,8 +37,11 @@ import {
   useAddEmployeeDocument,
   useEmployee,
   useRemoveEmployeeDocument,
+  useRestoreEmployee,
 } from '@/hooks/use-systemcore';
 import { DeleteEmployeeDialog } from '@/components/common/DeleteEmployeeDialog';
+import { EmployeeStatusDialog } from '@/components/employees/EmployeeStatusDialog';
+import { businessDayKey, todayKey } from '@/lib/business-day';
 import { documentsApi } from '@/lib/documents.api';
 import { authApi } from '@/lib/auth.api';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -47,6 +63,8 @@ export default function EmployeeDetailPage(): ReactElement {
   const { has } = usePermissions();
   const [resetOpen, setResetOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const restore = useRestoreEmployee();
 
   if (isLoading) {
     return (
@@ -61,6 +79,14 @@ export default function EmployeeDetailPage(): ReactElement {
   if (!e) {
     return <EmptyState title="Employee not found" />;
   }
+
+  const canUpdate = has('employees.update');
+  const working = e.status === 'active' || e.status === 'onNotice';
+  const exitKey = e.exitDate ? businessDayKey(e.exitDate) : null;
+  const scheduledExit = !!(e.exitStatus && exitKey && exitKey > todayKey());
+  const exitLabel = exitKey
+    ? new Date(`${exitKey}T00:00:00Z`).toLocaleDateString('en-IN', { timeZone: 'UTC', dateStyle: 'medium' })
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -81,10 +107,22 @@ export default function EmployeeDetailPage(): ReactElement {
                 <KeyRound className="size-4" /> Reset password
               </Button>
             )}
-            <Button variant="destructive" size="sm">
-              <UserMinus className="size-4" /> Deactivate
-            </Button>
-            {has('employees.delete') && (
+            {canUpdate && !e.isDeleted && (
+              <Button
+                variant={working ? 'destructive' : 'outline'}
+                size="sm"
+                onClick={() => setStatusOpen(true)}
+              >
+                {working ? <UserMinus className="size-4" /> : <UserCog className="size-4" />}
+                {working ? 'Deactivate' : 'Change status'}
+              </Button>
+            )}
+            {canUpdate && e.isDeleted && (
+              <Button size="sm" onClick={() => restore.mutate(e._id)} loading={restore.isPending}>
+                <ArchiveRestore className="size-4" /> Restore
+              </Button>
+            )}
+            {has('employees.delete') && !e.isDeleted && (
               <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
                 <Trash2 className="size-4" /> Delete
               </Button>
@@ -92,6 +130,22 @@ export default function EmployeeDetailPage(): ReactElement {
           </>
         }
       />
+
+      <EmployeeStatusDialog employee={statusOpen ? e : null} onClose={() => setStatusOpen(false)} />
+
+      {scheduledExit && (
+        <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          <CalendarClock className="size-4" />
+          Exit scheduled: becomes {e.exitStatus} on {exitLabel}
+          {e.exitReason ? ` — ${e.exitReason}` : ''}.
+        </div>
+      )}
+
+      {e.isDeleted && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          This employee was deleted. Restore them to make the record and their login active again.
+        </div>
+      )}
 
       <DeleteEmployeeDialog
         employee={deleteOpen ? e : null}
@@ -243,6 +297,9 @@ export default function EmployeeDetailPage(): ReactElement {
                 value={e.confirmationDate ? new Date(e.confirmationDate).toLocaleDateString('en-IN') : undefined}
               />
               <Field label="Notice Period (days)" value={e.noticePeriod} />
+              <Field label="Field Staff" value={e.isFieldStaff ? 'Yes' : 'No'} />
+              <Field label={scheduledExit ? 'Exit Scheduled' : 'Exit Date'} value={exitLabel} />
+              <Field label="Exit Reason" value={e.exitReason} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -274,6 +331,7 @@ export default function EmployeeDetailPage(): ReactElement {
                 <Field label="DA" value={e.salary?.da ?? 0} />
                 <Field label="Special" value={e.salary?.specialAllowance ?? 0} />
                 <Field label="Gross (₹)" value={e.salary?.grossSalary ?? 0} />
+                <Field label="Monthly TDS (₹)" value={e.salary?.tdsMonthly ?? 0} />
               </CardContent>
             </Card>
           </div>

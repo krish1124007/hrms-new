@@ -32,4 +32,14 @@ describe('sidebar visibility', () => {
     expect(leavesFor(noView)).not.toContain('/id-cards');
     expect(leavesFor({ ...noView, customPermissions: ['employees.view'] })).toContain('/id-cards');
   });
+
+  it('shows the regularization queue to approvers only', () => {
+    const manager: AuthUser = {
+      _id: 'm2',
+      email: 'm2@example.com',
+      role: { slug: 'manager', name: 'Manager', permissions: ['attendance.approve', 'leaves.approve'] },
+    };
+    expect(leavesFor(manager)).toContain('/attendance/regularizations');
+    expect(leavesFor(employee())).not.toContain('/attendance/regularizations');
+  });
 });

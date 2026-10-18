@@ -33,6 +33,8 @@ const schema = z.object({
   encashable: z.boolean().default(false),
   halfDayAllowed: z.boolean().default(true),
   attachmentRequired: z.boolean().default(false),
+  probationAllowed: z.boolean().default(false),
+  isActive: z.boolean().default(true),
   applicableGender: z.enum(['all', 'male', 'female']).default('all'),
   color: z.string().default('#3b82f6'),
   carryForwardEnabled: z.boolean().default(false),
@@ -56,7 +58,14 @@ export default function LeaveTypesPage(): ReactElement {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { paidLeave: true, halfDayAllowed: true, color: '#3b82f6', applicableGender: 'all' },
+    defaultValues: {
+      paidLeave: true,
+      halfDayAllowed: true,
+      probationAllowed: false,
+      isActive: true,
+      color: '#3b82f6',
+      applicableGender: 'all',
+    },
   });
 
   const openCreate = (): void => {
@@ -69,6 +78,8 @@ export default function LeaveTypesPage(): ReactElement {
       encashable: false,
       halfDayAllowed: true,
       attachmentRequired: false,
+      probationAllowed: false,
+      isActive: true,
       applicableGender: 'all',
       color: '#3b82f6',
       carryForwardEnabled: false,
@@ -87,6 +98,8 @@ export default function LeaveTypesPage(): ReactElement {
       encashable: lt.encashable,
       halfDayAllowed: lt.halfDayAllowed,
       attachmentRequired: lt.attachmentRequired,
+      probationAllowed: lt.probationAllowed ?? false,
+      isActive: lt.isActive ?? true,
       applicableGender: lt.applicableGender,
       color: lt.color,
       carryForwardEnabled: lt.carryForward?.enabled ?? false,
@@ -104,6 +117,8 @@ export default function LeaveTypesPage(): ReactElement {
       encashable: v.encashable,
       halfDayAllowed: v.halfDayAllowed,
       attachmentRequired: v.attachmentRequired,
+      probationAllowed: v.probationAllowed,
+      isActive: v.isActive,
       applicableGender: v.applicableGender,
       color: v.color,
       carryForward: { enabled: v.carryForwardEnabled, maxDays: v.carryForwardMax },
@@ -139,6 +154,28 @@ export default function LeaveTypesPage(): ReactElement {
       key: 'cf',
       header: 'Carry forward',
       cell: (lt) => (lt.carryForward?.enabled ? `Up to ${lt.carryForward.maxDays}` : '—'),
+    },
+    {
+      key: 'rules',
+      header: 'Rules',
+      cell: (lt) => {
+        const rules = [
+          lt.applicableGender && lt.applicableGender !== 'all' ? `${lt.applicableGender} only` : null,
+          lt.probationAllowed ? 'open to probationers' : 'not for probationers',
+          lt.halfDayAllowed ? 'half days' : null,
+          lt.attachmentRequired ? 'attachment required' : null,
+        ].filter(Boolean);
+        return <span className="text-xs text-muted-foreground">{rules.join(' · ')}</span>;
+      },
+    },
+    {
+      key: 'active',
+      header: 'Status',
+      cell: (lt) => (
+        <Badge variant={lt.isActive === false ? 'secondary' : 'success'}>
+          {lt.isActive === false ? 'Inactive' : 'Active'}
+        </Badge>
+      ),
     },
     {
       key: 'actions',
@@ -234,6 +271,12 @@ export default function LeaveTypesPage(): ReactElement {
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" {...register('attachmentRequired')} /> Attachment required
+              </label>
+              <label className="flex items-center gap-2" title="Employees still on probation may apply for this type">
+                <input type="checkbox" {...register('probationAllowed')} /> Allowed during probation
+              </label>
+              <label className="flex items-center gap-2" title="Inactive types cannot be applied for and are not allocated when a year opens">
+                <input type="checkbox" {...register('isActive')} /> Active
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" {...register('carryForwardEnabled')} /> Carry forward

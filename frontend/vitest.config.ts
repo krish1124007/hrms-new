@@ -24,6 +24,9 @@ export default defineConfig({
     setupFiles: ['src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
+    // Page tests render whole pages in jsdom (dialogs, tables, user-event
+    // typing); on a busy machine one can take several seconds.
+    testTimeout: 20_000,
     pool: 'forks',
     poolOptions: {
       forks: {

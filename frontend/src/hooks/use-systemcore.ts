@@ -15,15 +15,16 @@ import {
   type DesignationInput,
   type ShiftInput,
   type HolidayInput,
-  type Employee,
   type EmployeeInput,
+  type EmployeeStatusInput,
 } from '@/lib/systemcore.api';
 
 /* ── Departments ── */
-export function useDepartments(params?: Record<string, unknown>) {
+export function useDepartments(params?: Record<string, unknown>, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['departments', params],
     queryFn: () => departmentsApi.list(params),
+    enabled: opts.enabled ?? true,
   });
 }
 
@@ -206,6 +207,23 @@ export function useDeleteHoliday() {
   });
 }
 
+/** Copy the recurring holidays into `year`. */
+export function useRolloverHolidays() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (year: number) => holidaysApi.rollover(year),
+    onSuccess: (d, year) => {
+      qc.invalidateQueries({ queryKey: ['holidays'] });
+      const { created, skipped } = d.data;
+      toast.success(
+        created === 0 && skipped === 0
+          ? 'No recurring holidays to copy'
+          : `Copied ${created} recurring holiday(s) to ${year}${skipped ? ` — ${skipped} already there` : ''}`,
+      );
+    },
+  });
+}
+
 /* ── Employees ── */
 export function useEmployees(params?: Record<string, unknown>) {
   return useQuery({
@@ -287,16 +305,22 @@ export function useDeleteEmployee() {
 export function useUpdateEmployeeStatus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      id,
-      body,
-    }: {
-      id: string;
-      body: { status: Employee['status']; reason?: string; exitDate?: string };
-    }) => employeesApi.updateStatus(id, body),
+    mutationFn: ({ id, body }: { id: string; body: EmployeeStatusInput }) =>
+      employeesApi.updateStatus(id, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Status updated');
+    },
+  });
+}
+
+export function useRestoreEmployee() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => employeesApi.restore(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['employees'] });
+      toast.success('Employee restored');
     },
   });
 }

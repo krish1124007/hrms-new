@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Clock,
   Clock3,
+  ClipboardCheck,
   FileBarChart,
   FileText,
   FolderOpen,
@@ -79,6 +80,8 @@ export const NAV_ACCESS = {
   holidays: ['holidays.view'],
   attendanceView: ['attendance.view'],
   attendanceConfig: ['attendance.config'],
+  /** The regularization approval queue — managers see their direct reports', HR everyone's. */
+  attendanceApprove: ['attendance.approve'],
   leaveRequests: ['leaves.approve'],
   // Either may read balances on the API; seeded managers hold only leaves.approve.
   leaveBalances: ['leaves.approve', 'leaves.update'],
@@ -141,6 +144,7 @@ export const NAV_GROUPS: NavGroup[] = [
           // Self-service for everyone; the page adds the team view for `overtime.view`.
           { label: 'Overtime', to: '/overtime', icon: Clock3, module: 'attendance' },
           { label: 'Records', to: '/attendance/records', icon: ClipboardList, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
+          { label: 'Regularizations', to: '/attendance/regularizations', icon: ClipboardCheck, module: 'attendance', permissions: P.attendanceApprove },
           { label: 'Sites', to: '/attendance/sites', icon: MapPin, module: 'attendance', permissions: P.attendanceConfig },
           { label: 'Geofences', to: '/attendance/geofences', icon: MapPinned, module: 'attendance', permissions: P.attendanceConfig },
           { label: 'QR Codes', to: '/attendance/qr-codes', icon: HardDrive, module: 'attendance', permissions: P.attendanceConfig },

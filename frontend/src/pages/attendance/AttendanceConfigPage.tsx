@@ -5,8 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { useAttendanceConfig, useUpdateAttendanceConfig } from '@/hooks/use-attendance';
-import type { AttendanceMethod } from '@/lib/attendance.api';
+import type { AttendanceMethod, ExpenseBeforeCheckout } from '@/lib/attendance.api';
 import {
   DAY_NAMES,
   DEFAULT_WEEK_OFF_RULE,
@@ -21,15 +22,23 @@ type DayMode = 'working' | 'off' | 'alternate';
 
 const WEEK_NUMBERS = [1, 2, 3, 4, 5];
 
+// Face recognition is no longer offered; a stored `face` is dropped on the next save.
 const ALL_METHODS: { key: AttendanceMethod; label: string; desc: string }[] = [
   { key: 'manual', label: 'Manual', desc: 'Admin/HR records attendance manually' },
-  { key: 'face', label: 'Face Recognition', desc: 'Selfie with liveness check' },
   { key: 'qr', label: 'Static QR', desc: 'Scan a fixed QR posted at the office' },
   { key: 'dynamic_qr', label: 'Dynamic QR', desc: 'Rotating QR shown on a screen' },
   { key: 'ip', label: 'Office IP', desc: 'Only allow check-in from approved IPs' },
   { key: 'site', label: 'Site GPS', desc: 'GPS distance from office site' },
   { key: 'geofence', label: 'Geofence', desc: 'Polygon or circle perimeter' },
   { key: 'device', label: 'Device', desc: 'Bound to a specific device ID' },
+];
+
+const OFFERED_METHODS = new Set(ALL_METHODS.map((m) => m.key));
+
+const EXPENSE_RULES: { value: ExpenseBeforeCheckout; label: string }[] = [
+  { value: 'all', label: 'Everyone' },
+  { value: 'field', label: 'Field staff only' },
+  { value: 'none', label: 'No one' },
 ];
 
 export default function AttendanceConfigPage(): ReactElement {
@@ -43,6 +52,9 @@ export default function AttendanceConfigPage(): ReactElement {
   const [autoCheckout, setAutoCheckout] = useState('');
   const [requirePhoto, setRequirePhoto] = useState(false);
   const [requireLocation, setRequireLocation] = useState(false);
+  // Not edited here (nothing enforces it yet) — kept as stored, since a save replaces all settings.
+  const [requireNoteOnLate, setRequireNoteOnLate] = useState(false);
+  const [expenseRule, setExpenseRule] = useState<ExpenseBeforeCheckout>('all');
   const [freeLateDays, setFreeLateDays] = useState(3);
   const [trackingEnabled, setTrackingEnabled] = useState(false);
   const [trackingIntervalMin, setTrackingIntervalMin] = useState(2);
@@ -51,13 +63,15 @@ export default function AttendanceConfigPage(): ReactElement {
   useEffect(() => {
     if (data?.data) {
       const c = data.data;
-      setEnabled(c.enabledMethods);
+      setEnabled(c.enabledMethods.filter((m) => OFFERED_METHODS.has(m)));
       setLateAfter(c.settings.lateMarkAfterMinutes ?? 15);
       setOvertimeMin(c.settings.overtimeThresholdMinutes ?? 540);
       setHalfDay(c.settings.halfDayThresholdHours ?? 4);
       setAutoCheckout(c.settings.autoCheckoutTime ?? '');
       setRequirePhoto(c.settings.requirePhotoOnCheckIn ?? false);
       setRequireLocation(c.settings.requireLocation ?? false);
+      setRequireNoteOnLate(c.settings.requireNoteOnLateCheckIn ?? false);
+      setExpenseRule(c.settings.expenseBeforeCheckout ?? 'all');
       setFreeLateDays(c.settings.freeLateDaysPerMonth ?? 3);
       setTrackingEnabled(c.liveTracking?.enabled ?? false);
       setTrackingIntervalMin(Math.max(1, Math.round((c.liveTracking?.intervalSeconds ?? 120) / 60)));
@@ -111,7 +125,11 @@ export default function AttendanceConfigPage(): ReactElement {
     }));
   };
 
+  const autoCheckoutValid = autoCheckout === '' || /^\d{2}:\d{2}$/.test(autoCheckout);
+
   const save = (): void => {
+    if (!autoCheckoutValid) return;
+    // The API replaces the whole `settings` object, so every field is sent.
     updateMutation.mutate({
       enabledMethods: enabled.length ? enabled : ['manual'],
       settings: {
@@ -121,8 +139,9 @@ export default function AttendanceConfigPage(): ReactElement {
         autoCheckoutTime: autoCheckout || undefined,
         requirePhotoOnCheckIn: requirePhoto,
         requireLocation: requireLocation,
-        requireNoteOnLateCheckIn: false,
+        requireNoteOnLateCheckIn: requireNoteOnLate,
         freeLateDaysPerMonth: freeLateDays,
+        expenseBeforeCheckout: expenseRule,
       },
       liveTracking: {
         enabled: trackingEnabled,
@@ -149,7 +168,7 @@ export default function AttendanceConfigPage(): ReactElement {
           { label: 'Settings' },
         ]}
         actions={
-          <Button onClick={save} loading={updateMutation.isPending}>
+          <Button onClick={save} loading={updateMutation.isPending} disabled={!autoCheckoutValid}>
             <Save className="mr-2 size-4" />
             Save
           </Button>
@@ -294,16 +313,37 @@ export default function AttendanceConfigPage(): ReactElement {
             />
           </div>
           <div>
-            <Label htmlFor="auto">Auto-checkout time (HH:mm)</Label>
+            <Label htmlFor="auto">Auto-checkout time</Label>
             <Input
               id="auto"
-              type="text"
-              placeholder="18:30"
+              type="time"
               value={autoCheckout}
-              onChange={(e) => setAutoCheckout(e.target.value)}
+              onChange={(e) => setAutoCheckout(e.target.value.slice(0, 5))}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              The nightly close checks out anyone still clocked in at this time (23:59 when blank).
+              An auto check-out never counts as overtime.
+            </p>
           </div>
-          <div className="sm:col-span-2">
+          <div>
+            <Label htmlFor="expense-rule">Expenses before check-out</Label>
+            <Select
+              id="expense-rule"
+              value={expenseRule}
+              onChange={(e) => setExpenseRule(e.target.value as ExpenseBeforeCheckout)}
+            >
+              {EXPENSE_RULES.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Who must file the day's expenses before they can check out. Mark field staff on the
+              employee's profile.
+            </p>
+          </div>
+          <div>
             <Label htmlFor="free-late">Free late check-ins per month</Label>
             <Input
               id="free-late"

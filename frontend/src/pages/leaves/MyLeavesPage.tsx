@@ -28,6 +28,7 @@ import {
   useLeaveTypes,
 } from '@/hooks/use-leaves';
 import type { LeaveRequest, LeaveStatus } from '@/lib/leaves.api';
+import { businessDayKey, todayKey } from '@/lib/business-day';
 
 const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' | 'secondary'> = {
   approved: 'success',
@@ -35,6 +36,17 @@ const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' 
   rejected: 'destructive',
   cancelled: 'secondary',
 };
+
+/**
+ * An approved leave can be withdrawn by its owner only until the day it
+ * starts — after that only HR can cancel it. A pending one can always be.
+ */
+function withdrawBlockedReason(r: LeaveRequest): string | null {
+  if (r.status !== 'approved') return null;
+  return businessDayKey(r.startDate) <= todayKey()
+    ? 'This leave has started — ask HR to cancel it'
+    : null;
+}
 
 const schema = z.object({
   leaveTypeId: z.string().min(1, 'Select a leave type'),
@@ -130,18 +142,23 @@ export default function MyLeavesPage(): ReactElement {
       key: 'actions',
       header: '',
       width: '90px',
-      cell: (r) =>
-        r.status === 'pending' || r.status === 'approved' ? (
+      cell: (r) => {
+        if (r.status !== 'pending' && r.status !== 'approved') return null;
+        const blocked = withdrawBlockedReason(r);
+        return (
           <button
             onClick={() => {
-              if (confirm('Cancel this leave request?')) cancel.mutate(r._id);
+              if (confirm('Cancel this leave request?')) cancel.mutate({ id: r._id });
             }}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            title="Cancel"
+            disabled={!!blocked || (cancel.isPending && cancel.variables?.id === r._id)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+            title={blocked ?? 'Cancel'}
+            aria-label="Cancel leave"
           >
             <X className="size-4" />
           </button>
-        ) : null,
+        );
+      },
     },
   ];
 

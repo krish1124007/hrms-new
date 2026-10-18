@@ -13,6 +13,8 @@ interface PageHeaderProps {
   description?: string;
   breadcrumbs?: BreadcrumbItem[];
   actions?: ReactNode;
+  /** Rendered beside the title — e.g. a status badge. */
+  titleAddon?: ReactNode;
   /** Optional Lucide icon rendered next to the title. */
   icon?: LucideIcon;
   className?: string;
@@ -23,6 +25,7 @@ export function PageHeader({
   description,
   breadcrumbs,
   actions,
+  titleAddon,
   icon: Icon,
   className,
 }: PageHeaderProps) {
@@ -52,7 +55,14 @@ export function PageHeader({
             </div>
           )}
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+            {titleAddon ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+                {titleAddon}
+              </div>
+            ) : (
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+            )}
             {description && (
               <p className="mt-1 text-sm text-muted-foreground">{description}</p>
             )}

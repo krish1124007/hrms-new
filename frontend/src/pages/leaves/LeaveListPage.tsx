@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Check, X, Trash2 } from 'lucide-react';
+import { Ban, Check, X, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -20,8 +20,10 @@ import {
   useLeaveRequests,
   useApproveLeave,
   useRejectLeave,
+  useCancelLeave,
   useDeleteLeaveRequest,
 } from '@/hooks/use-leaves';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { LeaveRequest, LeaveStatus } from '@/lib/leaves.api';
 
 const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' | 'secondary'> = {
@@ -37,9 +39,29 @@ export default function LeaveListPage(): ReactElement {
   const approve = useApproveLeave();
   const reject = useRejectLeave();
   const deleteLeave = useDeleteLeaveRequest();
+  const cancelLeave = useCancelLeave();
+  const { has } = usePermissions();
+  // HR may cancel anyone's leave — even one already under way — with a reason.
+  const canCancel = has('leaves.update');
 
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  const submitCancel = (): void => {
+    const why = cancelReason.trim();
+    if (!cancellingId || why.length < 3) return;
+    cancelLeave.mutate(
+      { id: cancellingId, reason: why },
+      {
+        onSuccess: () => {
+          setCancellingId(null);
+          setCancelReason('');
+        },
+      },
+    );
+  };
 
   const submitReject = (): void => {
     if (!rejectingId || !reason.trim()) return;
@@ -106,7 +128,7 @@ export default function LeaveListPage(): ReactElement {
     {
       key: 'actions',
       header: '',
-      width: '110px',
+      width: '140px',
       cell: (r) => (
         <div className="flex gap-1">
           {r.status === 'pending' && (
@@ -129,6 +151,19 @@ export default function LeaveListPage(): ReactElement {
                 <X className="size-4" />
               </button>
             </>
+          )}
+          {canCancel && (r.status === 'pending' || r.status === 'approved') && (
+            <button
+              onClick={() => {
+                setCancellingId(r._id);
+                setCancelReason('');
+              }}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Cancel leave"
+              aria-label="Cancel leave"
+            >
+              <Ban className="size-4" />
+            </button>
           )}
           <button
             onClick={() => {
@@ -176,6 +211,39 @@ export default function LeaveListPage(): ReactElement {
         emptyTitle="No leave requests"
         emptyDescription="Requests submitted by employees will appear here"
       />
+
+      <Dialog open={!!cancellingId} onClose={() => setCancellingId(null)} size="sm">
+        <DialogHeader>
+          <DialogTitle>Cancel leave</DialogTitle>
+        </DialogHeader>
+        <DialogBody className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            The leave's days go back to the employee's balance; days already past are marked
+            absent.
+          </p>
+          <Label htmlFor="cancel-reason">Reason *</Label>
+          <Textarea
+            id="cancel-reason"
+            rows={3}
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="Shown on the request (at least 3 characters)"
+          />
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setCancellingId(null)}>
+            Keep leave
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={submitCancel}
+            loading={cancelLeave.isPending}
+            disabled={cancelReason.trim().length < 3}
+          >
+            Cancel leave
+          </Button>
+        </DialogFooter>
+      </Dialog>
 
       <Dialog open={!!rejectingId} onClose={() => setRejectingId(null)} size="sm">
         <DialogHeader>
