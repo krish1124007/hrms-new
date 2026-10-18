@@ -71,6 +71,14 @@ export declare const importCalendarSchema: z.ZodObject<{
         type?: "optional" | "public" | "restricted" | undefined;
     }[];
 }>;
+export declare const rolloverSchema: z.ZodObject<{
+    /** The year to copy the recurring holidays into, from the year before it. */
+    year: z.ZodNumber;
+}, "strip", z.ZodTypeAny, {
+    year: number;
+}, {
+    year: number;
+}>;
 export declare const listQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
     limit: z.ZodDefault<z.ZodNumber>;
@@ -93,5 +101,18 @@ export declare function createHoliday(req: Request, res: Response): Promise<void
 export declare function getHoliday(req: Request, res: Response): Promise<void>;
 export declare function updateHoliday(req: Request, res: Response): Promise<void>;
 export declare function deleteHoliday(req: Request, res: Response): Promise<void>;
+/**
+ * POST /holidays/import-calendar — add the holidays not already in the
+ * calendar. Each date is stored as its business-day label; a row matching an
+ * existing holiday (same day, same name) or an earlier row of the payload is
+ * skipped. Returns `{ created, skipped }`.
+ */
 export declare function importCalendar(req: Request, res: Response): Promise<void>;
+/**
+ * POST /holidays/rollover `{ year }` — copy every recurring holiday of
+ * `year − 1` to the same month and day of `year` (29 Feb → 28 Feb when
+ * `year` is not a leap year), skipping any already there (same day, same
+ * name). Idempotent. Returns `{ created, skipped }`.
+ */
+export declare function rolloverHolidays(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=holidays.controller.d.ts.map

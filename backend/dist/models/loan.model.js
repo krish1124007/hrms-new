@@ -14,6 +14,7 @@ const installmentSchema = new Schema({
         default: 'scheduled',
     },
     notes: { type: String, trim: true },
+    payrollCycleId: { type: Schema.Types.ObjectId, ref: 'PayrollCycle', default: null },
 }, { _id: true });
 const loanSchema = new Schema({
     loanNumber: { type: String, required: true, trim: true, uppercase: true },

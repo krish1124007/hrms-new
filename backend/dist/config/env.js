@@ -57,9 +57,24 @@ const envSchema = z.object({
     ALLOW_NO_MAIL: z.enum(['true', 'false']).default('false'),
     COMPANY_NAME: z.string().default('Company'),
     COMPANY_EMAIL: z.string().optional(),
+    /**
+     * The company's state: the seller state on GST invoices, and the Professional
+     * Tax state of an employee with no state on file (payroll).
+     */
     COMPANY_STATE_CODE: z.string().default('MH'),
     COMPANY_GSTIN: z.string().default('27AAAAA0000A1Z5'),
     GST_RATE_PERCENT: z.coerce.number().default(18),
+    /**
+     * Payroll statutory rules (see lib/statutory.ts). PF is `PF_RATE_PERCENT` of
+     * the earned basic + DA up to `PF_WAGE_CEILING`; ESI applies while the
+     * full-month gross is within `ESI_WAGE_CEILING` (decided once per
+     * Apr–Sep / Oct–Mar contribution period).
+     */
+    PF_WAGE_CEILING: z.coerce.number().positive().default(15000),
+    PF_RATE_PERCENT: z.coerce.number().min(0).max(100).default(12),
+    ESI_WAGE_CEILING: z.coerce.number().positive().default(21000),
+    ESI_EMPLOYEE_PERCENT: z.coerce.number().min(0).max(100).default(0.75),
+    ESI_EMPLOYER_PERCENT: z.coerce.number().min(0).max(100).default(3.25),
     CORS_ORIGIN: z.string().default('http://localhost:5173'),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     /**

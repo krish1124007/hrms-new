@@ -36,6 +36,7 @@ router.patch('/cycles/:id/records/:recordId', requirePermission('payroll.process
 router.post('/cycles/:id/generate-payslips', requirePermission('payroll.process'), asyncHandler(ctrl.generatePayslips));
 router.post('/cycles/:id/lock', requirePermission('payroll.process'), asyncHandler(ctrl.lockCycle));
 router.post('/cycles/:id/mark-paid', requirePermission('payroll.process'), validate(ctrl.markPaidSchema), asyncHandler(ctrl.markCyclePaid));
+router.post('/cycles/:id/settle', requirePermission('payroll.process'), asyncHandler(ctrl.settlePaidCycle));
 /* ── Records ── */
 // `getRecord` returns the full payroll record (incl. salary). Employees who
 // need their own data go through /my-payslips. Direct record fetch is HR-only.

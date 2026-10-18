@@ -95,6 +95,10 @@ export declare const createEmployeeSchema: z.ZodObject<{
     shift: z.ZodOptional<z.ZodString>;
     /** Force this employee to share location when clocking in / out. */
     requireLocation: z.ZodOptional<z.ZodBoolean>;
+    /** Field staff — drives the expense-before-checkout rule. */
+    isFieldStaff: z.ZodOptional<z.ZodBoolean>;
+    /** Salary structure this employee's pay components come from. */
+    salaryStructureId: z.ZodNullable<z.ZodOptional<z.ZodString>>;
     reportingManager: z.ZodOptional<z.ZodString>;
     joiningDate: z.ZodDate;
     confirmationDate: z.ZodOptional<z.ZodDate>;
@@ -106,18 +110,21 @@ export declare const createEmployeeSchema: z.ZodObject<{
         da: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
         specialAllowance: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
         otherAllowances: z.ZodOptional<z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodNumber>>>;
+        tdsMonthly: z.ZodOptional<z.ZodOptional<z.ZodNumber>>;
     }, "strip", z.ZodTypeAny, {
         basic?: number | undefined;
         hra?: number | undefined;
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     }, {
         basic?: number | undefined;
         hra?: number | undefined;
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     }>>;
     bankDetails: z.ZodOptional<z.ZodObject<{
         bankName: z.ZodOptional<z.ZodOptional<z.ZodString>>;
@@ -199,7 +206,10 @@ export declare const createEmployeeSchema: z.ZodObject<{
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     } | undefined;
+    isFieldStaff?: boolean | undefined;
+    salaryStructureId?: string | null | undefined;
     bankDetails?: {
         bankName?: string | undefined;
         accountNumber?: string | undefined;
@@ -258,7 +268,10 @@ export declare const createEmployeeSchema: z.ZodObject<{
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     } | undefined;
+    isFieldStaff?: boolean | undefined;
+    salaryStructureId?: string | null | undefined;
     bankDetails?: {
         bankName?: string | undefined;
         accountNumber?: string | undefined;
@@ -368,6 +381,8 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     designation: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     shift: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     requireLocation: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+    isFieldStaff: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+    salaryStructureId: z.ZodOptional<z.ZodNullable<z.ZodOptional<z.ZodString>>>;
     reportingManager: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     joiningDate: z.ZodOptional<z.ZodDate>;
     confirmationDate: z.ZodOptional<z.ZodOptional<z.ZodDate>>;
@@ -379,18 +394,21 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
         da: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
         specialAllowance: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
         otherAllowances: z.ZodOptional<z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodNumber>>>;
+        tdsMonthly: z.ZodOptional<z.ZodOptional<z.ZodNumber>>;
     }, "strip", z.ZodTypeAny, {
         basic?: number | undefined;
         hra?: number | undefined;
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     }, {
         basic?: number | undefined;
         hra?: number | undefined;
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     }>>>;
     bankDetails: z.ZodOptional<z.ZodOptional<z.ZodObject<{
         bankName: z.ZodOptional<z.ZodOptional<z.ZodString>>;
@@ -470,7 +488,10 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     } | undefined;
+    isFieldStaff?: boolean | undefined;
+    salaryStructureId?: string | null | undefined;
     bankDetails?: {
         bankName?: string | undefined;
         accountNumber?: string | undefined;
@@ -528,7 +549,10 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
         da?: number | undefined;
         specialAllowance?: number | undefined;
         otherAllowances?: Record<string, number> | undefined;
+        tdsMonthly?: number | undefined;
     } | undefined;
+    isFieldStaff?: boolean | undefined;
+    salaryStructureId?: string | null | undefined;
     bankDetails?: {
         bankName?: string | undefined;
         accountNumber?: string | undefined;
@@ -607,10 +631,43 @@ export declare function createEmployee(req: Request, res: Response): Promise<voi
 export declare function getEmployee(req: Request, res: Response): Promise<void>;
 export declare function updateEmployee(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployee(req: Request, res: Response): Promise<void>;
+/** POST /employees/:id/restore — bring back a soft-deleted employee (and their login, if they are employed). */
+export declare function restoreEmployee(req: Request, res: Response): Promise<void>;
+/**
+ * Change an employee's employment status.
+ *
+ *   • `active` — employed again; any scheduled exit is dropped and the login
+ *     reactivated.
+ *   • `onNotice` — serving notice; with an `exitDate` the exit is scheduled
+ *     for it (`resigned`), applied by the day-close after that day.
+ *   • `resigned` / `terminated` / `inactive` with an `exitDate` after today
+ *     (business day) — only scheduled: the employee stays as they are, login
+ *     included, until the day-close after `exitDate` applies it
+ *     (`applyScheduledExits`). Otherwise — no date, or today or earlier — it
+ *     applies now: approved leave starting after today is cancelled and
+ *     refunded, the login deactivated, and HR told what to recover.
+ */
 export declare function updateEmployeeStatus(req: Request, res: Response): Promise<void>;
 export declare function addEmployeeDocument(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployeeDocument(req: Request, res: Response): Promise<void>;
 export declare function exportEmployees(_req: Request, res: Response): Promise<void>;
+/** One row of an import, as reported back (`row` is 1-based, in payload order). */
+export interface ImportRowResult {
+    row: number;
+    email?: string;
+    employeeId?: string;
+    status: 'created' | 'updated' | 'skipped' | 'error';
+    message: string;
+}
+/**
+ * POST /employees/import — one row per employee. A new e-mail creates the
+ * employee with a login exactly as `createEmployee` does (an `invited` user
+ * and the accept-invite mail, unless the row sets a password), keeping the
+ * row's Employee ID when it has one; a known e-mail updates that employee
+ * through the same safe update as PATCH. Every row is reported as `created`,
+ * `updated`, `skipped` (a deleted employee has that e-mail) or `error`;
+ * `failed` lists the last two the way older clients read it.
+ */
 export declare function importEmployees(req: Request, res: Response): Promise<void>;
 export declare function upcomingBirthdays(_req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=employees.controller.d.ts.map

@@ -23,6 +23,7 @@ const leaveRequestSchema = new Schema({
     approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date },
     rejectedReason: { type: String },
+    cancelReason: { type: String, trim: true },
     appliedAt: { type: Date, default: Date.now },
 });
 leaveRequestSchema.plugin(timestampPlugin);

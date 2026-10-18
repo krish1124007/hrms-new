@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { Loan } from '../models/loan.model.js';
 import { Employee } from '../models/employee.model.js';
-import { ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
+import { AppError, ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { getUserId } from '../lib/async-context.js';
 import { audit } from '../services/audit.service.js';
+import { cycleHoldingInstallment } from '../services/payroll-compute.service.js';
+import { cycleLabel } from '../lib/payroll-cycle.js';
 /** GET /api/v1/loans/me — loans belonging to the calling employee. Auth-only. */
 export async function myLoans(_req, res) {
     const userId = getUserId();
@@ -371,13 +373,16 @@ export async function recordPayment(req, res) {
     if (loan.status !== 'active' && loan.status !== 'disbursed') {
         throw new ValidationAppError('Loan is not in a payable state');
     }
-    // Mongoose adds _id to subdocs but the type interface omits it.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const inst = loan.installments.find((i) => String(i._id) === body.installmentId);
     if (!inst)
         throw new NotFoundError('Installment not found');
     if (inst.status === 'paid') {
         throw new ValidationAppError('This installment is already paid');
+    }
+    // A payroll record that deducts the EMI holds the instalment until its cycle is paid and settled.
+    const payroll = inst._id ? await cycleHoldingInstallment(inst._id) : null;
+    if (payroll) {
+        throw new AppError(`This instalment is held by the ${cycleLabel(payroll)} payroll until that payroll is paid and settled.`, 409, 'INSTALLMENT_IN_PAYROLL');
     }
     const remaining = round2(inst.amount - inst.paidAmount);
     if (body.amount > remaining + 0.01) {

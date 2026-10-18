@@ -1,26 +1,20 @@
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { LeaveType, LeaveBalance, LeaveRequest, Employee, Holiday, Shift } from '../models/index.js';
-import { NotFoundError, ValidationAppError, ForbiddenError } from '../lib/errors.js';
+import { LeaveType, LeaveBalance, LeaveRequest, Employee, User } from '../models/index.js';
+import { NotFoundError, ValidationAppError, ForbiddenError, AppError } from '../lib/errors.js';
 import { assertNotSelfApproval, assertOwnOrPermission, currentEmployeeId, hasPermission, } from '../lib/access.js';
+import { assertCanDecide, assertOwnOrCanDecide, canSeeAll, isApprover, scopeFilter, scopeFilterFor, } from '../lib/approvals.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
-import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
-import { getWeekOffRule } from '../services/week-off.service.js';
+import { isSameBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
+import { isOnProbation } from '../lib/probation.js';
+import { logger } from '../config/logger.js';
+import { availableBalance, cancelAndReleaseLeave, chargeLeaveBalance, ensureLeaveBalance, isUnpaidLeaveType, leaveWorkingDays, leaveYear, refundLeaveBalance, stampLeaveDays, unstampLeaveDays, } from '../services/leave-attendance.service.js';
+import { formatLeaveDates, leaveDecisionEmail, notifyLeaveDecision, notifyLeaveRequest, reportingManagerUserId, } from '../services/notification.service.js';
+import { sendMail } from '../services/email.service.js';
+import { LeaveYearIncompleteError, allocateLeaveType, openLeaveYear } from '../services/leave-year.service.js';
 // ---------- Helpers ----------
-export function isUnpaidLeaveType(leaveType) {
-    if (!leaveType)
-        return false;
-    if (leaveType.paidLeave === false)
-        return true;
-    const code = (leaveType.code ?? '').toUpperCase();
-    const name = (leaveType.name ?? '').toLowerCase();
-    if (['LWP', 'LOP', 'UL', 'UNPAID'].includes(code))
-        return true;
-    if (name.includes('unpaid') || name.includes('un-paid') || name.includes('loss of pay') || name.includes('lwp'))
-        return true;
-    return false;
-}
+export { isUnpaidLeaveType };
 async function getCurrentEmployee() {
     const userId = getUserId();
     if (!userId)
@@ -28,42 +22,65 @@ async function getCurrentEmployee() {
     return Employee.findOne({ userId: new Types.ObjectId(userId) }).exec();
 }
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
+const DECIDED_MEANWHILE = 'This request was decided or withdrawn meanwhile — reload and try again';
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
-/** Approvers and HR see every employee's leave; everyone else only their own. */
-const SEE_ALL_LEAVES = ['leaves.approve', 'leaves.update'];
-function canSeeAllLeaves(req) {
-    return SEE_ALL_LEAVES.some((perm) => hasPermission(req.user, perm));
-}
 /**
- * Compute working days between startDate..endDate inclusive, excluding
- * company week-offs (Sunday + 4th Saturday), non-work days (shift.workDays)
- * and holidays.
+ * The rules a leave type sets on who may take it and how. Checked on every
+ * application, including one HR files on an employee's behalf — they are
+ * about the employee, not the person filing.
  */
-async function computeWorkingDays(start, end, workDays, isHalfDay) {
-    if (end < start)
-        throw new ValidationAppError('endDate must be on or after startDate');
-    const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-    const holidays = await Holiday.find({
-        date: { $gte: startDay, $lte: endDay },
-    })
-        .select('date')
-        .lean()
-        .exec();
-    const holidaySet = new Set(holidays.map((h) => toKey(new Date(h.date))));
-    const rule = await getWeekOffRule();
-    let count = 0;
-    const cur = new Date(startDay);
-    while (cur <= endDay) {
-        const dow = cur.getDay();
-        const key = toKey(cur);
-        if (!isWeekOff(cur, rule) && workDays.includes(dow) && !holidaySet.has(key))
-            count += 1;
-        cur.setDate(cur.getDate() + 1);
+export function validateLeaveTypeRules(leaveType, employee, body, today = new Date()) {
+    if (leaveType.isActive === false) {
+        throw new ValidationAppError(`${leaveType.name} is no longer available`);
     }
-    if (isHalfDay && count > 0)
-        count = count - 0.5;
-    return count;
+    if (leaveType.applicableGender && leaveType.applicableGender !== 'all' && employee.gender !== leaveType.applicableGender) {
+        throw new ValidationAppError(`${leaveType.name} is only available to ${leaveType.applicableGender} employees`);
+    }
+    if (!leaveType.probationAllowed && isOnProbation(employee, today)) {
+        throw new ValidationAppError(`${leaveType.name} is not available during probation`);
+    }
+    if (body.isHalfDay && leaveType.halfDayAllowed === false) {
+        throw new ValidationAppError(`${leaveType.name} cannot be taken as a half day`);
+    }
+    if (leaveType.attachmentRequired && !body.attachments?.length) {
+        throw new ValidationAppError(`${leaveType.name} requires a supporting attachment`);
+    }
+}
+/** Tell the applicant's reporting manager about a new application. Never throws. */
+async function notifyReportingManager(emp, leaveType, doc) {
+    try {
+        const managerUserId = await reportingManagerUserId(emp);
+        if (!managerUserId)
+            return;
+        await notifyLeaveRequest(managerUserId, `${emp.firstName} ${emp.lastName}`, leaveType.name, formatLeaveDates(doc.startDate, doc.endDate), { leaveRequestId: String(doc._id) });
+    }
+    catch (err) {
+        logger.warn({ err, leaveRequestId: String(doc._id) }, 'leave: manager notification failed');
+    }
+}
+/** Tell the employee their request was decided — in-app and by e-mail. Never throws. */
+async function notifyEmployeeOfDecision(doc, status, leaveType, reason) {
+    try {
+        const emp = await Employee.findById(doc.employeeId).setOptions({ withDeleted: true }).select('userId').lean().exec();
+        if (!emp?.userId)
+            return;
+        const decision = {
+            status,
+            leaveTypeName: leaveType?.name ?? 'leave',
+            startDate: doc.startDate,
+            endDate: doc.endDate,
+            link: '/leaves',
+            reason,
+            leaveRequestId: String(doc._id),
+        };
+        await notifyLeaveDecision(String(emp.userId), decision);
+        const user = await User.findById(emp.userId).select('email firstName').lean().exec();
+        if (user?.email)
+            void sendMail({ to: user.email, ...leaveDecisionEmail(user.firstName ?? '', decision) });
+    }
+    catch (err) {
+        logger.warn({ err, leaveRequestId: String(doc._id) }, 'leave: decision notification failed');
+    }
 }
 // ---------- Leave Type ----------
 export const createLeaveTypeSchema = z.object({
@@ -156,16 +173,10 @@ export const adjustBalanceSchema = z.object({
 export async function listLeaveBalances(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
+    // HR sees every employee; a manager their direct reports and themselves;
+    // everyone else only their own. (No employee record matches nothing.)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = {};
-    if (canSeeAllLeaves(req)) {
-        if (q.employeeId)
-            filter.employeeId = new Types.ObjectId(q.employeeId);
-    }
-    else {
-        // `null` (no employee record) matches nothing — employeeId is required.
-        filter.employeeId = await currentEmployeeId(req);
-    }
+    const filter = await scopeFilterFor(req, 'leaves', q.employeeId);
     if (q.leaveTypeId)
         filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
     if (q.year)
@@ -185,7 +196,7 @@ export async function myLeaveBalances(req, res) {
     const employee = await getCurrentEmployee();
     if (!employee)
         throw new NotFoundError('Employee profile not found');
-    const year = Number(req.query.year ?? new Date().getFullYear());
+    const year = Number(req.query.year ?? leaveYear(new Date()));
     // Get all active leave types
     const types = await LeaveType.find({ isActive: true }).lean().exec();
     // Get existing balances for this employee and year
@@ -257,6 +268,56 @@ export async function adjustLeaveBalance(req, res) {
     });
     res.json({ success: true, data: doc });
 }
+/**
+ * `year` is bounded to 2000–2100 and no further ahead than next year (in the
+ * business timezone), so a typo cannot allocate 2072. The upper bound is
+ * judged per request, not when the module loads.
+ */
+export const openYearSchema = z
+    .object({
+    year: z.coerce.number().int().min(2000).max(2100),
+})
+    .superRefine(({ year }, ctx) => {
+    const latest = leaveYear(new Date()) + 1;
+    if (year > latest) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['year'],
+            message: `year cannot be later than ${latest}`,
+        });
+    }
+});
+/**
+ * Open a leave year: create the balances still missing (pro-rated for
+ * mid-year joiners) and carry the previous year's unused days forward.
+ * Idempotent — nothing already set is overwritten — so HR can run it again
+ * after adding an employee or leave type, or after a failed run.
+ *
+ * Audited whatever the outcome: a run that stops part way records the
+ * progress it made (and how many employees failed), one that never started
+ * records the error.
+ */
+export async function openLeaveYearBalances(req, res) {
+    const { year } = req.body;
+    const outcome = { openYear: year, completed: false };
+    try {
+        const counts = await openLeaveYear(year);
+        Object.assign(outcome, counts, { completed: true });
+        res.json({ success: true, data: counts });
+    }
+    catch (err) {
+        if (err instanceof LeaveYearIncompleteError) {
+            Object.assign(outcome, err.counts, { failed: err.failed });
+        }
+        else {
+            outcome.error = err instanceof Error ? err.message : String(err);
+        }
+        throw err;
+    }
+    finally {
+        void audit({ action: 'update', entity: 'LeaveBalance', after: outcome });
+    }
+}
 export const resetBalanceSchema = z.object({
     year: z.coerce.number().int(),
     leaveTypeId: z.string().optional(),
@@ -269,7 +330,9 @@ export async function resetLeaveBalances(req, res) {
         filter.leaveTypeId = new Types.ObjectId(body.leaveTypeId);
     }
     const result = await LeaveBalance.updateMany(filter, {
-        $set: { allocated: 0, used: 0, carried: 0, adjusted: 0 },
+        // `allocated` and `adjusted` are HR's figures and stay; the year's usage
+        // and carry-forward are what is cleared.
+        $set: { used: 0, carried: 0 },
     }).exec();
     void audit({
         action: 'update',
@@ -307,21 +370,21 @@ export const leaveRequestQuerySchema = z.object({
 export const rejectLeaveSchema = z.object({
     reason: z.string().min(1),
 });
+/** Optional for the owner withdrawing their own request; HR must give one. */
+export const cancelLeaveSchema = z
+    .object({
+    reason: z.string().trim().min(3).optional(),
+})
+    .default({});
 export async function listLeaveRequests(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
+    // HR sees every employee; a manager their direct reports and themselves;
+    // everyone else only their own. (No employee record matches nothing.)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = {};
+    const filter = await scopeFilterFor(req, 'leaves', q.employeeId);
     if (q.status)
         filter.status = q.status;
-    if (canSeeAllLeaves(req)) {
-        if (q.employeeId)
-            filter.employeeId = new Types.ObjectId(q.employeeId);
-    }
-    else {
-        // `null` (no employee record) matches nothing — employeeId is required.
-        filter.employeeId = await currentEmployeeId(req);
-    }
     if (q.leaveTypeId)
         filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
     if (q.from || q.to) {
@@ -393,63 +456,84 @@ export async function leaveCalendar(req, res) {
     const q = req.query;
     const from = q.from ? new Date(q.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const to = q.to ? new Date(q.to) : new Date(from.getFullYear(), from.getMonth() + 1, 0);
-    const query = LeaveRequest.find({
+    const inRange = {
         status: { $in: ['approved', 'pending'] },
         startDate: { $lte: to },
         endDate: { $gte: from },
-    });
-    if (SEE_ALL_LEAVES.some((p) => hasPermission(req.user, p))) {
-        query
-            .populate('employeeId', 'firstName lastName employeeId')
-            .populate('leaveTypeId', 'name code color');
+    };
+    const detailed = (filter) => LeaveRequest.find(filter)
+        .populate('employeeId', 'firstName lastName employeeId')
+        .populate('leaveTypeId', 'name code color')
+        .lean()
+        .exec();
+    // `color` is presentation only — the calendar paints each leave type with it.
+    const publicOnly = (filter) => LeaveRequest.find(filter)
+        .select(CALENDAR_PUBLIC_FIELDS)
+        .populate('employeeId', 'firstName lastName')
+        .populate('leaveTypeId', 'name color')
+        .lean()
+        .exec();
+    let list;
+    if (canSeeAll(req, 'leaves')) {
+        list = await detailed(inRange);
+    }
+    else if (isApprover(req, 'leaves')) {
+        // A manager sees the full request for their reports (and themselves) and
+        // the shared-calendar view of everybody else.
+        const scope = await scopeFilter(req, 'leaves');
+        const [mine, others] = await Promise.all([
+            detailed({ ...inRange, ...scope }),
+            publicOnly({ ...inRange, $nor: [scope] }),
+        ]);
+        list = [...mine, ...others];
     }
     else {
-        // `color` is presentation only — the calendar paints each leave type with it.
-        query
-            .select(CALENDAR_PUBLIC_FIELDS)
-            .populate('employeeId', 'firstName lastName')
-            .populate('leaveTypeId', 'name color');
+        list = await publicOnly(inRange);
     }
-    const list = await query.lean().exec();
     res.json({ success: true, data: list });
 }
-export async function applyLeave(req, res) {
-    const body = req.body;
-    // Resolve employee — the caller's own, unless a `leaves.update` holder
-    // (HR) is applying on someone else's behalf.
+/**
+ * Whose leave this application is: the caller's own, unless a `leaves.update`
+ * holder (HR) is applying on someone else's behalf.
+ */
+async function resolveApplicant(req, requested) {
     const me = await currentEmployeeId(req);
-    let employeeId;
-    if (body.employeeId && !(me && me.equals(body.employeeId))) {
+    if (requested && !(me && me.equals(requested))) {
         if (!hasPermission(req.user, 'leaves.update')) {
             throw new ForbiddenError('You can only apply for your own leave');
         }
-        employeeId = new Types.ObjectId(body.employeeId);
+        return new Types.ObjectId(requested);
     }
-    else {
-        if (!me)
-            throw new NotFoundError('Employee profile not found');
-        employeeId = me;
-    }
-    // Validate dates
+    if (!me)
+        throw new NotFoundError('Employee profile not found');
+    return me;
+}
+export async function applyLeave(req, res) {
+    const body = req.body;
+    const employeeId = await resolveApplicant(req, body.employeeId);
     if (body.endDate < body.startDate) {
         throw new ValidationAppError('endDate must be on or after startDate');
     }
-    if (body.isHalfDay && body.startDate.getTime() !== body.endDate.getTime()) {
+    // Balances are per year: one request must draw on one year's balance.
+    if (leaveYear(body.startDate) !== leaveYear(body.endDate)) {
+        throw new ValidationAppError('Leave spanning two years must be applied separately per year');
+    }
+    if (body.isHalfDay && !isSameBusinessDay(body.startDate, body.endDate)) {
         throw new ValidationAppError('Half day leave must be on a single date');
     }
-    // Get employee shift to determine workDays
     const emp = await Employee.findById(employeeId).populate('shift').exec();
     if (!emp)
         throw new NotFoundError('Employee not found');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shift = emp.shift;
-    const workDays = shift?.workDays ?? DEFAULT_WORK_DAYS;
-    // Compute working days
-    const days = await computeWorkingDays(body.startDate, body.endDate, workDays, body.isHalfDay);
+    const leaveType = await LeaveType.findById(body.leaveTypeId).exec();
+    if (!leaveType)
+        throw new ValidationAppError('Invalid leave type');
+    validateLeaveTypeRules(leaveType, emp, body);
+    // Counted with the same working-day verdict approval stamps attendance with.
+    const workingDays = (await leaveWorkingDays(body.startDate, body.endDate, emp)).length;
+    const days = body.isHalfDay && workingDays > 0 ? workingDays - 0.5 : workingDays;
     if (days <= 0) {
         throw new ValidationAppError('Selected range has no working days');
     }
-    // Check for overlapping leave requests
     const overlap = await LeaveRequest.findOne({
         employeeId,
         status: { $in: ['pending', 'approved'] },
@@ -459,46 +543,36 @@ export async function applyLeave(req, res) {
     if (overlap) {
         throw new ValidationAppError('Overlapping leave request exists for this period');
     }
-    // Validate balance — lazy-allocate from leaveType.daysAllowed if missing,
-    // so HR doesn't need to run the bulk-allocate endpoint before employees apply.
-    const year = body.startDate.getFullYear();
-    const leaveTypeOid = new Types.ObjectId(body.leaveTypeId);
-    const leaveType = await LeaveType.findById(leaveTypeOid).exec();
-    if (!leaveType)
-        throw new ValidationAppError('Invalid leave type');
-    let balance = await LeaveBalance.findOne({
-        employeeId,
-        leaveTypeId: leaveTypeOid,
-        year,
-    }).exec();
     const isUnpaid = isUnpaidLeaveType(leaveType);
     if (isUnpaid && leaveType.paidLeave !== false) {
         leaveType.paidLeave = false;
         await leaveType.save().catch(() => { });
     }
-    if (!balance) {
-        if (!isUnpaid && (!leaveType.daysAllowed || leaveType.daysAllowed <= 0)) {
+    // The balance row is allocated on first use, so HR need not open the year
+    // before employees apply — pro-rated to when they joined, exactly as
+    // opening the year would have. Unpaid leave has no allocation: its row just
+    // records `used`.
+    const year = leaveYear(body.startDate);
+    const balanceKey = { employeeId, leaveTypeId: leaveType._id, year };
+    if (isUnpaid) {
+        await ensureLeaveBalance(balanceKey, leaveType);
+    }
+    else {
+        await allocateLeaveType(emp, leaveType, year);
+        if (!(await LeaveBalance.exists(balanceKey))) {
             throw new ValidationAppError(`${leaveType.name} has no annual allocation — please contact HR to set one`);
         }
-        balance = await LeaveBalance.create({
-            employeeId,
-            leaveTypeId: leaveTypeOid,
-            year,
-            allocated: leaveType.daysAllowed ?? 0,
-        });
-    }
-    if (!isUnpaid) {
-        const remaining = (balance.allocated ?? 0) +
-            (balance.carried ?? 0) +
-            (balance.adjusted ?? 0) -
-            (balance.used ?? 0);
-        if (days > remaining) {
-            throw new ValidationAppError(`Insufficient leave balance (available: ${remaining}, requested: ${days})`);
+        // Days already asked for and still pending are spoken for.
+        const { remaining, pending } = await availableBalance(employeeId, balanceKey.leaveTypeId, year);
+        const available = remaining - pending;
+        if (days > available) {
+            const pendingNote = pending > 0 ? `; ${pending} day(s) already pending` : '';
+            throw new AppError(`Insufficient leave balance (available: ${available}, requested: ${days}${pendingNote})`, 400, 'INSUFFICIENT_BALANCE');
         }
     }
     const doc = await LeaveRequest.create({
         employeeId,
-        leaveTypeId: new Types.ObjectId(body.leaveTypeId),
+        leaveTypeId: leaveType._id,
         startDate: body.startDate,
         endDate: body.endDate,
         days,
@@ -510,6 +584,7 @@ export async function applyLeave(req, res) {
         appliedAt: new Date(),
     });
     void audit({ action: 'create', entity: 'LeaveRequest', entityId: String(doc._id) });
+    await notifyReportingManager(emp, leaveType, doc);
     res.status(201).json({ success: true, data: doc });
 }
 export async function getLeaveRequest(req, res) {
@@ -520,28 +595,92 @@ export async function getLeaveRequest(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
-    await assertOwnOrPermission(req, doc.employeeId, SEE_ALL_LEAVES);
+    await assertOwnOrCanDecide(req, doc.employeeId, 'leaves');
     res.json({ success: true, data: doc });
 }
+/** `approvedBy` / `approvedAt` for a decision made now by the caller. */
+function decidedNow() {
+    const userId = getUserId();
+    return { ...(userId ? { approvedBy: new Types.ObjectId(userId) } : {}), approvedAt: new Date() };
+}
+/**
+ * Undo an approval whose attendance stamping failed: take the rows back, and
+ * return the request to `pending` with its days refunded. Only the side that
+ * moves the request back refunds — a cancel that won meanwhile already did.
+ * A rollback step that fails is logged with the stamping error that caused
+ * it; the caller rethrows that original error.
+ */
+async function rollBackApproval(approved, cause) {
+    const requestId = String(approved._id);
+    try {
+        await unstampLeaveDays(approved);
+    }
+    catch (err) {
+        logger.error({ err, cause, requestId }, 'leave approve rollback: unstamping failed');
+    }
+    try {
+        const reverted = await LeaveRequest.updateOne({ _id: approved._id, status: 'approved' }, { $set: { status: 'pending' }, $unset: { approvedBy: 1, approvedAt: 1 } }).exec();
+        if (reverted.modifiedCount > 0)
+            await refundLeaveBalance(approved);
+    }
+    catch (err) {
+        logger.error({ err, cause, requestId }, 'leave approve rollback: reverting to pending / refunding failed — the request may stay approved and charged');
+    }
+}
+/**
+ * Approve: charge the balance, then the request, then its attendance — each
+ * step undone if a later one fails, since there is no transaction to roll
+ * back.
+ */
 export async function approveLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
     await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, doc.employeeId, 'leaves');
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot approve a ${doc.status} request`);
     }
-    // Increment used in balance
-    const year = doc.startDate.getFullYear();
-    await LeaveBalance.findOneAndUpdate({ employeeId: doc.employeeId, leaveTypeId: doc.leaveTypeId, year }, { $inc: { used: doc.days } }).exec();
-    doc.status = 'approved';
-    const userId = getUserId();
-    if (userId)
-        doc.approvedBy = new Types.ObjectId(userId);
-    doc.approvedAt = new Date();
-    await doc.save();
+    const [leaveType, employee] = await Promise.all([
+        // A since-deleted type still decides whether its leave is paid.
+        LeaveType.findById(doc.leaveTypeId).setOptions({ withDeleted: true }).exec(),
+        Employee.findById(doc.employeeId).setOptions({ withDeleted: true }).populate('shift').exec(),
+    ]);
+    if (!employee)
+        throw new NotFoundError('Employee not found');
+    // 1. Atomic: `used` moves only if the balance still covers the request.
+    await chargeLeaveBalance(doc, leaveType);
+    // 2. Only one decision on a pending request wins.
+    const approved = await LeaveRequest.findOneAndUpdate({ _id: doc._id, status: 'pending' }, { $set: { status: 'approved', ...decidedNow() } }, { new: true }).exec();
+    if (!approved) {
+        await refundLeaveBalance(doc);
+        throw new ValidationAppError(DECIDED_MEANWHILE);
+    }
+    // 3. The attendance payroll reads.
+    let stamped;
+    try {
+        stamped = await stampLeaveDays(approved, leaveType, employee);
+    }
+    catch (err) {
+        await rollBackApproval(approved, err);
+        throw err;
+    }
+    // A cancel or delete may have landed while the rows were being written,
+    // and its unstamping may have run before ours finished: take back anything
+    // still tagged to the request. (Its refund is the canceller's to make.)
+    const current = await LeaveRequest.findById(approved._id).select('status').lean().exec();
+    if (current?.status !== 'approved') {
+        await unstampLeaveDays(approved);
+        throw new ValidationAppError(DECIDED_MEANWHILE);
+    }
+    // The calendar or shift changed since the request was counted.
+    const expected = Math.ceil(approved.days);
+    if (stamped !== expected) {
+        logger.warn({ requestId: String(approved._id), expected, stamped }, 'leave approve: stamped days differ from the days charged');
+    }
     void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'approved' } });
-    res.json({ success: true, data: doc });
+    await notifyEmployeeOfDecision(approved, 'approved', leaveType);
+    res.json({ success: true, data: approved });
 }
 export async function rejectLeaveRequest(req, res) {
     const body = req.body;
@@ -549,20 +688,38 @@ export async function rejectLeaveRequest(req, res) {
     if (!doc)
         throw new NotFoundError('Leave request not found');
     await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, doc.employeeId, 'leaves');
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a ${doc.status} request`);
     }
-    doc.status = 'rejected';
-    doc.rejectedReason = body.reason;
-    const userId = getUserId();
-    if (userId)
-        doc.approvedBy = new Types.ObjectId(userId);
-    doc.approvedAt = new Date();
-    await doc.save();
+    const rejected = await LeaveRequest.findOneAndUpdate({ _id: doc._id, status: 'pending' }, { $set: { status: 'rejected', rejectedReason: body.reason, ...decidedNow() } }, { new: true }).exec();
+    if (!rejected)
+        throw new ValidationAppError(DECIDED_MEANWHILE);
     void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'rejected' } });
-    res.json({ success: true, data: doc });
+    const leaveType = await LeaveType.findById(doc.leaveTypeId).setOptions({ withDeleted: true }).exec();
+    await notifyEmployeeOfDecision(rejected, 'rejected', leaveType, body.reason);
+    res.json({ success: true, data: rejected });
 }
+/**
+ * Cancel a request and, if it was approved, release its attendance rows and
+ * charged days (`cancelAndReleaseLeave`). 400 when it was decided or
+ * withdrawn meanwhile.
+ */
+async function cancelAndRelease(doc, set = {}) {
+    const cancelled = await cancelAndReleaseLeave(doc, set);
+    if (!cancelled)
+        throw new ValidationAppError(DECIDED_MEANWHILE);
+    return cancelled;
+}
+/**
+ * Cancel. The owner may withdraw a pending request at any time, and an
+ * approved one only until the day it starts — taken leave is not refundable
+ * on the employee's say-so. HR (`leaves.update`) may cancel anyone else's
+ * request at any time, with a reason. Cancelling an approved request removes
+ * its attendance rows and refunds its days.
+ */
 export async function cancelLeaveRequest(req, res) {
+    const body = (req.body ?? {});
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
@@ -570,25 +727,32 @@ export async function cancelLeaveRequest(req, res) {
     if (doc.status === 'cancelled' || doc.status === 'rejected') {
         throw new ValidationAppError(`Cannot cancel a ${doc.status} request`);
     }
-    // If approved, restore balance
-    if (doc.status === 'approved') {
-        const year = doc.startDate.getFullYear();
-        await LeaveBalance.findOneAndUpdate({ employeeId: doc.employeeId, leaveTypeId: doc.leaveTypeId, year }, { $inc: { used: -doc.days } }).exec();
+    const me = await currentEmployeeId(req);
+    const isOwner = me !== null && me.equals(doc.employeeId);
+    const started = startOfBusinessDay(doc.startDate).getTime() <= startOfBusinessDay(new Date()).getTime();
+    if (isOwner && doc.status === 'approved' && started) {
+        throw new ForbiddenError('Leave that has already started cannot be withdrawn — ask HR to cancel it');
     }
-    doc.status = 'cancelled';
-    await doc.save();
-    void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'cancelled' } });
-    res.json({ success: true, data: doc });
+    if (!isOwner && !body.reason) {
+        throw new ValidationAppError("A reason (at least 3 characters) is required to cancel someone else's leave");
+    }
+    const cancelled = await cancelAndRelease(doc, body.reason ? { cancelReason: body.reason } : {});
+    void audit({
+        action: 'update',
+        entity: 'LeaveRequest',
+        entityId: String(doc._id),
+        after: { status: 'cancelled', ...(body.reason ? { reason: body.reason } : {}) },
+    });
+    res.json({ success: true, data: cancelled });
 }
 export async function deleteLeaveRequest(req, res) {
     const doc = await LeaveRequest.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Leave request not found');
-    // If approved, restore balance before deleting
-    if (doc.status === 'approved') {
-        const year = doc.startDate.getFullYear();
-        await LeaveBalance.findOneAndUpdate({ employeeId: doc.employeeId, leaveTypeId: doc.leaveTypeId, year }, { $inc: { used: -doc.days } }).exec();
-    }
+    // An approved request takes its attendance rows and charged days with it.
+    // Claiming it first means two concurrent deletes refund once.
+    if (doc.status === 'approved')
+        await cancelAndRelease(doc);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await doc.softDelete();
     void audit({ action: 'delete', entity: 'LeaveRequest', entityId: String(doc._id) });
@@ -631,6 +795,4 @@ export async function leaveReports(req, res) {
         data: { year, byStatus, byType, totalApprovedDays: totalDays[0]?.days ?? 0 },
     });
 }
-// Suppress unused-import warning for Shift (kept for type clarity if needed later)
-void Shift;
 //# sourceMappingURL=leaves.controller.js.map

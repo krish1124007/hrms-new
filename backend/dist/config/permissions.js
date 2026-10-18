@@ -12,6 +12,12 @@
  * is not something a role editor can tick, and `ALL_PERMISSIONS` is the set of
  * *grantable* names.
  *
+ * `leaves.approve_all`, `expenses.approve_all` and `overtime.approve_all` are the
+ * one kind of name no `requirePermission(...)` mentions: the routes stay on the
+ * plain `*.approve` (every manager), and `lib/approvals.ts` widens a holder of
+ * `*.approve` from "my direct reports' requests" to everybody's when they also
+ * hold `*.approve_all`. `permissions.test.ts` knows about and checks them.
+ *
  * Keys group the Roles UI by module. They normally equal the prefix of the
  * names beneath them; `field` groups the `field-sales.*` permissions.
  */
@@ -40,7 +46,14 @@ export const PERMISSIONS_BY_MODULE = {
         'attendance.approve',
         'attendance.config',
     ],
-    leaves: ['leaves.view', 'leaves.create', 'leaves.update', 'leaves.approve', 'leaves.delete'],
+    leaves: [
+        'leaves.view',
+        'leaves.create',
+        'leaves.update',
+        'leaves.approve',
+        'leaves.approve_all',
+        'leaves.delete',
+    ],
     payroll: ['payroll.view', 'payroll.process', 'payroll.config'],
     expenses: [
         'expenses.view',
@@ -48,8 +61,9 @@ export const PERMISSIONS_BY_MODULE = {
         'expenses.update',
         'expenses.delete',
         'expenses.approve',
+        'expenses.approve_all',
     ],
-    overtime: ['overtime.view', 'overtime.approve'],
+    overtime: ['overtime.view', 'overtime.approve', 'overtime.approve_all'],
     assets: ['assets.view', 'assets.manage'],
     loans: ['loans.view', 'loans.manage', 'loans.approve'],
     disciplinary: ['disciplinary.view', 'disciplinary.manage'],

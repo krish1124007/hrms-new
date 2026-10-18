@@ -15,7 +15,10 @@ const payrollCycleSchema = new Schema({
     totalNet: { type: Number, default: 0 },
     employeeCount: { type: Number, default: 0 },
     payslipGeneratedAt: Date,
+    lockedAt: Date,
+    lockedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     paidAt: Date,
+    paidBy: { type: Schema.Types.ObjectId, ref: 'User' },
     paymentRef: String,
 });
 payrollCycleSchema.plugin(timestampPlugin);

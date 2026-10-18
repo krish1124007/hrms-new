@@ -3,7 +3,7 @@ import { Attendance } from '../models/attendance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { getUserId } from '../lib/async-context.js';
 import { ForbiddenError } from '../lib/errors.js';
-import { startOfBusinessDay } from '../lib/business-day.js';
+import { endOfBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
 /**
  * GET /api/v1/team/overview
  *
@@ -20,15 +20,20 @@ import { startOfBusinessDay } from '../lib/business-day.js';
 /** Business-timezone day label — must match attendance, or the team view
  *  reports a different "today" than the attendance screens. */
 const startOfDay = (d) => startOfBusinessDay(d);
+/** The label of the 1st of the business month `d` falls in. */
 const startOfMonth = (d) => {
-    const x = new Date(d.getFullYear(), d.getMonth(), 1);
-    x.setHours(0, 0, 0, 0);
-    return x;
+    const today = startOfBusinessDay(d);
+    return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
 };
 /** Map server attendance enum → mobile-friendly status string. */
 function mapStatus(att) {
     if (!att)
         return 'not_checked_in';
+    // A row approved leave wrote, with no punch on it, is a day off on leave —
+    // whatever status it carries: `half_day` for a half day, `absent` for
+    // unpaid leave. Punched in as well, they are at work: the status says how.
+    if (att.leaveRequestId && !att.checkIn?.time)
+        return 'on_leave';
     switch (att.status) {
         case 'present':
         case 'half_day':
@@ -87,18 +92,22 @@ export async function teamOverview(_req, res) {
     const today = startOfDay(new Date());
     const monthStart = startOfMonth(new Date());
     const [todayAtt, monthAtt] = await Promise.all([
+        // Today's row, punched or not (leave and day-close write rows with no
+        // check-in), anywhere within the business day.
         Attendance.find({
             employeeId: { $in: reportIds },
-            date: today,
+            date: { $gte: today, $lte: endOfBusinessDay(today) },
         })
-            .select('employeeId status checkIn')
+            .select('employeeId status checkIn leaveRequestId')
             .lean()
             .exec(),
         Attendance.aggregate([
             {
+                // Aggregations skip the soft-delete query hook: exclude deleted rows here.
                 $match: {
                     employeeId: { $in: reportIds },
-                    date: { $gte: monthStart, $lte: today },
+                    date: { $gte: monthStart, $lte: endOfBusinessDay(today) },
+                    isDeleted: { $ne: true },
                 },
             },
             { $group: { _id: '$status', count: { $sum: 1 } } },

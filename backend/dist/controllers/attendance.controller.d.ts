@@ -11,6 +11,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         requireLocation: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
         requireNoteOnLateCheckIn: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
         freeLateDaysPerMonth: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
+        expenseBeforeCheckout: z.ZodOptional<z.ZodDefault<z.ZodEnum<["all", "field", "none"]>>>;
     }, "strip", z.ZodTypeAny, {
         requireLocation?: boolean | undefined;
         autoCheckoutTime?: string | undefined;
@@ -20,6 +21,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         requirePhotoOnCheckIn?: boolean | undefined;
         requireNoteOnLateCheckIn?: boolean | undefined;
         freeLateDaysPerMonth?: number | undefined;
+        expenseBeforeCheckout?: "none" | "field" | "all" | undefined;
     }, {
         requireLocation?: boolean | undefined;
         autoCheckoutTime?: string | undefined;
@@ -29,6 +31,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         requirePhotoOnCheckIn?: boolean | undefined;
         requireNoteOnLateCheckIn?: boolean | undefined;
         freeLateDaysPerMonth?: number | undefined;
+        expenseBeforeCheckout?: "none" | "field" | "all" | undefined;
     }>>;
     liveTracking: z.ZodOptional<z.ZodObject<{
         enabled: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
@@ -76,6 +79,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         requirePhotoOnCheckIn?: boolean | undefined;
         requireNoteOnLateCheckIn?: boolean | undefined;
         freeLateDaysPerMonth?: number | undefined;
+        expenseBeforeCheckout?: "none" | "field" | "all" | undefined;
     } | undefined;
     liveTracking?: {
         enabled?: boolean | undefined;
@@ -99,6 +103,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         requirePhotoOnCheckIn?: boolean | undefined;
         requireNoteOnLateCheckIn?: boolean | undefined;
         freeLateDaysPerMonth?: number | undefined;
+        expenseBeforeCheckout?: "none" | "field" | "all" | undefined;
     } | undefined;
     liveTracking?: {
         enabled?: boolean | undefined;
@@ -171,9 +176,9 @@ export declare const checkInSchema: z.ZodObject<{
         os?: string | undefined;
         appVersion?: string | undefined;
     } | undefined;
+    note?: string | undefined;
     qrCode?: string | undefined;
     liveness?: boolean | undefined;
-    note?: string | undefined;
 }, {
     method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
     siteId?: string | undefined;
@@ -192,9 +197,9 @@ export declare const checkInSchema: z.ZodObject<{
         os?: string | undefined;
         appVersion?: string | undefined;
     } | undefined;
+    note?: string | undefined;
     qrCode?: string | undefined;
     liveness?: boolean | undefined;
-    note?: string | undefined;
 }>;
 export declare const checkOutSchema: z.ZodObject<{
     location: z.ZodOptional<z.ZodObject<{
@@ -254,9 +259,9 @@ export declare const checkOutSchema: z.ZodObject<{
         os?: string | undefined;
         appVersion?: string | undefined;
     } | undefined;
+    note?: string | undefined;
     qrCode?: string | undefined;
     liveness?: boolean | undefined;
-    note?: string | undefined;
 }, {
     siteId?: string | undefined;
     method?: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site" | undefined;
@@ -275,9 +280,9 @@ export declare const checkOutSchema: z.ZodObject<{
         os?: string | undefined;
         appVersion?: string | undefined;
     } | undefined;
+    note?: string | undefined;
     qrCode?: string | undefined;
     liveness?: boolean | undefined;
-    note?: string | undefined;
 }>;
 export declare const breakStartSchema: z.ZodObject<{
     type: z.ZodDefault<z.ZodEnum<["tea", "lunch", "personal", "other"]>>;
@@ -343,14 +348,39 @@ export declare function monthlyAttendance(req: Request, res: Response): Promise<
 export declare const regularizeSchema: z.ZodObject<{
     date: z.ZodDate;
     reason: z.ZodString;
+    checkIn: z.ZodOptional<z.ZodDate>;
+    checkOut: z.ZodOptional<z.ZodDate>;
 }, "strip", z.ZodTypeAny, {
     date: Date;
     reason: string;
+    checkIn?: Date | undefined;
+    checkOut?: Date | undefined;
 }, {
     date: Date;
     reason: string;
+    checkIn?: Date | undefined;
+    checkOut?: Date | undefined;
 }>;
 export declare function requestRegularization(req: Request, res: Response): Promise<void>;
+export declare const listRegularizationsSchema: z.ZodObject<{
+    status: z.ZodDefault<z.ZodEnum<["pending", "approved", "rejected"]>>;
+    page: z.ZodDefault<z.ZodNumber>;
+    limit: z.ZodDefault<z.ZodNumber>;
+}, "strip", z.ZodTypeAny, {
+    status: "pending" | "approved" | "rejected";
+    page: number;
+    limit: number;
+}, {
+    status?: "pending" | "approved" | "rejected" | undefined;
+    page?: number | undefined;
+    limit?: number | undefined;
+}>;
+/**
+ * GET /api/v1/attendance/regularizations — the approval queue, newest request
+ * first. HR (`attendance.manage`) sees everyone's; a manager (`attendance.approve`)
+ * only their direct reports' — their own requests are not theirs to decide.
+ */
+export declare function listRegularizations(req: Request, res: Response): Promise<void>;
 export declare const approveRegularizationSchema: z.ZodObject<{
     status: z.ZodEnum<["approved", "rejected"]>;
 }, "strip", z.ZodTypeAny, {
@@ -391,6 +421,43 @@ export declare const correctRecordSchema: z.ZodEffects<z.ZodObject<{
  * same rules a normal check-out uses.
  */
 export declare function correctRecord(req: Request, res: Response): Promise<void>;
+export declare const closeDaySchema: z.ZodObject<{
+    date: z.ZodDate;
+}, "strip", z.ZodTypeAny, {
+    date: Date;
+}, {
+    date: Date;
+}>;
+export declare const closeDaysSchema: z.ZodEffects<z.ZodEffects<z.ZodObject<{
+    from: z.ZodDate;
+    to: z.ZodDate;
+}, "strip", z.ZodTypeAny, {
+    from: Date;
+    to: Date;
+}, {
+    from: Date;
+    to: Date;
+}>, {
+    from: Date;
+    to: Date;
+}, {
+    from: Date;
+    to: Date;
+}>, {
+    from: Date;
+    to: Date;
+}, {
+    from: Date;
+    to: Date;
+}>;
+/** POST /api/v1/attendance/close-day — run the day-close for one past day. */
+export declare function closeDay(req: Request, res: Response): Promise<void>;
+/**
+ * POST /api/v1/attendance/close-days — run the day-close for every day in
+ * `[from, to]` (at most 62), oldest first, and report each day's counts.
+ * Each day is audited as it is closed; a failing day stops the run.
+ */
+export declare function closeDays(req: Request, res: Response): Promise<void>;
 export declare const reportQuerySchema: z.ZodObject<{
     from: z.ZodDate;
     to: z.ZodDate;

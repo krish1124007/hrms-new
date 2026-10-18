@@ -16,6 +16,7 @@ export declare const createShiftSchema: z.ZodObject<{
     name: string;
     startTime: string;
     endTime: string;
+    color: string;
     graceMinutes: number;
     halfDayHours: number;
     fullDayHours: number;
@@ -23,11 +24,11 @@ export declare const createShiftSchema: z.ZodObject<{
     isNightShift: boolean;
     breakDuration: number;
     isDefault: boolean;
-    color: string;
 }, {
     name: string;
     startTime: string;
     endTime: string;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -35,7 +36,6 @@ export declare const createShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const updateShiftSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -53,6 +53,7 @@ export declare const updateShiftSchema: z.ZodObject<{
     name?: string | undefined;
     startTime?: string | undefined;
     endTime?: string | undefined;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -60,11 +61,11 @@ export declare const updateShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }, {
     name?: string | undefined;
     startTime?: string | undefined;
     endTime?: string | undefined;
+    color?: string | undefined;
     graceMinutes?: number | undefined;
     halfDayHours?: number | undefined;
     fullDayHours?: number | undefined;
@@ -72,7 +73,6 @@ export declare const updateShiftSchema: z.ZodObject<{
     isNightShift?: boolean | undefined;
     breakDuration?: number | undefined;
     isDefault?: boolean | undefined;
-    color?: string | undefined;
 }>;
 export declare const assignShiftSchema: z.ZodObject<{
     employeeIds: z.ZodArray<z.ZodString, "many">;

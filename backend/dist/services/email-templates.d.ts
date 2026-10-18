@@ -1,14 +1,19 @@
-/**
- * Email templates — renders common transactional emails as inline HTML.
- *
- * No template engine, just tagged templates for simplicity + compile-time
- * safety. For rich HTML campaigns, consider MJML or React Email later.
- */
-export declare function sendWelcomeEmail(to: string, firstName: string, tenantSlug: string): Promise<void>;
-export declare function sendTrialExpiringEmail(to: string, firstName: string, daysLeft: number): Promise<void>;
-export declare function sendPaymentFailedEmail(to: string, firstName: string, amount: number): Promise<void>;
-export declare function sendInvoiceEmail(to: string, firstName: string, invoiceNumber: string, pdfUrl: string, amount: number): Promise<void>;
-export declare function sendPasswordResetEmail(to: string, resetLink: string): Promise<void>;
-export declare function sendTicketUpdateEmail(to: string, ticketNumber: string, subject: string, agentReply: string): Promise<void>;
-export declare function sendAnnouncementEmail(to: string, title: string, bodyHtml: string): Promise<void>;
+export interface RenderedEmail {
+    subject: string;
+    html: string;
+    text: string;
+}
+export declare const escapeHtml: (value: string) => string;
+/** "Your overtime request was approved" — the title is the subject, `body` the sentence under it. */
+export declare function decisionEmail(input: {
+    title: string;
+    body: string;
+    link: string;
+}): RenderedEmail;
+/** "Your payslip for October 2026 is ready" — `month` is 1-12. */
+export declare function payslipReadyEmail(input: {
+    month: number;
+    year: number;
+    link: string;
+}): RenderedEmail;
 //# sourceMappingURL=email-templates.d.ts.map

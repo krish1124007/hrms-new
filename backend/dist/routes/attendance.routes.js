@@ -20,11 +20,16 @@ router.get('/records', requirePermission('attendance.view'), validate(ctrl.listR
 // HR fix-up for a record an employee mis-punched (typically a missing
 // check-out). Deliberately separate from /check-out, which is self-service.
 router.patch('/records/:id', requirePermission('attendance.manage'), validate(ctrl.correctRecordSchema), asyncHandler(ctrl.correctRecord));
+// Replay the nightly day-close (auto-absent, leave rows, auto-checkout) for
+// past days — a missed night, or history from before the job existed.
+router.post('/close-day', requirePermission('attendance.manage'), validate(ctrl.closeDaySchema), asyncHandler(ctrl.closeDay));
+router.post('/close-days', requirePermission('attendance.manage'), validate(ctrl.closeDaysSchema), asyncHandler(ctrl.closeDays));
 router.get('/my', asyncHandler(ctrl.myAttendance));
 router.get('/my-shift', asyncHandler(ctrl.myShift));
 router.get('/today', asyncHandler(ctrl.todayAttendance));
 router.get('/monthly', validate(ctrl.monthlyQuerySchema, 'query'), asyncHandler(ctrl.monthlyAttendance));
 router.post('/regularize', validate(ctrl.regularizeSchema), asyncHandler(ctrl.requestRegularization));
+router.get('/regularizations', requirePermission('attendance.approve'), validate(ctrl.listRegularizationsSchema, 'query'), asyncHandler(ctrl.listRegularizations));
 router.patch('/regularize/:id', requirePermission('attendance.approve'), validate(ctrl.approveRegularizationSchema), asyncHandler(ctrl.decideRegularization));
 router.get('/dashboard', requirePermission('attendance.view'), asyncHandler(ctrl.dashboardStats));
 router.get('/report', requirePermission('attendance.view'), validate(ctrl.reportQuerySchema, 'query'), asyncHandler(ctrl.attendanceReport));

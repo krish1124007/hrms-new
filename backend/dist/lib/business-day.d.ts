@@ -31,4 +31,27 @@ export declare function startOfBusinessDay(d?: Date): Date;
 export declare function endOfBusinessDay(d?: Date): Date;
 /** Do two instants fall on the same business day? */
 export declare function isSameBusinessDay(a: Date, b: Date): boolean;
+/**
+ * The instant at which the business-timezone wall clock reads `hhmm`
+ * (`"HH:mm"`) on the day `dayLabel` names. `dayLabel` is a day label as
+ * returned by `startOfBusinessDay` (UTC midnight of the calendar date).
+ *
+ * `atBusinessTime(2026-10-12T00:00Z, '19:00')` → `2026-10-12T13:30Z` in IST.
+ */
+export declare function atBusinessTime(dayLabel: Date, hhmm: string): Date;
+/** One calendar day in milliseconds (the business timezone has no DST). */
+export declare const DAY_MS: number;
+/**
+ * A Date whose *server-local* calendar date is the label's date (local noon),
+ * for `classifyDay` / `listHolidaysBetween`, which read local `getDay()` and
+ * `getDate()`. Noon keeps it on the right date whatever the server timezone.
+ */
+export declare function localDateOf(dayLabel: Date): Date;
+/**
+ * The day label of every business day from the one `start` falls on through
+ * the one `end` falls on, inclusive (empty when `end` is on an earlier day).
+ * Date-only values stored at UTC midnight and at IST midnight both resolve to
+ * the calendar day they name.
+ */
+export declare function businessDayLabels(start: Date, end: Date): Date[];
 //# sourceMappingURL=business-day.d.ts.map

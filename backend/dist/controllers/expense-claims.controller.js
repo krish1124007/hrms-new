@@ -1,14 +1,53 @@
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
+import { cycleHoldingClaim } from '../services/payroll-compute.service.js';
+import { cycleLabel } from '../lib/payroll-cycle.js';
+import { logger } from '../config/logger.js';
+import { formatInr, notifyEmployeeDecision, notifyExpenseRequest, reportingManagerUserId, } from '../services/notification.service.js';
 import { getUserId } from '../lib/async-context.js';
-import { assertNotSelfApproval, assertOwnOrPermission, currentEmployeeId, hasPermission, } from '../lib/access.js';
+import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
+import { assertCanDecide, assertOwnOrCanDecide, isApprover, scopeFilterFor, } from '../lib/approvals.js';
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
-/** Approvers see and act on everyone's claims; others only on their own. */
-const APPROVE = 'expenses.approve';
+/**
+ * HR (`expenses.approve_all`) sees and acts on everyone's claims; a manager
+ * (`expenses.approve`) on their direct reports' and their own; everyone else
+ * only on their own.
+ */
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
+/**
+ * Tell the claimant's reporting manager about a claim waiting for them — not
+ * when the manager is the one who filed it. Never throws.
+ */
+async function notifyManagerOfClaim(claim) {
+    try {
+        const emp = await Employee.findById(claim.employeeId).select('firstName lastName userId reportingManager').lean().exec();
+        if (!emp)
+            return;
+        const managerUserId = await reportingManagerUserId(emp);
+        if (!managerUserId || managerUserId === getUserId())
+            return;
+        await notifyExpenseRequest(managerUserId, `${emp.firstName} ${emp.lastName}`, claim.amount, {
+            claimId: String(claim._id),
+        });
+    }
+    catch (err) {
+        logger.warn({ err, claimId: String(claim._id) }, 'expense claim: manager notification failed');
+    }
+}
+/** Tell the claimant how their claim was decided — in-app and by e-mail. Never throws. */
+function notifyClaimant(claim, status, outcome) {
+    return notifyEmployeeDecision(claim.employeeId, {
+        module: 'expense',
+        status,
+        title: `Expense claim ${status}`,
+        message: `Your expense claim of ${formatInr(claim.amount)} ${outcome}`,
+        link: '/expense-claims',
+        metadata: { claimId: String(claim._id) },
+    });
+}
 async function getCurrentEmployee() {
     const userId = getUserId();
     if (!userId)
@@ -128,18 +167,15 @@ export const reimburseClaimSchema = z.object({
 export async function listClaims(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
+    // HR sees every employee's claims; a manager their direct reports' and their own;
+    // everyone else only their own. (No employee record matches nothing.)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = { amount: { $gt: 0 } };
+    const filter = {
+        amount: { $gt: 0 },
+        ...(await scopeFilterFor(req, 'expenses', q.employeeId)),
+    };
     if (q.status)
         filter.status = q.status;
-    if (hasPermission(req.user, APPROVE)) {
-        if (q.employeeId)
-            filter.employeeId = new Types.ObjectId(q.employeeId);
-    }
-    else {
-        // `null` (no employee record) matches nothing — employeeId is required.
-        filter.employeeId = await currentEmployeeId(req);
-    }
     if (q.category)
         filter.category = new Types.ObjectId(q.category);
     if (q.from || q.to) {
@@ -202,14 +238,16 @@ export async function teamClaims(req, res) {
 }
 export async function createClaim(req, res) {
     const body = req.body;
-    // Only an approver may file a claim on someone else's behalf; for anyone
-    // else a body `employeeId` is ignored and the claim is theirs.
+    // Only an approver may file a claim on someone else's behalf — and only for
+    // someone they could decide for (a direct report, or anyone for HR); for
+    // anyone else a body `employeeId` is ignored and the claim is theirs.
+    const me = await currentEmployeeId(req);
     let employeeId;
-    if (body.employeeId && hasPermission(req.user, APPROVE)) {
+    if (body.employeeId && isApprover(req, 'expenses') && !me?.equals(body.employeeId)) {
+        await assertCanDecide(req, body.employeeId, 'expenses');
         employeeId = new Types.ObjectId(body.employeeId);
     }
     else {
-        const me = await currentEmployeeId(req);
         if (!me)
             throw new NotFoundError('Employee profile not found');
         employeeId = me;
@@ -240,6 +278,9 @@ export async function createClaim(req, res) {
         ...(body.amount === 0 ? { approvedAt: new Date() } : {}),
     });
     void audit({ action: 'create', entity: 'ExpenseClaim', entityId: String(doc._id) });
+    // A draft is still the claimant's own; a zero-amount entry needs no approval.
+    if (doc.status === 'pending')
+        await notifyManagerOfClaim(doc);
     res.status(201).json({ success: true, data: doc });
 }
 export async function getClaim(req, res) {
@@ -250,17 +291,18 @@ export async function getClaim(req, res) {
         .exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
-    await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+    await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
     res.json({ success: true, data: doc });
 }
 export async function updateClaim(req, res) {
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
-    await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+    await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
     if (doc.status !== 'draft' && doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
     }
+    const submitting = doc.status === 'draft';
     Object.assign(doc, req.body);
     // Same rule as create: a claim for an amount can only leave draft with a
     // bill attached, so editing can't be used to strip the receipt off a
@@ -270,13 +312,16 @@ export async function updateClaim(req, res) {
     }
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id) });
+    // A draft the claimant has just submitted is news for their manager, like a new claim.
+    if (submitting && doc.status === 'pending' && doc.amount > 0)
+        await notifyManagerOfClaim(doc);
     res.json({ success: true, data: doc });
 }
 export async function deleteClaim(req, res) {
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
-    await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+    await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
     // Once decided (approved / rejected / reimbursed) a claim is part of the
     // money trail and can no longer be withdrawn.
     if (doc.status !== 'draft' && doc.status !== 'pending') {
@@ -296,6 +341,7 @@ export async function approveClaim(req, res) {
     if (!doc)
         throw new NotFoundError('Expense claim not found');
     await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, doc.employeeId, 'expenses');
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot approve a ${doc.status} claim`);
     }
@@ -309,6 +355,8 @@ export async function approveClaim(req, res) {
     doc.approvedAt = new Date();
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'approved' } });
+    const accepted = doc.acceptedAmount;
+    await notifyClaimant(doc, 'approved', accepted !== undefined && accepted !== doc.amount ? `was approved for ${formatInr(accepted)}.` : 'was approved.');
     res.json({ success: true, data: doc });
 }
 export async function rejectClaim(req, res) {
@@ -317,6 +365,7 @@ export async function rejectClaim(req, res) {
     if (!doc)
         throw new NotFoundError('Expense claim not found');
     await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, doc.employeeId, 'expenses');
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a ${doc.status} claim`);
     }
@@ -328,21 +377,34 @@ export async function rejectClaim(req, res) {
     doc.approvedAt = new Date();
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'rejected' } });
+    await notifyClaimant(doc, 'rejected', `was rejected. Reason: ${body.reason}`);
     res.json({ success: true, data: doc });
 }
+/**
+ * Manual reimbursement (cash, a separate transfer). Approved claims are
+ * otherwise paid with payroll: a payroll record that counted the claim holds
+ * it until its cycle is paid and settled, and meanwhile it is refused here —
+ * 409 `CLAIM_IN_PAYROLL` — rather than paid twice.
+ */
 export async function reimburseClaim(req, res) {
     const body = req.body;
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
+    await assertCanDecide(req, doc.employeeId, 'expenses');
     if (doc.status !== 'approved') {
         throw new ValidationAppError(`Can only reimburse approved claims (current: ${doc.status})`);
+    }
+    const payroll = await cycleHoldingClaim(doc._id);
+    if (payroll) {
+        throw new AppError(`This claim is held by the ${cycleLabel(payroll)} payroll until that payroll is paid and settled.`, 409, 'CLAIM_IN_PAYROLL');
     }
     doc.status = 'reimbursed';
     doc.reimbursedAt = new Date();
     doc.reimbursementRef = body.reimbursementRef;
     await doc.save();
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'reimbursed' } });
+    await notifyClaimant(doc, 'reimbursed', body.reimbursementRef ? `has been reimbursed (ref ${body.reimbursementRef}).` : 'has been reimbursed.');
     res.json({ success: true, data: doc });
 }
 // ---------- Reports ----------

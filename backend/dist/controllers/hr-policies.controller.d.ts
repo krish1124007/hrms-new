@@ -15,7 +15,7 @@ export declare const createSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     title: string;
     tags: string[];
-    category: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it";
+    category: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it";
     mandatory: boolean;
     content?: string | undefined;
     effectiveDate?: Date | undefined;
@@ -26,7 +26,7 @@ export declare const createSchema: z.ZodObject<{
     title: string;
     content?: string | undefined;
     tags?: string[] | undefined;
-    category?: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
+    category?: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     effectiveDate?: Date | undefined;
     policyCode?: string | undefined;
     summary?: string | undefined;
@@ -49,7 +49,7 @@ export declare const updateSchema: z.ZodObject<{
     title?: string | undefined;
     content?: string | undefined;
     tags?: string[] | undefined;
-    category?: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
+    category?: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     changeNotes?: string | undefined;
     effectiveDate?: Date | undefined;
     policyCode?: string | undefined;
@@ -60,7 +60,7 @@ export declare const updateSchema: z.ZodObject<{
     title?: string | undefined;
     content?: string | undefined;
     tags?: string[] | undefined;
-    category?: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
+    category?: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     changeNotes?: string | undefined;
     effectiveDate?: Date | undefined;
     policyCode?: string | undefined;
@@ -83,7 +83,7 @@ export declare const listQuerySchema: z.ZodObject<{
     status?: "draft" | "published" | "archived" | undefined;
     sort?: string | undefined;
     search?: string | undefined;
-    category?: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
+    category?: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     mandatory?: "true" | "false" | undefined;
     tag?: string | undefined;
 }, {
@@ -92,7 +92,7 @@ export declare const listQuerySchema: z.ZodObject<{
     page?: number | undefined;
     limit?: number | undefined;
     search?: string | undefined;
-    category?: "security" | "attendance" | "expenses" | "other" | "general" | "code_of_conduct" | "leave" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
+    category?: "security" | "attendance" | "expenses" | "other" | "leave" | "general" | "code_of_conduct" | "compensation" | "benefits" | "safety" | "data_privacy" | "remote_work" | "travel" | "harassment" | "grievance" | "it" | undefined;
     mandatory?: "true" | "false" | undefined;
     tag?: string | undefined;
 }>;

@@ -236,6 +236,12 @@ export declare const approveClaimSchema: z.ZodObject<{
 }>;
 export declare function approveClaim(req: Request, res: Response): Promise<void>;
 export declare function rejectClaim(req: Request, res: Response): Promise<void>;
+/**
+ * Manual reimbursement (cash, a separate transfer). Approved claims are
+ * otherwise paid with payroll: a payroll record that counted the claim holds
+ * it until its cycle is paid and settled, and meanwhile it is refused here —
+ * 409 `CLAIM_IN_PAYROLL` — rather than paid twice.
+ */
 export declare function reimburseClaim(req: Request, res: Response): Promise<void>;
 export declare function expenseReports(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=expense-claims.controller.d.ts.map

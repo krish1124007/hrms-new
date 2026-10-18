@@ -15,6 +15,11 @@ const salarySchema = new Schema({
     specialAllowance: { type: Number, default: 0 },
     otherAllowances: { type: Schema.Types.Mixed, default: {} },
     grossSalary: { type: Number, default: 0 },
+    tdsMonthly: { type: Number, default: 0 },
+}, { _id: false });
+const statutorySchema = new Schema({
+    esiEligible: { type: Boolean },
+    esiPeriodKey: { type: String },
 }, { _id: false });
 /**
  * Bank details — PII + financial. Encrypted at rest with AES-256-GCM.
@@ -97,6 +102,9 @@ const employeeSchema = new Schema({
     },
     workLocation: String,
     salary: { type: salarySchema, default: () => ({}) },
+    isFieldStaff: { type: Boolean, default: false },
+    salaryStructureId: { type: Schema.Types.ObjectId, ref: 'SalaryStructure' },
+    statutory: { type: statutorySchema },
     bankDetails: { type: bankSchema, default: () => ({}) },
     documents: { type: [documentSchema], default: [] },
     emergencyContact: { type: emergencySchema, default: () => ({}) },
@@ -106,6 +114,7 @@ const employeeSchema = new Schema({
         default: 'active',
     },
     exitDate: Date,
+    exitStatus: { type: String, enum: ['resigned', 'terminated', 'inactive'] },
     exitReason: String,
     probationEndDate: Date,
     noticePeriod: Number,

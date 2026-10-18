@@ -1,5 +1,13 @@
 import { Schema, model } from 'mongoose';
 import { timestampPlugin, softDeletePlugin, paginatePlugin, } from '../lib/mongoose-plugins.js';
+export const ATTENDANCE_SOURCES = [
+    'punch',
+    'leave',
+    'auto_absent',
+    'auto_checkout',
+    'regularization',
+    'correction',
+];
 const locationSchema = new Schema({
     lat: Number,
     lng: Number,
@@ -18,6 +26,8 @@ const metadataSchema = new Schema({
     geofenceId: String,
     deviceId: String,
     faceConfidence: Number,
+    autoCheckout: { type: Boolean },
+    regularized: { type: Boolean },
 }, { _id: false });
 const checkinSchema = new Schema({
     time: Date,
@@ -42,6 +52,8 @@ const regularizationSchema = new Schema({
     approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     approvedAt: Date,
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    requestedCheckIn: Date,
+    requestedCheckOut: Date,
 }, { _id: false });
 const attendanceSchema = new Schema({
     employeeId: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
@@ -60,11 +72,15 @@ const attendanceSchema = new Schema({
     earlyLeaveBy: { type: Number, default: 0 },
     isRegularized: { type: Boolean, default: false },
     regularization: regularizationSchema,
+    leaveRequestId: { type: Schema.Types.ObjectId, ref: 'LeaveRequest' },
+    isPaidLeave: { type: Boolean },
+    source: { type: String, enum: ATTENDANCE_SOURCES, default: 'punch' },
 });
 attendanceSchema.plugin(timestampPlugin);
 attendanceSchema.plugin(softDeletePlugin);
 attendanceSchema.plugin(paginatePlugin);
 attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ date: 1, status: 1 });
+attendanceSchema.index({ leaveRequestId: 1 }, { sparse: true });
 export const Attendance = model('Attendance', attendanceSchema);
 //# sourceMappingURL=attendance.model.js.map

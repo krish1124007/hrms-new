@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Holiday } from '../models/holiday.model.js';
 import { NotFoundError } from '../lib/errors.js';
+import { DAY_MS, startOfBusinessDay } from '../lib/business-day.js';
 import { audit } from '../services/audit.service.js';
 export const createHolidaySchema = z.object({
     name: z.string().min(1),
@@ -19,6 +20,10 @@ export const importCalendarSchema = z.object({
         type: z.enum(['public', 'optional', 'restricted']).default('public'),
     }))
         .min(1),
+});
+export const rolloverSchema = z.object({
+    /** The year to copy the recurring holidays into, from the year before it. */
+    year: z.coerce.number().int().min(1970).max(9999),
 });
 export const listQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
@@ -88,9 +93,118 @@ export async function deleteHoliday(req, res) {
     void audit({ action: 'delete', entity: 'Holiday', entityId: String(h._id) });
     res.json({ success: true, message: 'Holiday deleted' });
 }
+/** `(day, name)` — what makes two holidays the same one (the name compared trimmed, ignoring case). */
+const holidayKey = (date, name) => `${startOfBusinessDay(date).toISOString().slice(0, 10)}|${name.trim().toLowerCase()}`;
+/**
+ * The `holidayKey` of every holiday falling on a business day in
+ * `[from, to]` (day labels). The query window is widened by a day each side
+ * so a date stored at IST midnight is still found; the key is exact.
+ */
+async function existingKeys(from, to) {
+    const rows = await Holiday.find({
+        date: { $gte: new Date(from.getTime() - DAY_MS), $lt: new Date(to.getTime() + 2 * DAY_MS) },
+    })
+        .select('date name')
+        .lean()
+        .exec();
+    return new Set(rows.map((h) => holidayKey(h.date, h.name)));
+}
+/**
+ * Insert holidays, counting any that lose a race to an identical one written
+ * meanwhile (the unique `(date, name)` index) as skipped.
+ */
+async function insertHolidays(docs) {
+    if (docs.length === 0)
+        return { created: 0, skipped: 0 };
+    try {
+        await Holiday.insertMany(docs, { ordered: false });
+        return { created: docs.length, skipped: 0 };
+    }
+    catch (err) {
+        const writeErrors = err.writeErrors ?? [];
+        const onlyDuplicates = writeErrors.length > 0 && writeErrors.every((w) => (w.err?.code ?? w.code) === 11000);
+        if (!onlyDuplicates)
+            throw err;
+        return { created: docs.length - writeErrors.length, skipped: writeErrors.length };
+    }
+}
+/**
+ * POST /holidays/import-calendar — add the holidays not already in the
+ * calendar. Each date is stored as its business-day label; a row matching an
+ * existing holiday (same day, same name) or an earlier row of the payload is
+ * skipped. Returns `{ created, skipped }`.
+ */
 export async function importCalendar(req, res) {
     const { holidays } = req.body;
-    const created = await Holiday.insertMany(holidays);
-    res.status(201).json({ success: true, data: { count: created.length } });
+    const rows = holidays.map((h) => ({ ...h, name: h.name.trim(), date: startOfBusinessDay(h.date) }));
+    const times = rows.map((h) => h.date.getTime());
+    const seen = await existingKeys(new Date(Math.min(...times)), new Date(Math.max(...times)));
+    const fresh = [];
+    let skipped = 0;
+    for (const h of rows) {
+        const key = holidayKey(h.date, h.name);
+        if (seen.has(key)) {
+            skipped += 1;
+            continue;
+        }
+        seen.add(key);
+        fresh.push(h);
+    }
+    const inserted = await insertHolidays(fresh);
+    void audit({
+        action: 'create',
+        entity: 'Holiday',
+        metadata: { event: 'import-calendar', created: inserted.created, skipped: skipped + inserted.skipped },
+    });
+    res.status(201).json({ success: true, data: { created: inserted.created, skipped: skipped + inserted.skipped } });
+}
+const isLeapYear = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+/**
+ * POST /holidays/rollover `{ year }` — copy every recurring holiday of
+ * `year − 1` to the same month and day of `year` (29 Feb → 28 Feb when
+ * `year` is not a leap year), skipping any already there (same day, same
+ * name). Idempotent. Returns `{ created, skipped }`.
+ */
+export async function rolloverHolidays(req, res) {
+    const { year } = req.body;
+    const fromStart = new Date(Date.UTC(year - 1, 0, 1));
+    const toStart = new Date(Date.UTC(year, 0, 1));
+    const toEnd = new Date(Date.UTC(year, 11, 31));
+    // Widened by a day each side (IST-midnight dates); the year test is exact.
+    const candidates = await Holiday.find({
+        isRecurring: true,
+        date: { $gte: new Date(fromStart.getTime() - DAY_MS), $lt: new Date(toStart.getTime() + DAY_MS) },
+    })
+        .lean()
+        .exec();
+    const seen = await existingKeys(toStart, toEnd);
+    const fresh = [];
+    let skipped = 0;
+    for (const h of candidates) {
+        const day = startOfBusinessDay(h.date);
+        if (day.getUTCFullYear() !== year - 1)
+            continue;
+        const month = day.getUTCMonth();
+        const date = month === 1 && day.getUTCDate() === 29 && !isLeapYear(year) ? 28 : day.getUTCDate();
+        const target = new Date(Date.UTC(year, month, date));
+        const key = holidayKey(target, h.name);
+        if (seen.has(key)) {
+            skipped += 1;
+            continue;
+        }
+        seen.add(key);
+        fresh.push({
+            name: h.name,
+            date: target,
+            type: h.type,
+            departments: h.departments ?? [],
+            isRecurring: true,
+            ...(h.description ? { description: h.description } : {}),
+        });
+    }
+    const inserted = await insertHolidays(fresh);
+    const result = { created: inserted.created, skipped: skipped + inserted.skipped };
+    void audit({ action: 'create', entity: 'Holiday', metadata: { event: 'rollover', year, ...result } });
+    res.status(201).json({ success: true, data: result });
 }
 //# sourceMappingURL=holidays.controller.js.map

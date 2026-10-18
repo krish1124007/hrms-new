@@ -21,18 +21,18 @@ export declare const componentSchema: z.ZodObject<{
     defaultValue: number;
     isTaxable: boolean;
     isStatutory: boolean;
-    statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
+    statutoryType?: "tds" | "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | undefined;
 }, {
     code: string;
     type: "earning" | "deduction" | "employer_contribution";
     name: string;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    statutoryType?: "tds" | "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | undefined;
     order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
-    statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
 }>;
 export declare const updateComponentSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -51,22 +51,22 @@ export declare const updateComponentSchema: z.ZodObject<{
     name?: string | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    statutoryType?: "tds" | "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | undefined;
     order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
-    statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
 }, {
     code?: string | undefined;
     type?: "earning" | "deduction" | "employer_contribution" | undefined;
     name?: string | undefined;
     calculationType?: "fixed" | "percentage_of_basic" | "percentage_of_gross" | undefined;
     isActive?: boolean | undefined;
+    statutoryType?: "tds" | "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | undefined;
     order?: number | undefined;
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
-    statutoryType?: "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | "tds" | undefined;
 }>;
 export declare const componentQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -170,6 +170,7 @@ export declare const assignStructureSchema: z.ZodObject<{
 }, {
     employeeIds: string[];
 }>;
+/** Puts the employees on the structure: payroll takes their earning lines from it. */
 export declare function assignStructure(req: Request, res: Response): Promise<void>;
 export declare const createCycleSchema: z.ZodObject<{
     month: z.ZodNumber;
@@ -200,77 +201,53 @@ export declare const cycleQuerySchema: z.ZodObject<{
 export declare function listCycles(req: Request, res: Response): Promise<void>;
 export declare function createCycle(req: Request, res: Response): Promise<void>;
 export declare function getCycle(req: Request, res: Response): Promise<void>;
+/**
+ * (Re)builds every record of a draft or processed cycle (or of one left in
+ * `processing` by a crashed run). HR overrides (`manualAdjustments`) on the
+ * records being replaced are carried over by employee and re-applied to the
+ * fresh figures.
+ *
+ * Failure handling (no transactions): before the old records are deleted a
+ * failure puts the cycle back where it was. After, the cycle drops to
+ * `draft` — it can be re-processed but not locked — with totals from the
+ * records that were saved; overrides of the employees not yet saved are
+ * lost and logged.
+ */
 export declare function processCycle(req: Request, res: Response): Promise<void>;
 export declare function listCycleRecords(req: Request, res: Response): Promise<void>;
+/**
+ * HR edits a record only through its manual adjustments. Line arrays and the
+ * computed fields (overtime, late deduction, leave balance) are not editable;
+ * unknown keys are dropped.
+ */
 export declare const updateRecordSchema: z.ZodObject<{
-    earnings: z.ZodOptional<z.ZodArray<z.ZodObject<{
-        name: z.ZodString;
-        amount: z.ZodNumber;
-    }, "strip", z.ZodTypeAny, {
-        name: string;
-        amount: number;
-    }, {
-        name: string;
-        amount: number;
-    }>, "many">>;
-    deductions: z.ZodOptional<z.ZodArray<z.ZodObject<{
-        name: z.ZodString;
-        amount: z.ZodNumber;
-    }, "strip", z.ZodTypeAny, {
-        name: string;
-        amount: number;
-    }, {
-        name: string;
-        amount: number;
-    }>, "many">>;
-    arrears: z.ZodOptional<z.ZodNumber>;
-    reimbursements: z.ZodOptional<z.ZodNumber>;
-    loanDeduction: z.ZodOptional<z.ZodNumber>;
-    overtimeAmount: z.ZodOptional<z.ZodNumber>;
-    overtimeHours: z.ZodOptional<z.ZodNumber>;
-    expense: z.ZodOptional<z.ZodNumber>;
-    advance: z.ZodOptional<z.ZodNumber>;
-    lateDeduction: z.ZodOptional<z.ZodNumber>;
-    paidLeaveBalance: z.ZodOptional<z.ZodNumber>;
+    arrears: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    advance: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    expense: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    reimbursements: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    loanDeduction: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    tds: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
+    note: z.ZodOptional<z.ZodNullable<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
-    expense?: number | undefined;
-    overtimeHours?: number | undefined;
-    earnings?: {
-        name: string;
-        amount: number;
-    }[] | undefined;
-    deductions?: {
-        name: string;
-        amount: number;
-    }[] | undefined;
-    paidLeaveBalance?: number | undefined;
-    overtimeAmount?: number | undefined;
-    advance?: number | undefined;
-    lateDeduction?: number | undefined;
-    arrears?: number | undefined;
-    reimbursements?: number | undefined;
-    loanDeduction?: number | undefined;
+    expense?: number | null | undefined;
+    tds?: number | null | undefined;
+    arrears?: number | null | undefined;
+    advance?: number | null | undefined;
+    reimbursements?: number | null | undefined;
+    loanDeduction?: number | null | undefined;
+    note?: string | null | undefined;
 }, {
-    expense?: number | undefined;
-    overtimeHours?: number | undefined;
-    earnings?: {
-        name: string;
-        amount: number;
-    }[] | undefined;
-    deductions?: {
-        name: string;
-        amount: number;
-    }[] | undefined;
-    paidLeaveBalance?: number | undefined;
-    overtimeAmount?: number | undefined;
-    advance?: number | undefined;
-    lateDeduction?: number | undefined;
-    arrears?: number | undefined;
-    reimbursements?: number | undefined;
-    loanDeduction?: number | undefined;
+    expense?: number | null | undefined;
+    tds?: number | null | undefined;
+    arrears?: number | null | undefined;
+    advance?: number | null | undefined;
+    reimbursements?: number | null | undefined;
+    loanDeduction?: number | null | undefined;
+    note?: string | null | undefined;
 }>;
 export declare function updateRecord(req: Request, res: Response): Promise<void>;
 export declare function generatePayslips(req: Request, res: Response): Promise<void>;
+/** processed → locked. From here the figures are final and employees can see them. */
 export declare function lockCycle(req: Request, res: Response): Promise<void>;
 export declare const markPaidSchema: z.ZodObject<{
     paymentRef: z.ZodString;
@@ -282,7 +259,18 @@ export declare const markPaidSchema: z.ZodObject<{
     paymentRef: string;
     paidAt?: Date | undefined;
 }>;
+/**
+ * locked → paid: every record is marked paid, then loans/claims settle. The
+ * money has gone out by now, so a failed settlement does not fail the
+ * request: it is logged, reported as `settlement: { ok: false }`, and
+ * retried with POST /payroll/cycles/:id/settle.
+ */
 export declare function markCyclePaid(req: Request, res: Response): Promise<void>;
+/**
+ * Settles a paid cycle's loans and claims again — after a settlement that
+ * failed part-way. Only what is still open is settled.
+ */
+export declare function settlePaidCycle(req: Request, res: Response): Promise<void>;
 export declare function getRecord(req: Request, res: Response): Promise<void>;
 export declare function downloadPayslip(req: Request, res: Response): Promise<void>;
 export declare const monthlyReportQuery: z.ZodObject<{

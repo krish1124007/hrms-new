@@ -16,15 +16,15 @@ export declare const createEventSchema: z.ZodObject<{
     isAllDay: boolean;
     attendees: string[];
     description?: string | undefined;
-    color?: string | undefined;
     location?: string | undefined;
+    color?: string | undefined;
 }, {
     startDate: Date;
     endDate: Date;
     title: string;
     description?: string | undefined;
-    color?: string | undefined;
     location?: string | undefined;
+    color?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }>;
@@ -42,8 +42,8 @@ export declare const updateEventSchema: z.ZodObject<{
     startDate?: Date | undefined;
     endDate?: Date | undefined;
     title?: string | undefined;
-    color?: string | undefined;
     location?: string | undefined;
+    color?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }, {
@@ -51,8 +51,8 @@ export declare const updateEventSchema: z.ZodObject<{
     startDate?: Date | undefined;
     endDate?: Date | undefined;
     title?: string | undefined;
-    color?: string | undefined;
     location?: string | undefined;
+    color?: string | undefined;
     isAllDay?: boolean | undefined;
     attendees?: string[] | undefined;
 }>;

@@ -20,6 +20,11 @@ export declare const env: {
     COMPANY_STATE_CODE: string;
     COMPANY_GSTIN: string;
     GST_RATE_PERCENT: number;
+    PF_WAGE_CEILING: number;
+    PF_RATE_PERCENT: number;
+    ESI_WAGE_CEILING: number;
+    ESI_EMPLOYEE_PERCENT: number;
+    ESI_EMPLOYER_PERCENT: number;
     CORS_ORIGIN: string;
     LOG_LEVEL: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
     ENABLE_API_DOCS: "true" | "false";

@@ -41,23 +41,36 @@ const EMPLOYEE_PERMISSIONS = [
     'policies.view',
     'holidays.view',
 ];
-/** A team manager: sees the team and approves its leave, expenses and overtime. */
+/**
+ * A team manager: sees the team and approves its leave, expenses, overtime and
+ * attendance regularizations — for their direct reports only. The plain
+ * `*.approve` permissions are scoped to the people who report to the manager
+ * (`lib/approvals.ts`); the `*.approve_all` ones, held by HR below, lift that.
+ */
 const MANAGER_PERMISSIONS = [
     ...EMPLOYEE_PERMISSIONS,
     'employees.view',
     'attendance.view',
+    'attendance.approve',
     'leaves.approve',
     'expenses.approve',
     'overtime.view',
     'overtime.approve',
 ];
-/** Day-to-day HR operations — no payroll processing, no structural deletes. */
+/**
+ * Day-to-day HR operations — no payroll processing, no structural deletes.
+ * `attendance.approve` comes with the manager tier; `attendance.manage` and the
+ * `*.approve_all` names are what let HR decide anybody's request, not just a
+ * direct report's.
+ */
 const HR_EXECUTIVE_PERMISSIONS = [
     ...MANAGER_PERMISSIONS,
     'employees.create',
     'employees.update',
     'attendance.manage',
-    'attendance.approve',
+    'leaves.approve_all',
+    'expenses.approve_all',
+    'overtime.approve_all',
     'departments.view',
     'designations.view',
     'shifts.view',
@@ -131,7 +144,7 @@ export const DEFAULT_ROLES = [
     {
         name: 'Manager',
         slug: 'manager',
-        description: 'Team manager — approve leaves, expenses and overtime, view team data',
+        description: 'Team manager — approve direct reports’ leaves, expenses, overtime and attendance, view team data',
         permissions: MANAGER_PERMISSIONS,
         isSystem: true,
     },

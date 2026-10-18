@@ -21,6 +21,8 @@ export interface ILeaveRequest extends Document {
     approvedBy?: Types.ObjectId;
     approvedAt?: Date;
     rejectedReason?: string;
+    /** Why HR cancelled the request (required when it is not the owner withdrawing it). */
+    cancelReason?: string;
     appliedAt: Date;
     createdAt: Date;
     updatedAt: Date;

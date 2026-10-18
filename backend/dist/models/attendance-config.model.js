@@ -15,6 +15,7 @@ const attendanceConfigSchema = new Schema({
         requireLocation: { type: Boolean, default: false },
         requireNoteOnLateCheckIn: { type: Boolean, default: false },
         freeLateDaysPerMonth: { type: Number, default: 3, min: 0 },
+        expenseBeforeCheckout: { type: String, enum: ['all', 'field', 'none'], default: 'all' },
     },
     liveTracking: {
         enabled: { type: Boolean, default: false },

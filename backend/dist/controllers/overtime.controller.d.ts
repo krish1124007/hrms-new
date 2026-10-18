@@ -73,7 +73,7 @@ export declare function list(req: Request, res: Response): Promise<void>;
 /** GET /api/v1/overtime/me */
 export declare function listMine(req: Request, res: Response): Promise<void>;
 /** GET /api/v1/overtime/stats */
-export declare function stats(_req: Request, res: Response): Promise<void>;
+export declare function stats(req: Request, res: Response): Promise<void>;
 /** POST /api/v1/overtime */
 export declare function create(req: Request, res: Response): Promise<void>;
 /** GET /api/v1/overtime/:id */

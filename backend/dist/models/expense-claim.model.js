@@ -28,6 +28,7 @@ const expenseClaimSchema = new Schema({
     rejectedReason: { type: String },
     reimbursedAt: { type: Date },
     reimbursementRef: { type: String },
+    payrollCycleId: { type: Schema.Types.ObjectId, ref: 'PayrollCycle' },
 });
 expenseClaimSchema.plugin(timestampPlugin);
 expenseClaimSchema.plugin(softDeletePlugin);

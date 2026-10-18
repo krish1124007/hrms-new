@@ -1,10 +1,17 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-export declare function isUnpaidLeaveType(leaveType?: {
-    paidLeave?: boolean;
-    code?: string;
-    name?: string;
-} | null): boolean;
+import type { IEmployee, ILeaveType } from '../models/index.js';
+import { isUnpaidLeaveType } from '../services/leave-attendance.service.js';
+export { isUnpaidLeaveType };
+/**
+ * The rules a leave type sets on who may take it and how. Checked on every
+ * application, including one HR files on an employee's behalf — they are
+ * about the employee, not the person filing.
+ */
+export declare function validateLeaveTypeRules(leaveType: Pick<ILeaveType, 'name' | 'isActive' | 'applicableGender' | 'probationAllowed' | 'halfDayAllowed' | 'attachmentRequired'>, employee: Pick<IEmployee, 'gender' | 'probationEndDate' | 'confirmationDate' | 'joiningDate'>, body: {
+    isHalfDay?: boolean;
+    attachments?: unknown[];
+}, today?: Date): void;
 export declare const createLeaveTypeSchema: z.ZodObject<{
     name: z.ZodString;
     code: z.ZodString;
@@ -31,7 +38,6 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     code: string;
     name: string;
     isActive: boolean;
-    color: string;
     daysAllowed: number;
     carryForward: {
         enabled: boolean;
@@ -43,12 +49,12 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     probationAllowed: boolean;
     halfDayAllowed: boolean;
     attachmentRequired: boolean;
+    color: string;
 }, {
     code: string;
     name: string;
     daysAllowed: number;
     isActive?: boolean | undefined;
-    color?: string | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
         maxDays?: number | undefined;
@@ -59,6 +65,7 @@ export declare const createLeaveTypeSchema: z.ZodObject<{
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
+    color?: string | undefined;
 }>;
 export declare const updateLeaveTypeSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -86,7 +93,6 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     code?: string | undefined;
     name?: string | undefined;
     isActive?: boolean | undefined;
-    color?: string | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled: boolean;
@@ -98,11 +104,11 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
+    color?: string | undefined;
 }, {
     code?: string | undefined;
     name?: string | undefined;
     isActive?: boolean | undefined;
-    color?: string | undefined;
     daysAllowed?: number | undefined;
     carryForward?: {
         enabled?: boolean | undefined;
@@ -114,6 +120,7 @@ export declare const updateLeaveTypeSchema: z.ZodObject<{
     probationAllowed?: boolean | undefined;
     halfDayAllowed?: boolean | undefined;
     attachmentRequired?: boolean | undefined;
+    color?: string | undefined;
 }>;
 export declare const leaveTypeQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -182,6 +189,33 @@ export declare function listLeaveBalances(req: Request, res: Response): Promise<
 export declare function myLeaveBalances(req: Request, res: Response): Promise<void>;
 export declare function allocateLeaveBalances(req: Request, res: Response): Promise<void>;
 export declare function adjustLeaveBalance(req: Request, res: Response): Promise<void>;
+/**
+ * `year` is bounded to 2000–2100 and no further ahead than next year (in the
+ * business timezone), so a typo cannot allocate 2072. The upper bound is
+ * judged per request, not when the module loads.
+ */
+export declare const openYearSchema: z.ZodEffects<z.ZodObject<{
+    year: z.ZodNumber;
+}, "strip", z.ZodTypeAny, {
+    year: number;
+}, {
+    year: number;
+}>, {
+    year: number;
+}, {
+    year: number;
+}>;
+/**
+ * Open a leave year: create the balances still missing (pro-rated for
+ * mid-year joiners) and carry the previous year's unused days forward.
+ * Idempotent — nothing already set is overwritten — so HR can run it again
+ * after adding an employee or leave type, or after a failed run.
+ *
+ * Audited whatever the outcome: a run that stops part way records the
+ * progress it made (and how many employees failed), one that never started
+ * records the error.
+ */
+export declare function openLeaveYearBalances(req: Request, res: Response): Promise<void>;
 export declare const resetBalanceSchema: z.ZodObject<{
     year: z.ZodNumber;
     leaveTypeId: z.ZodOptional<z.ZodString>;
@@ -271,14 +305,34 @@ export declare const rejectLeaveSchema: z.ZodObject<{
 }, {
     reason: string;
 }>;
+/** Optional for the owner withdrawing their own request; HR must give one. */
+export declare const cancelLeaveSchema: z.ZodDefault<z.ZodObject<{
+    reason: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    reason?: string | undefined;
+}, {
+    reason?: string | undefined;
+}>>;
 export declare function listLeaveRequests(req: Request, res: Response): Promise<void>;
 export declare function myLeaveRequests(req: Request, res: Response): Promise<void>;
 export declare function teamLeaveRequests(req: Request, res: Response): Promise<void>;
 export declare function leaveCalendar(req: Request, res: Response): Promise<void>;
 export declare function applyLeave(req: Request, res: Response): Promise<void>;
 export declare function getLeaveRequest(req: Request, res: Response): Promise<void>;
+/**
+ * Approve: charge the balance, then the request, then its attendance — each
+ * step undone if a later one fails, since there is no transaction to roll
+ * back.
+ */
 export declare function approveLeaveRequest(req: Request, res: Response): Promise<void>;
 export declare function rejectLeaveRequest(req: Request, res: Response): Promise<void>;
+/**
+ * Cancel. The owner may withdraw a pending request at any time, and an
+ * approved one only until the day it starts — taken leave is not refundable
+ * on the employee's say-so. HR (`leaves.update`) may cancel anyone else's
+ * request at any time, with a reason. Cancelling an approved request removes
+ * its attendance rows and refunds its days.
+ */
 export declare function cancelLeaveRequest(req: Request, res: Response): Promise<void>;
 export declare function deleteLeaveRequest(req: Request, res: Response): Promise<void>;
 export declare function leaveReports(req: Request, res: Response): Promise<void>;

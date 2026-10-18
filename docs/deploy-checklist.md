@@ -19,6 +19,10 @@ SSH hardening; do its last step only after you have proved a key login works. Th
 hands out signed `/api/v1/files/...` links, so `/uploads/` can be switched off in nginx (section 1)
 once the new code is running, not before.
 
+**Phase 2** (attendance, leave, payroll and approval rules) has its own section at the end of this
+file: [Phase 2 — HR logic](#phase-2--hr-logic-attendance-leave-payroll-approvals). On a server that
+already runs Phase 1, do only that section.
+
 Before you start, note the commit you are on, for rollback (section 10):
 
 ```bash
@@ -204,9 +208,14 @@ pm2 restart all
   from custom roles and from users' `customPermissions`. No route ever checked those names, so
   removing them changes nobody's access. It never touches credentials or a user's role. It prints
   `Roles: N created, N refreshed; retired permissions stripped from N custom role(s) and N user(s)`.
-- **Roles — read before assigning Manager.** The seeded **Manager** role sees and approves
-  company-wide expenses, overtime and leave (not only its own team's). Assign it only to HR-level
-  staff until the manager-chain scoping phase ships. Nobody can approve their own request.
+- **Roles — read before assigning Manager.** The seeded **Manager** role approves leave, expenses,
+  overtime and attendance regularizations only for the manager's **direct reports**: employees whose
+  *Reporting manager* is that manager's own employee record. A manager with no reports set sees an
+  empty queue. HR Manager and HR Executive decide everybody's requests (`leaves.approve_all`,
+  `expenses.approve_all`, `overtime.approve_all`, `attendance.manage`). A custom role with only a plain
+  `*.approve` permission is limited to direct reports as well; for an HR-like custom role tick the
+  matching `*.approve_all` in Settings → Roles & Permissions (Phase 2 section, step E.3). Nobody can
+  approve their own request.
 - **Why `node dist/scripts/seed.js` and not `npm run seed`:** `npm run seed` runs through `tsx`, a
   dev dependency, and `npm ci --omit=dev` does not install it (`tsx: command not found`). The
   compiled script does the same thing. If you ran a plain `npm install` instead, `npm run seed` works too.
@@ -486,3 +495,328 @@ To restore nginx:
 ```bash
 cp /root/hrms.nginx.<date>.bak /etc/nginx/sites-enabled/hrms && nginx -t && systemctl reload nginx
 ```
+
+---
+
+## Phase 2 — HR logic (attendance, leave, payroll, approvals)
+
+For deploying the `phase2-hr-logic` work on the same server, once sections 1–10 are in place (in
+particular the mail transport of section 3). Paths and the `mongosh hrms` database name are as above;
+use the name from `MONGODB_URI` if it is not `hrms`.
+
+What changes: a nightly job closes each business day (no-shows become absent, approved leave is
+written, forgotten check-outs are closed, scheduled exits are applied); leave years open with
+carry-forward; payroll cycles go draft → processed → locked → paid, with PF, ESI and Professional
+Tax by the rules; managers approve only for their direct reports.
+
+**Prerequisite:** `phase2-hr-logic` is merged into the branch the server tracks and pushed. Note the
+commit you are on, for rollback (step H):
+
+```bash
+cd /var/www/hrms-new && git rev-parse --short HEAD
+```
+
+Order: **A → B → C → D → E**, then tell HR what changed (F) and verify (G), today and again the next
+working morning.
+
+### A. Before you deploy: data checks
+
+Run these on the server before the `git pull`. They only read, except where a fix is shown.
+
+1. **Active employees whose exit date has passed.** The nightly job now applies an exit once its date
+   has come: the employee becomes `resigned` (or the status recorded with the exit) and **their login is
+   disabled**. An old record left `active` with a past exit date is therefore exited by the very first
+   run. List them:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     db.employees.find(
+       { status: { $in: ["active", "onNotice"] }, exitDate: { $lte: new Date() }, isDeleted: { $ne: true } },
+       { employeeId: 1, firstName: 1, lastName: 1, status: 1, exitDate: 1 }
+     ).forEach(printjson)'
+   ```
+
+   For each person listed:
+   - **has left:** nothing to do; the first nightly run marks them `resigned`. For another status
+     (terminated), set it on their employee page after the deploy.
+   - **still works here:** clear the date before the deploy (or `$set` it to the real last working day):
+
+     ```bash
+     mongosh hrms --quiet --eval 'db.employees.updateOne({ employeeId: "EMP0123" }, { $unset: { exitDate: "" } })'
+     ```
+
+2. **Duplicate holidays.** Step D adds a unique index on date + name, which cannot be built while
+   duplicates exist:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     db.holidays.aggregate([
+       { $match: { isDeleted: false } },
+       { $group: { _id: { date: "$date", name: "$name" }, n: { $sum: 1 }, ids: { $push: "$_id" } } },
+       { $match: { n: { $gt: 1 } } }
+     ]).forEach(printjson)'
+   ```
+
+   It must print nothing. If it lists groups, delete the extra copies on the Holidays page (keep one of
+   each), or by id, then run the check again:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.holidays.updateOne({ _id: ObjectId("…") }, { $set: { isDeleted: true, deletedAt: new Date() } })'
+   ```
+
+   Only live holidays (`isDeleted: false`) count, because the index covers only those: a holiday deleted
+   by mistake can be added again.
+
+3. **Face check-in.** The `face` method is no longer accepted. See whether it is switched on:
+
+   ```bash
+   mongosh hrms --quiet --eval 'printjson(db.attendanceconfigs.findOne({}, { enabledMethods: 1 }))'
+   ```
+
+   If `enabledMethods` contains `"face"`, fix it in step E.5.
+
+4. **Payroll cycles.** Note which months are already paid (rule in step E.2) and which are still
+   `processed` (step E.4):
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.payrollcycles.find({}, { month: 1, year: 1, status: 1 }).sort({ year: -1, month: -1 }).limit(12).forEach(printjson)'
+   ```
+
+   Employees now see payslips only for `locked` and `paid` cycles, so a `processed` cycle drops out of
+   My Payslips until HR locks it.
+
+5. **Leave types and probation.** Each leave type now says whether employees on probation may take it,
+   and a type without the setting counts as **not allowed**. Probation lasts until `probationEndDate`,
+   else `confirmationDate`, else 6 months after joining, so after the deploy everyone who joined in the
+   last 6 months is refused every existing leave type until HR decides. List the types:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.leavetypes.find({ isActive: { $ne: false } }, { name: 1, code: 1, probationAllowed: 1 }).forEach(printjson)'
+   ```
+
+   Ask HR which ones probationers may take; tick them in step E.6.
+
+6. **Reporting managers.** Managers will see only the requests of employees whose *Reporting manager*
+   is set to them:
+
+   ```bash
+   mongosh hrms --quiet --eval 'print(db.employees.countDocuments({ status: { $in: ["active", "onNotice"] }, reportingManager: { $ne: null } }), "of", db.employees.countDocuments({ status: { $in: ["active", "onNotice"] } }), "active employees have a reporting manager")'
+   ```
+
+   Employees without one can still be approved by HR; set the field on the employee page where a
+   manager should do it.
+
+### B. `.env` additions (`/var/www/hrms-new/backend/.env`)
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `COMPANY_STATE_CODE` | the company's state: `GJ`, `MH`, … | Already printed on invoices (section 3). Now also the Professional Tax state of every employee with no state on file. **Must be set:** unset, it falls back to `MH`, so Maharashtra slabs (₹300 in February) apply. |
+| `TIMEZONE` | `Asia/Kolkata` | The business day for attendance, leave and payroll (`backend/src/lib/business-day.ts`) and the clock both nightly jobs run on. It already defaults to this; pin it so nobody changes it by accident. |
+| `PF_WAGE_CEILING`, `PF_RATE_PERCENT` | `15000`, `12` | Optional; these are the defaults. PF is the rate on the **earned** basic + DA, up to the ceiling. |
+| `ESI_WAGE_CEILING`, `ESI_EMPLOYEE_PERCENT`, `ESI_EMPLOYER_PERCENT` | `21000`, `0.75`, `3.25` | Optional; these are the defaults. ESI applies while the full-month gross is within the ceiling, decided once per April–September / October–March period. |
+
+```dotenv
+COMPANY_STATE_CODE=GJ
+TIMEZONE=Asia/Kolkata
+# only to change the statutory defaults:
+# PF_WAGE_CEILING=15000
+# PF_RATE_PERCENT=12
+# ESI_WAGE_CEILING=21000
+# ESI_EMPLOYEE_PERCENT=0.75
+# ESI_EMPLOYER_PERCENT=3.25
+```
+
+Check: `grep -E '^(COMPANY_STATE_CODE|TIMEZONE)=' backend/.env` must print both lines.
+
+**`TZ=Asia/Kolkata` goes on the pm2 process (step C), not only in `.env`.** It sets the clock of the
+whole process, so dates the API formats (e-mails, logs, reports) match the business day. `.env` is read
+by the app after it has started; the pm2 environment is there from the first line.
+
+**Professional Tax** tables are in `backend/src/config/professional-tax.ts`: MH, GJ, KA, TN, WB, AP, TS.
+An employee pays the tax of the state their work location names, else of their current address's state,
+else `COMPANY_STATE_CODE`; a state without a table pays none. Tamil Nadu's half-yearly tax is entered
+as monthly ₹208 and ₹171 (exactly 208.33 and 171.25), so a TN employee pays a rupee or two less per
+half-year; change that file if exact amounts matter.
+
+### C. Pull, install, seed, restart
+
+As section 4, but the seed matters this time and the restart sets `TZ`:
+
+```bash
+cd /var/www/hrms-new && git checkout -- backend/package-lock.json && git pull && cd backend && npm ci --omit=dev
+node dist/scripts/seed.js
+```
+
+Now do step D (indexes), then restart:
+
+```bash
+cd /var/www/hrms-new/backend
+TZ=Asia/Kolkata pm2 restart backend --update-env
+pm2 save
+tr '\0' '\n' < /proc/$(pm2 pid backend)/environ | grep '^TZ='   # TZ=Asia/Kolkata
+```
+
+- **Seed.** Refreshes the system roles: HR Manager and HR Executive gain `leaves.approve_all`,
+  `expenses.approve_all` and `overtime.approve_all`; Manager gains `attendance.approve`. Expect
+  `Roles: 0 created, N refreshed; …`. Custom roles are not touched (see step E.3).
+- **Why `--update-env`:** without it pm2 restarts with the environment it saved last time and ignores
+  `TZ`. `pm2 save` keeps it across a reboot.
+- **Redis is now required.** The two nightly jobs are BullMQ jobs kept in Redis (on localhost, section 2).
+  They register themselves at every start; there is nothing to schedule by hand:
+  - `attendance-day-close`, every day at 23:59 IST: marks working-day no-shows `absent`, writes the
+    days of approved leave, closes forgotten check-outs (night shifts the next day), then applies the
+    exits whose date has come;
+  - `leave-year-open`, 00:30 IST on 1 January: opens the new leave year with carry-forward.
+
+  Both are safe to run twice. Check the log:
+
+  ```bash
+  pm2 logs backend --lines 80 --nostream | grep -E 'API listening|Attendance worker started|schedule registered'
+  ```
+
+  Expect `Attendance worker started`, `attendance day-close schedule registered` and
+  `leave-year-open schedule registered`. `Could not register the attendance day-close schedule` means
+  Redis is unreachable: fix Redis, then `pm2 restart backend`. To list the schedules in Redis:
+
+  ```bash
+  cd /var/www/hrms-new/backend && node --env-file=.env -e "import('bullmq').then(async ({ Queue }) => { const q = new Queue('attendance', { connection: { url: process.env.REDIS_URL || 'redis://localhost:6379' } }); for (const j of await q.getRepeatableJobs()) console.log(j.name, j.pattern, j.tz, new Date(j.next).toISOString()); await q.close(); })"
+  ```
+
+  It prints the two jobs; the next run is shown in UTC (18:29 UTC is 23:59 IST).
+
+### D. Indexes
+
+`autoIndex` is off in production, so create these by hand, the first only after check A.2 printed
+nothing. All three are safe to repeat.
+
+```bash
+mongosh hrms --eval 'db.holidays.createIndex({ date: 1, name: 1 }, { unique: true, partialFilterExpression: { isDeleted: false } })'
+mongosh hrms --eval 'db.attendances.createIndex({ leaveRequestId: 1 }, { sparse: true })'
+mongosh hrms --eval 'db.attendances.createIndex({ "regularization.status": 1, date: -1 }, { partialFilterExpression: { "regularization.status": "pending" } })'
+```
+
+- **Holidays:** one live holiday per date and name, so the yearly rollover and the calendar import
+  cannot add a holiday twice. The options match the model exactly. A `DuplicateKey` error means A.2 was
+  not empty.
+- **`leaveRequestId`:** cancelling a leave, or an exit, finds that leave's attendance rows by it.
+- **Pending regularizations:** speeds up the Attendance → Regularizations queue.
+
+`npm run db:audit-indexes` (`backend/scripts/db-indexes.ts`, read-only) reports duplicate and overlapping
+indexes. It runs through `tsx`, so only where dev dependencies are installed:
+`MONGODB_URI=… npm run db:audit-indexes`.
+
+### E. Once, after the deploy
+
+1. **Open the leave year.** Leaves → Balances → **Open 2026** (it calls
+   `POST /api/v1/leaves/balances/open-year { "year": 2026 }`). Every active employee, and those on
+   notice, gets a 2026 balance for each active paid leave type (pro-rated for joiners during the year),
+   and unused 2025 days carry forward up to each type's limit. Balances that already exist are left
+   exactly as they are, so a second run only fills gaps; still, run it once. From 1 January 2027 the
+   `leave-year-open` job does this.
+
+2. **Do not backfill `close-days` over months already paid.** `POST /api/v1/attendance/close-days
+   { from, to }` replays the nightly close for past days (at most 62 per call). Over a paid month it
+   would write `absent` rows under a paid cycle, and a re-process of that month would deduct them. If you
+   replay at all, only days after the last paid cycle, and only once that period's punches and leave are
+   complete: every working day without a row becomes `absent`, which is unpaid.
+
+3. **Roles.** In Settings → Roles & Permissions, a **custom** role with a plain `leaves.approve`,
+   `expenses.approve` or `overtime.approve` is now limited to the holder's direct reports. For an HR-like
+   custom role tick `leaves.approve_all`, `expenses.approve_all` and `overtime.approve_all`; for
+   regularizations, `attendance.manage`. Find the custom approver roles:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.roles.find({ isSystem: { $ne: true }, permissions: /\.approve$/ }, { slug: 1, permissions: 1 }).forEach(printjson)'
+   ```
+
+   The permissions the seed added are harmless to keep, even after a rollback.
+
+4. **Cycles left at `processed`** (A.4). A month not yet paid: process again if needed, **Lock** (from
+   then on employees see the payslip and are notified), then **Mark paid** after the bank transfer. A
+   month already paid under the old version: Lock, then Mark paid with the payment reference. Records
+   computed before this deploy list no loans or claims to settle, so Mark paid only records the payment.
+
+5. **Face check-in** (A.3). Open Attendance → Settings and save once: saving drops `face`. If `face` is
+   the only method ticked, tick another (for example Manual) first. Until then, anyone using face gets
+   `400 METHOD_UNAVAILABLE`.
+
+6. **Probation** (A.5). Leaves → Leave Types: tick **Allowed during probation** on the types probationers
+   may take.
+
+### F. What changes for users (tell HR)
+
+- **Attendance**
+  - Check-in by face is gone: apps that still offer it get `400 METHOD_UNAVAILABLE` (the mobile-app
+    update comes in Phase 5). A **manual** check-in now obeys the location rule (company-wide *require
+    location*, or the employee's own flag). Check-out needs no method.
+  - A working day with no punch and no approved leave becomes `absent` at 23:59, and payroll deducts it.
+    Forgotten check-outs are closed at the configured auto-checkout time.
+  - Night-shift staff check out on the same row until 6 hours after their shift ends.
+  - *Expenses before check-out* is a setting (Attendance → Settings): Everyone (default, as before),
+    Field staff only, or No one. Field staff are flagged on the employee.
+  - A regularization request can carry the corrected check-in and check-out times. Managers (for direct
+    reports) and HR approve it under Attendance → Regularizations; an approved request rewrites the day.
+- **Leave**
+  - A leave running from December into January must be applied as two requests, one per year.
+  - The probation rule above (A.5, E.6).
+  - HR cancelling someone else's leave must give a reason. Cancelling approved leave refunds its days,
+    and its past days become `absent`. Employees cannot withdraw approved leave that has started; HR
+    cancels it.
+- **Payroll**
+  - Cycles go draft → processed → locked → paid. Process (and re-process) only in draft or processed;
+    Lock only from processed; Mark paid only from locked. Employees see payslips only for locked and
+    paid cycles, and are notified when a cycle is locked.
+  - HR changes a record only through its adjustments: arrears, advance, expense, reimbursements, loan
+    deduction, TDS. They survive a re-process.
+  - Mark paid also settles the month's loan instalments and expense claims. If that fails part-way,
+    `POST /api/v1/payroll/cycles/:id/settle` retries it; nothing is ever paid twice.
+  - PF is on the earned basic + DA, so it drops with loss-of-pay days. ESI eligibility is fixed for the
+    whole April–September / October–March period by the first cycle processed in it. Professional Tax
+    follows the employee's state (step B). Compare the first cycle's PF, ESI and PT with the month
+    before, then lock it.
+- **Employees**
+  - Import now creates a login for each imported person and e-mails an invitation; with
+    `ALLOW_NO_MAIL=true` nothing is sent (they can use Forgot password once mail works). The import
+    answers with a per-row report; read it for rows that were skipped.
+  - A future exit date schedules the exit: status and login stay until that day, then the nightly run
+    applies it.
+
+### G. Verify
+
+Today, after the restart: the section 9 checks still pass, the log shows both schedules registered
+(step C), and as an admin the new pages open: Attendance → Regularizations, Leaves → Balances (the
+**Open 2026** button), a payroll cycle's adjustments.
+
+**The next working morning** (the first 23:59 IST run has happened):
+
+```bash
+mongosh hrms --quiet --eval 'db.attendances.countDocuments({ source: "auto_absent" })'   # > 0
+pm2 logs backend --lines 500 --nostream | grep 'attendance-day-close: complete'
+```
+
+The count is above 0 on a working day unless every single employee punched in or was on leave. The log
+line carries the counts (`absentCreated`, `leaveStamped`, `autoCheckedOut`, `exitsApplied`). Nothing
+there means the job did not run: check Redis and the `schedule registered` lines. A failed run is
+tried up to three times, and each failure is logged as `attendance worker job failed`. After 1 January, look for
+`leave-year-open: complete` the same way.
+
+### H. Rollback
+
+As section 10: the previous commit's `dist/` (the SHA you noted at the top of this section), then
+restart:
+
+```bash
+cd /var/www/hrms-new
+git checkout <previous sha> -- backend/dist frontend/dist
+pm2 restart all
+```
+
+Section 10's warning about undoing the rollback before the next `git pull` applies unchanged. What stays:
+
+- **Data is not rolled back.** `absent` rows the nightly job wrote, opened leave balances, exits it
+  applied (and the logins it disabled) and cycles locked or settled all stay; the previous version reads
+  them like any other row.
+- **The seed's permissions and the indexes** stay; both are harmless to the previous version (the
+  holiday index only refuses a second live copy of the same holiday).
+- **`.env` and `TZ`** can stay: the previous version ignores the new entries and already computes the
+  attendance day in IST.

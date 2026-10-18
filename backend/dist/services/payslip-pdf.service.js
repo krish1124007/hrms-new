@@ -16,6 +16,37 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../config/logger.js';
 import { saveFile } from '../lib/local-storage.js';
+import { DEDUCTION_FIELD_LINES, EARNING_FIELD_LINES, isTdsLine } from '../lib/payroll-cycle.js';
+/**
+ * The earnings and deduction rows the payslip prints, so that they add up to
+ * the record's `grossSalary` / `totalDeductions`.
+ *
+ * Payroll now keeps every amount as a line (`applyManualAdjustments` in
+ * lib/payroll-cycle.ts): over time, expense, arrears, reimbursements,
+ * advance, late deduction, loan deduction and TDS each have a line whenever
+ * they are non-zero, so a current record prints exactly its line arrays.
+ * Records written before that held arrears, reimbursements and loan
+ * deduction only as fields (counted in the totals, absent from the lines);
+ * any amount without its line gets a row here.
+ */
+export function payslipLines(record) {
+    const earnings = [...record.earnings];
+    const deductions = [...record.deductions];
+    const fill = (lines, defs) => {
+        for (const { field, name } of defs) {
+            const amount = Number(record[field]) || 0;
+            // A structure line of the same name (it has a componentId) is not the field's line.
+            if (amount > 0 && !lines.some((l) => l.name === name && !l.componentId))
+                lines.push({ name, amount });
+        }
+    };
+    fill(earnings, EARNING_FIELD_LINES);
+    fill(deductions, DEDUCTION_FIELD_LINES);
+    if ((record.tds || 0) > 0 && !deductions.some(isTdsLine)) {
+        deductions.push({ name: 'TDS', amount: record.tds, statutoryType: 'tds' });
+    }
+    return { earnings, deductions };
+}
 /**
  * Look for a company logo in `apps/api/branding/`. Resolved on every render
  * so dropping the file in (or replacing it) takes effect immediately — no
@@ -343,18 +374,19 @@ _ytd) {
                 .stroke();
         };
         // Earnings rows
-        record.earnings.forEach((line) => {
+        const rows = payslipLines(record);
+        rows.earnings.forEach((line) => {
             drawRow(colXEarn, earnY, line.name, line.amount, false);
             earnY += rowH;
         });
         drawRow(colXEarn, earnY, 'Gross Earnings', record.grossSalary, true);
         earnY += rowH;
         // Deductions rows
-        record.deductions.forEach((line) => {
+        rows.deductions.forEach((line) => {
             drawRow(colXDed, dedY, line.name, line.amount, false);
             dedY += rowH;
         });
-        if (record.deductions.length === 0) {
+        if (rows.deductions.length === 0) {
             doc
                 .fillColor(COLOR.muted)
                 .font('Helvetica-Oblique')

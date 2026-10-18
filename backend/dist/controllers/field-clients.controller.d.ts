@@ -65,9 +65,9 @@ export declare const createClientSchema: z.ZodObject<{
         type: "Point";
         coordinates: [number, number];
     } | undefined;
+    assignedTo?: string | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
-    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }, {
@@ -88,9 +88,9 @@ export declare const createClientSchema: z.ZodObject<{
         lat: number;
         lng: number;
     } | undefined;
+    assignedTo?: string | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
-    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }>;
@@ -159,9 +159,9 @@ export declare const updateClientSchema: z.ZodObject<{
         type: "Point";
         coordinates: [number, number];
     } | undefined;
+    assignedTo?: string | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
-    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }, {
@@ -182,9 +182,9 @@ export declare const updateClientSchema: z.ZodObject<{
         lat: number;
         lng: number;
     } | undefined;
+    assignedTo?: string | undefined;
     contactPerson?: string | undefined;
     company?: string | undefined;
-    assignedTo?: string | undefined;
     territory?: string | undefined;
     customFields?: Record<string, unknown> | undefined;
 }>;
@@ -313,9 +313,9 @@ export declare const importSchema: z.ZodObject<{
             type: "Point";
             coordinates: [number, number];
         } | undefined;
+        assignedTo?: string | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
-        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }, {
@@ -336,9 +336,9 @@ export declare const importSchema: z.ZodObject<{
             lat: number;
             lng: number;
         } | undefined;
+        assignedTo?: string | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
-        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }>, "many">;
@@ -361,9 +361,9 @@ export declare const importSchema: z.ZodObject<{
             type: "Point";
             coordinates: [number, number];
         } | undefined;
+        assignedTo?: string | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
-        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }[];
@@ -386,9 +386,9 @@ export declare const importSchema: z.ZodObject<{
             lat: number;
             lng: number;
         } | undefined;
+        assignedTo?: string | undefined;
         contactPerson?: string | undefined;
         company?: string | undefined;
-        assignedTo?: string | undefined;
         territory?: string | undefined;
         customFields?: Record<string, unknown> | undefined;
     }[];

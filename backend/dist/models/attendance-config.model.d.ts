@@ -9,6 +9,11 @@ export interface IAttendanceSettings {
     requireLocation: boolean;
     requireNoteOnLateCheckIn: boolean;
     freeLateDaysPerMonth: number;
+    /**
+     * Whether an employee must file their day's expenses before checking out:
+     * `all` = everyone, `field` = field staff only, `none` = never.
+     */
+    expenseBeforeCheckout?: 'all' | 'field' | 'none';
 }
 export interface ILiveTrackingConfig {
     enabled: boolean;

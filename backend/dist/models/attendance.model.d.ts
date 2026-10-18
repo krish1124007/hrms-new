@@ -3,6 +3,9 @@ import { type PaginateModel } from '../lib/mongoose-plugins.js';
 import type { AttendanceMethod } from './attendance-config.model.js';
 export type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'late' | 'on_leave' | 'holiday' | 'weekend';
 export type RegularizationStatus = 'pending' | 'approved' | 'rejected';
+/** How an attendance row came to exist. Rows written before this field are `punch`. */
+export type AttendanceSource = 'punch' | 'leave' | 'auto_absent' | 'auto_checkout' | 'regularization' | 'correction';
+export declare const ATTENDANCE_SOURCES: AttendanceSource[];
 export type BreakType = 'tea' | 'lunch' | 'personal' | 'other';
 export interface ILocationPoint {
     lat?: number;
@@ -22,6 +25,10 @@ export interface ICheckinMetadata {
     geofenceId?: string;
     deviceId?: string;
     faceConfidence?: number;
+    /** Check-out written by the nightly day-close, not by the employee. */
+    autoCheckout?: boolean;
+    /** Punch times set by an approved regularization request. */
+    regularized?: boolean;
 }
 export interface ICheckinRecord {
     time?: Date;
@@ -43,6 +50,9 @@ export interface IRegularization {
     approvedBy?: Types.ObjectId;
     approvedAt?: Date;
     status: RegularizationStatus;
+    /** Punch times the employee is asking to be recorded; applied on approval. */
+    requestedCheckIn?: Date;
+    requestedCheckOut?: Date;
 }
 export interface IAttendance extends Document {
     employeeId: Types.ObjectId;
@@ -57,6 +67,11 @@ export interface IAttendance extends Document {
     earlyLeaveBy: number;
     isRegularized: boolean;
     regularization?: IRegularization;
+    /** The approved leave request that produced this row, when `source` is `leave`. */
+    leaveRequestId?: Types.ObjectId;
+    /** Whether the leave behind this row is paid; undefined for non-leave rows. */
+    isPaidLeave?: boolean;
+    source: AttendanceSource;
     createdAt: Date;
     updatedAt: Date;
 }

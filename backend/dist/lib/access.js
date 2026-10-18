@@ -30,7 +30,7 @@ export function currentEmployeeId(req) {
     return r[EMPLOYEE_ID];
 }
 /** Hex id of an owner field: an ObjectId, a string id, or a populated document. */
-function idOf(value) {
+export function idOf(value) {
     if (value == null)
         return null;
     if (value instanceof Types.ObjectId)
@@ -42,7 +42,7 @@ function idOf(value) {
     return String(value);
 }
 /** True when `ownerEmployeeId` is the caller's own employee record. */
-async function isOwnRecord(req, ownerEmployeeId) {
+export async function isOwnRecord(req, ownerEmployeeId) {
     const owner = idOf(ownerEmployeeId);
     if (!owner)
         return false;

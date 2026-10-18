@@ -82,14 +82,14 @@ export declare const listQuerySchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     page: number;
     limit: number;
-    status?: "cancelled" | "open" | "in_progress" | "failed" | "acknowledged" | "escalated" | "resolved" | undefined;
+    status?: "cancelled" | "open" | "failed" | "in_progress" | "acknowledged" | "escalated" | "resolved" | undefined;
     sort?: string | undefined;
     type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
     search?: string | undefined;
     employee?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
 }, {
-    status?: "cancelled" | "open" | "in_progress" | "failed" | "acknowledged" | "escalated" | "resolved" | undefined;
+    status?: "cancelled" | "open" | "failed" | "in_progress" | "acknowledged" | "escalated" | "resolved" | undefined;
     sort?: string | undefined;
     type?: "other" | "verbal_warning" | "written_warning" | "final_warning" | "pip" | "suspension" | "termination" | undefined;
     page?: number | undefined;

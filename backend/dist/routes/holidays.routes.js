@@ -10,6 +10,7 @@ router.get('/', requirePermission('holidays.view'), validate(ctrl.listQuerySchem
 router.get('/upcoming', requirePermission('holidays.view'), asyncHandler(ctrl.upcomingHolidays));
 router.post('/', requirePermission('holidays.create'), validate(ctrl.createHolidaySchema), asyncHandler(ctrl.createHoliday));
 router.post('/import-calendar', requirePermission('holidays.create'), validate(ctrl.importCalendarSchema), asyncHandler(ctrl.importCalendar));
+router.post('/rollover', requirePermission('holidays.create'), validate(ctrl.rolloverSchema), asyncHandler(ctrl.rolloverHolidays));
 router.get('/:id', requirePermission('holidays.view'), asyncHandler(ctrl.getHoliday));
 router.patch('/:id', requirePermission('holidays.update'), validate(ctrl.updateHolidaySchema), asyncHandler(ctrl.updateHoliday));
 router.delete('/:id', requirePermission('holidays.delete'), asyncHandler(ctrl.deleteHoliday));

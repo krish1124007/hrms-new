@@ -50,6 +50,7 @@ committed, so the server deploys with `git pull` and builds nothing. Rebuild the
 with `cd backend && npm run clean && npm run build` and `cd frontend && npm run clean && npm run build`,
 then commit them. Note that in production the API refuses to start without a mail transport
 (`SMTP_HOST` or `RESEND_API_KEY`) unless `ALLOW_NO_MAIL=true`.
+Deploying Phase 2 (attendance, leave, payroll, approvals) adds its own steps: [Phase 2 — HR logic](docs/deploy-checklist.md#phase-2--hr-logic-attendance-leave-payroll-approvals).
 
 Anywhere else: the two folders are independent — deploy each wherever you want.
 

@@ -23,6 +23,8 @@ export interface IExpenseClaim extends Document {
     rejectedReason?: string;
     reimbursedAt?: Date;
     reimbursementRef?: string;
+    /** The payroll cycle that paid this claim out, when payroll reimbursed it. */
+    payrollCycleId?: Types.ObjectId;
     createdAt: Date;
     updatedAt: Date;
 }

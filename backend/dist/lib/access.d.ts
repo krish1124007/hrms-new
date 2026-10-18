@@ -17,6 +17,10 @@ export declare function hasPermission(user: Express.Request['user'], perm: strin
  * promise is cached on `req`, so concurrent callers share the one query.
  */
 export declare function currentEmployeeId(req: Request): Promise<Types.ObjectId | null>;
+/** Hex id of an owner field: an ObjectId, a string id, or a populated document. */
+export declare function idOf(value: unknown): string | null;
+/** True when `ownerEmployeeId` is the caller's own employee record. */
+export declare function isOwnRecord(req: Request, ownerEmployeeId: unknown): Promise<boolean>;
 /**
  * Allow the record's owner, or anyone holding `perm` (any one of them, when
  * given a list); otherwise 403. A caller with no employee record is never

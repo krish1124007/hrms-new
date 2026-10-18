@@ -1,73 +1,22 @@
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { SalaryComponent, SalaryStructure, PayrollCycle, PayrollRecord, Employee, Attendance, OvertimeRequest, } from '../models/index.js';
-import { AttendanceConfig } from '../models/attendance-config.model.js';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { SalaryComponent, SalaryStructure, PayrollCycle, PayrollRecord, Employee, } from '../models/index.js';
+import { ConflictError, ForbiddenError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
+import { hasPermission, isOwnRecord } from '../lib/access.js';
+import { ADJUSTABLE_FIELDS, EMPLOYEE_VISIBLE_STATUSES, applyManualAdjustments, assertTransition, claimTransition, cycleNotEditable, hasManualAdjustments, isTransitionAllowed, recomputeCycleTotals, setManualAdjustment, touchProcessing, } from '../lib/payroll-cycle.js';
+import { settleCycle } from '../services/payroll-settlement.service.js';
+import { STRUCTURE_POPULATE, assertCountedItemsPayable, computeRecord, loadComputeConfig, payrollEmployeeFilter, } from '../services/payroll-compute.service.js';
 import { generatePayslipPdf, } from '../services/payslip-pdf.service.js';
 import { deleteFile } from '../lib/local-storage.js';
 import { logger } from '../config/logger.js';
+import { payslipReadyEmail } from '../services/email-templates.js';
+import { notifyPayslipReady, sendMailQuietly } from '../services/notification.service.js';
 /* ──────────────────────────────────────────────────────────── */
 /* Helpers                                                       */
 /* ──────────────────────────────────────────────────────────── */
 const round2 = (n) => Math.round(n * 100) / 100;
-/** Professional Tax — flat ₹200 per the seeded component. */
-function professionalTax(grossMonthly) {
-    if (grossMonthly <= 7500)
-        return 0;
-    if (grossMonthly <= 10_000)
-        return 175;
-    return 200;
-}
-/** Employee PF: 12% of min(basic, 15,000). NOT prorated by attendance — matches the reference payslip
- *  where Khyati's prorated basic was ₹19,434 yet PF still showed flat ₹1,800. */
-function pfEmployee(fullMonthBasic) {
-    return round2(Math.min(fullMonthBasic, 15_000) * 0.12);
-}
-/** Employer PF: 12% of min(basic, 15,000) — matches the salary master sheet
- *  ("Employer PF" column = 1,800 at the cap). Caps at ₹1,800.
- *
- *  Note: regulators allow up to 13% (12% EPS+EPF + 0.5% EDLI + 0.5% admin).
- *  The Group's policy is 12% only — change here if EDLI/admin need to be
- *  bundled in future. */
-function pfEmployer(fullMonthBasic) {
-    return round2(Math.min(fullMonthBasic, 15_000) * 0.12);
-}
-/** ESIC eligibility threshold is gross ≤ ₹21,000/month (inclusive). Above
- *  that, neither side contributes. */
-function esicEmployee(gross) {
-    if (gross > 21_000)
-        return 0;
-    return round2(gross * 0.0075);
-}
-function esicEmployer(gross) {
-    if (gross > 21_000)
-        return 0;
-    return round2(gross * 0.0325);
-}
-function daysInMonth(year, month) {
-    return new Date(year, month, 0).getDate();
-}
-/**
- * Overtime pay using the company formula:
- *   (Gross / 2) / actualWorkingDays / 8 / 60 × OT_minutes × 2
- * Simplifies to:
- *   Gross × OT_minutes / (actualWorkingDays × 480)
- *
- * Worked example (gross 50,000, 26 days, 50 OT min):
- *   50,000 × 50 / (26 × 480) = 200.32  ✓
- *
- * Returns 0 if any divisor is zero (no presence ⇒ no OT pay).
- */
-function computeOvertimePay(fullMonthGross, otMinutes, actualWorkingDays) {
-    if (fullMonthGross <= 0 ||
-        otMinutes <= 0 ||
-        actualWorkingDays <= 0) {
-        return 0;
-    }
-    return round2((fullMonthGross * otMinutes) / (actualWorkingDays * 480));
-}
 /* ──────────────────────────────────────────────────────────── */
 /* Salary Components                                             */
 /* ──────────────────────────────────────────────────────────── */
@@ -223,19 +172,22 @@ export async function deleteStructure(req, res) {
     res.json({ success: true, message: 'Structure deleted' });
 }
 export const assignStructureSchema = z.object({
-    employeeIds: z.array(z.string()).min(1),
+    employeeIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid employee id')).min(1),
 });
+/** Puts the employees on the structure: payroll takes their earning lines from it. */
 export async function assignStructure(req, res) {
-    // For now we just record an audit; actual structure-employee join could be added
-    // as a future enhancement. Each employee already carries its own salary breakdown.
     const { employeeIds } = req.body;
+    const structure = await SalaryStructure.findById(String(req.params.id)).select('_id').lean().exec();
+    if (!structure)
+        throw new NotFoundError('Structure not found');
+    const { matchedCount } = await Employee.updateMany({ _id: { $in: employeeIds.map((id) => new Types.ObjectId(id)) } }, { $set: { salaryStructureId: structure._id } }).exec();
     void audit({
         action: 'update',
         entity: 'SalaryStructure',
-        entityId: String(req.params.id),
-        after: { assignedTo: employeeIds },
+        entityId: String(structure._id),
+        after: { assignedTo: employeeIds, assigned: matchedCount },
     });
-    res.json({ success: true, data: { assigned: employeeIds.length } });
+    res.json({ success: true, data: { assigned: matchedCount } });
 }
 /* ──────────────────────────────────────────────────────────── */
 /* Payroll Cycles                                                */
@@ -281,263 +233,246 @@ export async function getCycle(req, res) {
         throw new NotFoundError('Cycle not found');
     res.json({ success: true, data: cycle });
 }
-async function computeForEmployee(employee, cycle) {
-    const monthDays = daysInMonth(cycle.year, cycle.month);
-    const periodStart = new Date(cycle.year, cycle.month - 1, 1);
-    const periodEnd = new Date(cycle.year, cycle.month, 0, 23, 59, 59);
-    // Pull every attendance row in the period and count by status.
-    const records = await Attendance.find({
-        employeeId: employee._id,
-        date: { $gte: periodStart, $lte: periodEnd },
-    })
-        .lean()
-        .exec();
-    // Match the reference payslip: "Days Present" column counts strict 'present'
-    // rows. Late check-ins are reported separately under "Late Login".
-    const presentDays = records.filter((r) => r.status === 'present').length;
-    const lateDays = records.filter((r) => r.status === 'late').length;
-    const halfDays = records.filter((r) => r.status === 'half_day').length;
-    const paidLeaveDays = records.filter((r) => r.status === 'on_leave').length;
-    const weeklyOffDays = records.filter((r) => r.status === 'weekend' || r.status === 'holiday').length;
-    const unpaidDays = records.filter((r) => r.status === 'absent').length;
-    // Late logins = late-status rows + any present rows that were flagged late.
-    // Also count `lateDays` separately so we can include them in earned days.
-    const lateLoginCount = lateDays + records.filter((r) => r.status === 'present' && (r.lateBy ?? 0) > 0).length;
-    // Days Paid = total month days − unpaid (matches the reference payslip:
-    //   Khyati: 31 − 2 = 29).
-    // Half-days subtract 0.5 from days paid since they cost half a day's wage.
-    const daysPaid = round2(monthDays - unpaidDays - halfDays * 0.5);
-    const lopDaysFinal = round2(unpaidDays + halfDays * 0.5);
-    // Full-month figures from employee's stored salary. We treat
-    // `specialAllowance` as the "Other Allowance" line in the payslip (the CSV
-    // import populated this field with the "Other All." column).
-    const basic = Number(employee.salary?.basic ?? 0);
-    const hra = Number(employee.salary?.hra ?? 0);
-    const da = Number(employee.salary?.da ?? 0);
-    const otherAllowance = Number(employee.salary?.specialAllowance ?? 0);
-    const fullMonthGross = round2(basic + hra + da + otherAllowance);
-    // Pro-rate basic + allowances by daysPaid / monthDays.
-    const proRate = (val) => monthDays > 0 ? round2((val * daysPaid) / monthDays) : 0;
-    const earnings = [
-        { name: 'Basic', amount: proRate(basic) },
-        { name: 'HRA', amount: proRate(hra) },
-    ];
-    if (da > 0)
-        earnings.push({ name: 'DA', amount: proRate(da) });
-    earnings.push({ name: 'Other Allowance', amount: proRate(otherAllowance) });
-    // Auto-compute overtime from APPROVED OvertimeRequest rows for the period.
-    // Raw attendance.overtimeHours is the sensor reading (when did they punch
-    // out late) but only formally approved requests get paid.
-    const otApproved = await OvertimeRequest.find({
-        employee: employee._id,
-        status: 'approved',
-        date: { $gte: periodStart, $lte: periodEnd },
-    })
-        .lean()
-        .exec();
-    const overtimeHours = round2(otApproved.reduce((s, r) => s + (r.hours ?? 0), 0));
-    const otMinutes = overtimeHours * 60;
-    // Divide the rate by `daysPaid` (paid working days in the cycle), not
-    // `presentDays` — `presentDays` is 0 when attendance hasn't been entered
-    // yet, which would zero out OT pay even for valid approved requests.
-    // `daysPaid` defaults to the full month minus LOP, matching how every
-    // other earning is pro-rated.
-    const overtimeAmount = computeOvertimePay(fullMonthGross, otMinutes, daysPaid);
-    // Expense is manual — HR enters via record edit, defaults to 0.
-    const expense = 0;
-    if (overtimeAmount > 0)
-        earnings.push({ name: 'Over Time', amount: overtimeAmount });
-    if (expense > 0)
-        earnings.push({ name: 'Expense', amount: expense });
-    const grossEarnings = round2(earnings.reduce((s, l) => s + l.amount, 0));
-    const lopAmount = round2((fullMonthGross / monthDays) * lopDaysFinal);
-    // Statutory deductions
-    // PF Employee = 12% × min(full-month basic, 15,000) — flat, not prorated.
-    // This matches the reference: Khyati's prorated basic was ₹19,434 but PF
-    // showed ₹1,800 (the cap). Same rule for PF Employer at 13%.
-    const pfEmp = pfEmployee(basic);
-    const esicEmp = esicEmployee(grossEarnings);
-    const pt = professionalTax(grossEarnings);
-    const deductions = [];
-    if (pt > 0)
-        deductions.push({ name: 'P.Tax', amount: pt });
-    deductions.push({ name: 'PF Employee', amount: pfEmp });
-    deductions.push({ name: 'ESI Employee', amount: esicEmp });
-    // Manual deductions — defaulted to 0; HR can edit on the record.
-    const advance = 0;
-    // Auto late deduction: every late check-in beyond the monthly free quota
-    // (default 3) costs half a day's gross. HR can override via record edit.
-    const cfg = await AttendanceConfig.findOne({}).lean().exec();
-    const freeLateDays = cfg?.settings?.freeLateDaysPerMonth ?? 3;
-    const penalisableLate = Math.max(0, lateLoginCount - freeLateDays);
-    const lateDeduction = monthDays > 0 ? round2((fullMonthGross / monthDays) * 0.5 * penalisableLate) : 0;
-    if (advance > 0)
-        deductions.push({ name: 'Advance', amount: advance });
-    if (lateDeduction > 0)
-        deductions.push({ name: 'Late Deduction', amount: lateDeduction });
-    // Employer contributions
-    const pfErp = pfEmployer(basic);
-    const esicErp = esicEmployer(grossEarnings);
-    const employerContributions = [];
-    employerContributions.push({ name: 'PF Employer', amount: pfErp });
-    employerContributions.push({ name: 'ESI Employer', amount: esicErp });
-    const totalDeductions = round2(deductions.reduce((s, l) => s + l.amount, 0));
-    const netSalary = round2(grossEarnings - totalDeductions);
-    return {
-        earnings,
-        deductions,
-        employerContributions,
-        fullMonthGross,
-        grossSalary: grossEarnings,
-        totalDeductions,
-        netSalary,
-        workingDays: monthDays,
-        daysPaid,
-        presentDays,
-        absentDays: unpaidDays,
-        lopDays: lopDaysFinal,
-        lopAmount,
-        paidLeaveDays,
-        weeklyOffDays,
-        unpaidDays,
-        lateLoginCount,
-        paidLeaveBalance: 0, // wire to leave-balance module later
-        overtimeHours,
-        overtimeAmount,
-        expense,
-        advance,
-        lateDeduction,
-    };
-}
-export async function processCycle(req, res) {
-    const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
-    if (!cycle)
-        throw new NotFoundError('Cycle not found');
-    if (cycle.status === 'locked')
-        throw new ValidationAppError('Cycle is locked');
-    cycle.status = 'processing';
-    await cycle.save();
-    // Wipe any existing draft records for this cycle
-    await PayrollRecord.deleteMany({ cycleId: cycle._id });
-    const employees = await Employee.find({ status: 'active' }).exec();
-    let totalGross = 0;
-    let totalDeductions = 0;
-    let totalNet = 0;
-    for (const emp of employees) {
-        const computed = await computeForEmployee(emp, cycle);
-        await PayrollRecord.create({
-            cycleId: cycle._id,
-            employeeId: emp._id,
-            ...computed,
-            bankDetails: {
-                bankName: emp.bankDetails?.bankName,
-                accountNumber: emp.bankDetails?.accountNumber,
-                ifscCode: emp.bankDetails?.ifscCode,
-            },
-            paymentStatus: 'pending',
-        });
-        totalGross += computed.grossSalary;
-        totalDeductions += computed.totalDeductions;
-        totalNet += computed.netSalary;
-    }
-    cycle.status = 'processed';
-    cycle.processedAt = new Date();
+/* ──────────────────────────────────────────────────────────── */
+/* Process payroll for a cycle                                   */
+/* ──────────────────────────────────────────────────────────── */
+/** The acting user as an ObjectId, when the request has one. */
+function actingUserId() {
     const userId = getUserId();
-    if (userId)
-        cycle.processedBy = new Types.ObjectId(userId);
-    cycle.totalGross = round2(totalGross);
-    cycle.totalDeductions = round2(totalDeductions);
-    cycle.totalNet = round2(totalNet);
-    cycle.employeeCount = employees.length;
-    await cycle.save();
-    void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { status: 'processed' } });
-    res.json({ success: true, data: cycle });
+    return userId ? new Types.ObjectId(userId) : undefined;
+}
+/** Keep a run's `processing` claim fresh at most this often (see STALE_PROCESSING_MS). */
+const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+/**
+ * (Re)builds every record of a draft or processed cycle (or of one left in
+ * `processing` by a crashed run). HR overrides (`manualAdjustments`) on the
+ * records being replaced are carried over by employee and re-applied to the
+ * fresh figures.
+ *
+ * Failure handling (no transactions): before the old records are deleted a
+ * failure puts the cycle back where it was. After, the cycle drops to
+ * `draft` — it can be re-processed but not locked — with totals from the
+ * records that were saved; overrides of the employees not yet saved are
+ * lost and logged.
+ */
+export async function processCycle(req, res) {
+    const found = await PayrollCycle.findById(String(req.params.id)).exec();
+    if (!found)
+        throw new NotFoundError('Cycle not found');
+    // A crashed run's records are in an unknown state: never go back to it.
+    const restoreTo = found.status === 'processing' ? 'draft' : found.status;
+    // While `processing`, edits, lock and a second run are all refused (409).
+    const cycle = await claimTransition(found, 'process', { status: 'processing' });
+    const cycleId = cycle._id;
+    let oldRecordsDeleted = false;
+    /** Employees whose carried override is on a rebuilt record / whose record is saved. */
+    const carried = new Set();
+    const saved = new Set();
+    try {
+        const previous = await PayrollRecord.find({ cycleId })
+            .select('employeeId manualAdjustments')
+            .lean()
+            .exec();
+        const overrides = new Map();
+        for (const r of previous) {
+            if (hasManualAdjustments(r.manualAdjustments))
+                overrides.set(String(r.employeeId), r.manualAdjustments);
+        }
+        // Compute everything before touching the stored records, so a failure
+        // here leaves them (and their overrides) exactly as they were.
+        // The items other cycles hold are read once for the whole run.
+        const cfg = await loadComputeConfig(cycleId);
+        const employees = await Employee.find(payrollEmployeeFilter(cycle.year, cycle.month))
+            .populate(STRUCTURE_POPULATE)
+            .exec();
+        const rebuilt = [];
+        let lastBeat = Date.now();
+        for (const emp of employees) {
+            const carry = overrides.get(String(emp._id));
+            // HR's overrides go over the freshly computed figures; null ones fall back to them.
+            const computed = await computeRecord(emp, cycle, cfg, { manual: carry });
+            if (computed) {
+                if (carry)
+                    carried.add(String(emp._id));
+                rebuilt.push(new PayrollRecord({
+                    cycleId,
+                    employeeId: emp._id,
+                    ...computed,
+                    bankDetails: {
+                        bankName: emp.bankDetails?.bankName,
+                        accountNumber: emp.bankDetails?.accountNumber,
+                        ifscCode: emp.bankDetails?.ifscCode,
+                    },
+                    paymentStatus: 'pending',
+                }));
+            }
+            if (Date.now() - lastBeat > PROCESSING_HEARTBEAT_MS) {
+                await touchProcessing(cycleId);
+                lastBeat = Date.now();
+            }
+        }
+        const dropped = [...overrides.keys()].filter((id) => !carried.has(id));
+        if (dropped.length) {
+            logger.warn({ cycleId: String(cycleId), droppedOverrides: dropped }, 'payroll: overrides of employees no longer paid in this cycle were not carried over');
+        }
+        await PayrollRecord.deleteMany({ cycleId });
+        oldRecordsDeleted = true;
+        for (const record of rebuilt) {
+            await record.save();
+            saved.add(String(record.employeeId));
+        }
+        await recomputeCycleTotals(cycleId);
+        const by = actingUserId();
+        const processed = await PayrollCycle.findOneAndUpdate({ _id: cycleId, status: 'processing' }, { $set: { status: 'processed', processedAt: new Date(), ...(by ? { processedBy: by } : {}) } }, { new: true }).exec();
+        if (!processed)
+            throw new NotFoundError('Cycle not found');
+        void audit({
+            action: 'update',
+            entity: 'PayrollCycle',
+            entityId: String(cycleId),
+            after: { status: 'processed', carriedOverrides: carried.size },
+        });
+        res.json({ success: true, data: processed });
+    }
+    catch (err) {
+        await recoverFailedRun(cycleId, oldRecordsDeleted ? 'draft' : restoreTo, oldRecordsDeleted, carried, saved);
+        throw err;
+    }
+}
+/**
+ * Never leave a failed run's cycle in `processing` (which refuses every
+ * action). Best effort: a failure here is logged, the run's own error wins.
+ */
+async function recoverFailedRun(cycleId, status, oldRecordsDeleted, carried, saved) {
+    try {
+        await PayrollCycle.updateOne({ _id: cycleId, status: 'processing' }, { $set: { status } }).exec();
+        if (!oldRecordsDeleted)
+            return;
+        await recomputeCycleTotals(cycleId);
+        const lost = [...carried].filter((id) => !saved.has(id));
+        if (lost.length) {
+            logger.warn({ cycleId: String(cycleId), lostOverrides: lost }, 'payroll: run failed after replacing records; these overrides were lost');
+        }
+    }
+    catch (restoreErr) {
+        logger.error({ err: restoreErr, cycleId: String(cycleId) }, 'payroll: could not reset a failed run');
+    }
 }
 /* ──────────────────────────────────────────────────────────── */
 /* Records                                                        */
 /* ──────────────────────────────────────────────────────────── */
 export async function listCycleRecords(req, res) {
-    const records = await PayrollRecord.find({
-        cycleId: new Types.ObjectId(String(req.params.id)),
-    })
+    const cycle = await PayrollCycle.findById(String(req.params.id)).select('_id').lean().exec();
+    if (!cycle)
+        throw new NotFoundError('Cycle not found');
+    const records = await PayrollRecord.find({ cycleId: cycle._id })
         .populate('employeeId', 'firstName lastName employeeId email')
         .sort('employeeId')
         .lean()
         .exec();
     res.json({ success: true, data: records });
 }
+/** An override amount, or `null` to clear the override (back to the computed figure). */
+const overrideAmount = z.union([z.null(), z.coerce.number().finite().min(0)]).optional();
+/**
+ * HR edits a record only through its manual adjustments. Line arrays and the
+ * computed fields (overtime, late deduction, leave balance) are not editable;
+ * unknown keys are dropped.
+ */
 export const updateRecordSchema = z.object({
-    earnings: z
-        .array(z.object({ name: z.string(), amount: z.coerce.number() }))
-        .optional(),
-    deductions: z
-        .array(z.object({ name: z.string(), amount: z.coerce.number() }))
-        .optional(),
-    arrears: z.coerce.number().optional(),
-    reimbursements: z.coerce.number().optional(),
-    loanDeduction: z.coerce.number().optional(),
-    overtimeAmount: z.coerce.number().optional(),
-    overtimeHours: z.coerce.number().optional(),
-    expense: z.coerce.number().optional(),
-    advance: z.coerce.number().optional(),
-    lateDeduction: z.coerce.number().optional(),
-    paidLeaveBalance: z.coerce.number().optional(),
+    arrears: overrideAmount,
+    advance: overrideAmount,
+    expense: overrideAmount,
+    reimbursements: overrideAmount,
+    loanDeduction: overrideAmount,
+    tds: overrideAmount,
+    note: z.string().trim().max(500).nullable().optional(),
 });
+/** Plain snapshot of a record's overrides, for the audit trail. */
+function adjustmentsSnapshot(manual) {
+    const out = {};
+    for (const field of ADJUSTABLE_FIELDS)
+        out[field] = manual[field] ?? null;
+    out.note = manual.note ?? null;
+    return out;
+}
+/** Everything an edit can change on a record — what a reverted edit puts back. */
+const EDITED_PATHS = [
+    'earnings',
+    'deductions',
+    ...ADJUSTABLE_FIELDS,
+    'grossSalary',
+    'totalDeductions',
+    'netSalary',
+    'manualAdjustments',
+    'payslipUrl',
+];
+/** Writes `original`'s values of EDITED_PATHS back onto the stored record. */
+async function restoreRecord(recordId, original) {
+    const $set = {};
+    const $unset = {};
+    for (const p of EDITED_PATHS) {
+        if (original[p] === undefined)
+            $unset[p] = 1;
+        else
+            $set[p] = original[p];
+    }
+    await PayrollRecord.updateOne({ _id: recordId }, Object.keys($unset).length ? { $set, $unset } : { $set }).exec();
+}
+/** Deletes a stored payslip file. Best effort: logged, never thrown. */
+async function discardPayslipFile(url) {
+    if (!url?.startsWith('/uploads/'))
+        return;
+    await deleteFile(url.slice('/uploads/'.length)).catch((err) => logger.warn({ err, url }, 'payroll: could not delete superseded payslip'));
+}
 export async function updateRecord(req, res) {
+    const body = req.body;
     const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
     if (!cycle)
         throw new NotFoundError('Cycle not found');
-    if (cycle.status === 'locked' || cycle.status === 'paid') {
-        throw new ValidationAppError('Cycle is locked — records cannot be edited');
-    }
+    const cycleId = cycle._id;
     const record = await PayrollRecord.findById(String(req.params.recordId)).exec();
-    if (!record)
+    if (!record || !record.cycleId.equals(cycleId)) {
         throw new NotFoundError('Record not found');
-    const body = req.body;
-    if (body.earnings)
-        record.earnings = body.earnings;
-    if (body.deductions)
-        record.deductions = body.deductions;
-    if (body.arrears !== undefined)
-        record.arrears = body.arrears;
-    if (body.reimbursements !== undefined)
-        record.reimbursements = body.reimbursements;
-    if (body.loanDeduction !== undefined)
-        record.loanDeduction = body.loanDeduction;
-    if (body.overtimeAmount !== undefined)
-        record.overtimeAmount = body.overtimeAmount;
-    if (body.overtimeHours !== undefined)
-        record.overtimeHours = body.overtimeHours;
-    if (body.expense !== undefined)
-        record.expense = body.expense;
-    if (body.advance !== undefined)
-        record.advance = body.advance;
-    if (body.lateDeduction !== undefined)
-        record.lateDeduction = body.lateDeduction;
-    if (body.paidLeaveBalance !== undefined)
-        record.paidLeaveBalance = body.paidLeaveBalance;
-    // Reflect overtime / expense / advance / late-deduction into the line arrays
-    // so the PDF renderer sees them. Strip then re-add to keep ordering tidy.
-    record.earnings = record.earnings.filter((l) => l.name !== 'Over Time' && l.name !== 'Expense');
-    if (record.overtimeAmount > 0)
-        record.earnings.push({ name: 'Over Time', amount: round2(record.overtimeAmount) });
-    if (record.expense > 0)
-        record.earnings.push({ name: 'Expense', amount: round2(record.expense) });
-    record.deductions = record.deductions.filter((l) => l.name !== 'Advance' && l.name !== 'Late Deduction');
-    if (record.advance > 0)
-        record.deductions.push({ name: 'Advance', amount: round2(record.advance) });
-    if (record.lateDeduction > 0)
-        record.deductions.push({ name: 'Late Deduction', amount: round2(record.lateDeduction) });
-    // Recompute totals from line arrays — keeps a single source of truth.
-    const grossEarnings = record.earnings.reduce((s, l) => s + (l.amount || 0), 0) +
-        (record.arrears || 0) +
-        (record.reimbursements || 0);
-    const totalDed = record.deductions.reduce((s, l) => s + (l.amount || 0), 0) + (record.loanDeduction || 0);
-    record.grossSalary = round2(grossEarnings);
-    record.totalDeductions = round2(totalDed);
-    record.netSalary = round2(grossEarnings - totalDed);
+    }
+    assertTransition(cycle, 'edit');
+    const original = record.toObject();
+    const before = adjustmentsSnapshot(record.manualAdjustments);
+    for (const field of ADJUSTABLE_FIELDS) {
+        const value = body[field];
+        if (value !== undefined)
+            setManualAdjustment(record, field, value);
+    }
+    if (body.note !== undefined)
+        record.manualAdjustments.note = body.note || undefined;
+    applyManualAdjustments(record);
+    // Clearing (or setting) the reimbursements / loan deduction makes the record
+    // pay the claims / EMIs it counted: refused while another record holds one.
+    await assertCountedItemsPayable(record, ['reimbursements', 'loanDeduction'].filter((field) => body[field] !== undefined));
+    // A generated payslip shows the old figures: drop it. The next download
+    // (or generate-payslips run) renders it again from the edited record.
+    const stalePayslip = record.payslipUrl;
+    record.payslipUrl = undefined;
     await record.save();
-    void audit({ action: 'update', entity: 'PayrollRecord', entityId: String(record._id) });
+    // The status was checked before the save; if the cycle was locked (or
+    // claimed by a process run) meanwhile, put the record back and refuse.
+    const current = await PayrollCycle.findById(cycleId).select('status updatedAt').lean().exec();
+    if (!current || !isTransitionAllowed(current, 'edit')) {
+        await restoreRecord(record._id, original);
+        await recomputeCycleTotals(cycleId);
+        if (!current)
+            throw new NotFoundError('Cycle not found');
+        throw cycleNotEditable(current.status, 'edit');
+    }
+    await recomputeCycleTotals(cycleId);
+    await discardPayslipFile(stalePayslip);
+    void audit({
+        action: 'update',
+        entity: 'PayrollRecord',
+        entityId: String(record._id),
+        before: { manualAdjustments: before },
+        after: { manualAdjustments: adjustmentsSnapshot(record.manualAdjustments) },
+    });
     res.json({ success: true, data: record });
 }
 /* ──────────────────────────────────────────────────────────── */
@@ -565,9 +500,7 @@ export async function generatePayslips(req, res) {
     const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
     if (!cycle)
         throw new NotFoundError('Cycle not found');
-    if (cycle.status === 'draft') {
-        throw new ValidationAppError('Cycle must be processed first');
-    }
+    assertTransition(cycle, 'generatePayslips');
     const company = {
         name: process.env.COMPANY_NAME || 'Company',
         email: process.env.COMPANY_EMAIL,
@@ -589,9 +522,8 @@ export async function generatePayslips(req, res) {
             await record.save();
             generated += 1;
             // Each generation writes a new random key; drop the file it supersedes.
-            if (previousUrl?.startsWith('/uploads/') && previousUrl !== url) {
-                await deleteFile(previousUrl.slice('/uploads/'.length)).catch((err) => logger.warn({ err, previousUrl }, 'payroll: could not delete superseded payslip'));
-            }
+            if (previousUrl !== url)
+                await discardPayslipFile(previousUrl);
         }
         catch (err) {
             // Continue on individual failure — don't break the batch
@@ -606,35 +538,108 @@ export async function generatePayslips(req, res) {
 /* ──────────────────────────────────────────────────────────── */
 /* Lock / Mark paid                                              */
 /* ──────────────────────────────────────────────────────────── */
+/** How many employees are told at once that their payslip is ready. */
+const PAYSLIP_NOTICE_BATCH = 50;
+/**
+ * Tell every employee on a freshly locked cycle that their payslip is ready —
+ * in-app and by e-mail. Employees without a login are skipped (they could not
+ * open it). One query for the cycle's records, one for those employees, then
+ * in batches. Never throws: the lock has already happened.
+ */
+async function announcePayslips(cycle) {
+    try {
+        const records = await PayrollRecord.find({ cycleId: cycle._id }).select('employeeId').lean().exec();
+        if (records.length === 0)
+            return;
+        const employees = await Employee.find({
+            _id: { $in: records.map((r) => r.employeeId) },
+            userId: { $ne: null },
+        })
+            .setOptions({ withDeleted: true })
+            .select('userId email')
+            .lean()
+            .exec();
+        const period = { month: cycle.month, year: cycle.year };
+        const mail = payslipReadyEmail({ ...period, link: '/payroll/my-payslips' });
+        for (let i = 0; i < employees.length; i += PAYSLIP_NOTICE_BATCH) {
+            await Promise.all(employees.slice(i, i + PAYSLIP_NOTICE_BATCH).map(async (emp) => {
+                await notifyPayslipReady(String(emp.userId), period);
+                if (emp.email)
+                    sendMailQuietly({ to: emp.email, ...mail });
+            }));
+        }
+    }
+    catch (err) {
+        logger.warn({ err, cycleId: String(cycle._id) }, 'payroll: payslip-ready notifications failed');
+    }
+}
+/** processed → locked. From here the figures are final and employees can see them. */
 export async function lockCycle(req, res) {
-    const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
-    if (!cycle)
+    const found = await PayrollCycle.findById(String(req.params.id)).exec();
+    if (!found)
         throw new NotFoundError('Cycle not found');
-    cycle.status = 'locked';
-    await cycle.save();
+    const by = actingUserId();
+    const cycle = await claimTransition(found, 'lock', {
+        status: 'locked',
+        lockedAt: new Date(),
+        ...(by ? { lockedBy: by } : {}),
+    });
     void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { status: 'locked' } });
+    void announcePayslips(cycle);
     res.json({ success: true, data: cycle });
 }
 export const markPaidSchema = z.object({
     paymentRef: z.string().min(1),
     paidAt: z.coerce.date().optional(),
 });
+/**
+ * locked → paid: every record is marked paid, then loans/claims settle. The
+ * money has gone out by now, so a failed settlement does not fail the
+ * request: it is logged, reported as `settlement: { ok: false }`, and
+ * retried with POST /payroll/cycles/:id/settle.
+ */
 export async function markCyclePaid(req, res) {
     const body = req.body;
+    const found = await PayrollCycle.findById(String(req.params.id)).exec();
+    if (!found)
+        throw new NotFoundError('Cycle not found');
+    const paidAt = body.paidAt ?? new Date();
+    const by = actingUserId();
+    const cycle = await claimTransition(found, 'markPaid', {
+        status: 'paid',
+        paidAt,
+        paymentRef: body.paymentRef,
+        ...(by ? { paidBy: by } : {}),
+    });
+    await PayrollRecord.updateMany({ cycleId: cycle._id }, { $set: { paymentStatus: 'paid', paidAt, paymentRef: body.paymentRef } });
+    let settlement;
+    try {
+        settlement = { ok: true, ...(await settleCycle(cycle)) };
+    }
+    catch (err) {
+        logger.error({ err, cycleId: String(cycle._id) }, 'payroll: settling loans and expense claims failed; retry with POST /payroll/cycles/:id/settle');
+        settlement = { ok: false };
+    }
+    void audit({
+        action: 'update',
+        entity: 'PayrollCycle',
+        entityId: String(cycle._id),
+        after: { status: 'paid', settlement },
+    });
+    res.json({ success: true, data: cycle, settlement });
+}
+/**
+ * Settles a paid cycle's loans and claims again — after a settlement that
+ * failed part-way. Only what is still open is settled.
+ */
+export async function settlePaidCycle(req, res) {
     const cycle = await PayrollCycle.findById(String(req.params.id)).exec();
     if (!cycle)
         throw new NotFoundError('Cycle not found');
-    cycle.status = 'paid';
-    cycle.paidAt = body.paidAt ?? new Date();
-    cycle.paymentRef = body.paymentRef;
-    await cycle.save();
-    await PayrollRecord.updateMany({ cycleId: cycle._id }, {
-        paymentStatus: 'paid',
-        paidAt: cycle.paidAt,
-        paymentRef: body.paymentRef,
-    });
-    void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { status: 'paid' } });
-    res.json({ success: true, data: cycle });
+    assertTransition(cycle, 'settle');
+    const result = await settleCycle(cycle);
+    void audit({ action: 'update', entity: 'PayrollCycle', entityId: String(cycle._id), after: { settlement: result } });
+    res.json({ success: true, data: result });
 }
 /* ──────────────────────────────────────────────────────────── */
 /* Individual record / payslip                                   */
@@ -646,43 +651,38 @@ export async function getRecord(req, res) {
         .exec();
     if (!record)
         throw new NotFoundError('Record not found');
-    // Ownership guard — non-privileged users may only view their own record.
-    if (req.user && !isPayrollPrivileged(req.user)) {
-        const employee = await Employee.findOne({ userId: req.user._id })
-            .select('_id')
-            .lean()
-            .exec();
-        if (!employee || String(record.employeeId) !== String(employee._id)) {
-            throw new ForbiddenError('You can only view your own payroll record');
-        }
-    }
+    const cycleStatus = record.cycleId?.status;
+    await assertPayslipAccess(req, record.employeeId, cycleStatus);
     res.json({ success: true, data: record });
 }
-const PRIVILEGED_PAYROLL_ROLES = new Set(['admin', 'hr_manager']);
-function isPayrollPrivileged(user) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const slug = user?.role?.slug;
-    return !!slug && PRIVILEGED_PAYROLL_ROLES.has(slug);
+const PAYROLL_PRIVILEGE = 'payroll.process';
+/**
+ * Payroll staff (`payroll.process`) reach any record. Everyone else reaches
+ * only their own (403 otherwise), and only once its cycle is locked or paid —
+ * before that it is a 404, as if the payslip did not exist yet.
+ */
+async function assertPayslipAccess(req, ownerEmployeeId, cycleStatus) {
+    if (hasPermission(req.user, PAYROLL_PRIVILEGE))
+        return;
+    if (!(await isOwnRecord(req, ownerEmployeeId))) {
+        throw new ForbiddenError('You can only access your own records');
+    }
+    if (!cycleStatus || !EMPLOYEE_VISIBLE_STATUSES.includes(cycleStatus)) {
+        throw new NotFoundError('Record not found');
+    }
 }
 export async function downloadPayslip(req, res) {
     const record = await PayrollRecord.findById(String(req.params.id)).exec();
     if (!record)
         throw new NotFoundError('Record not found');
-    // Ownership guard — non-privileged users may only download their own payslip.
-    if (req.user && !isPayrollPrivileged(req.user)) {
-        const employee = await Employee.findOne({ userId: req.user._id })
-            .select('_id')
-            .lean()
-            .exec();
-        if (!employee || String(record.employeeId) !== String(employee._id)) {
-            throw new ForbiddenError('You can only download your own payslip');
-        }
-    }
-    // Generate on demand if not already cached on the record.
+    const cycle = await PayrollCycle.findById(record.cycleId).exec();
+    await assertPayslipAccess(req, record.employeeId, cycle?.status);
+    // Generate on demand if not already cached on the record (an edit drops
+    // the cached one), under the same rule as generate-payslips.
     if (!record.payslipUrl) {
-        const cycle = await PayrollCycle.findById(record.cycleId).exec();
         if (!cycle)
             throw new NotFoundError('Cycle not found');
+        assertTransition(cycle, 'generatePayslips');
         const employee = await Employee.findById(record.employeeId)
             .populate('department', 'name code')
             .populate('designation', 'name level')
@@ -755,27 +755,18 @@ export async function statutoryReport(req, res) {
         .populate('employeeId', 'firstName lastName employeeId')
         .lean()
         .exec();
-    const byType = {
-        pfEmployee: 0,
-        pfEmployer: 0,
-        esicEmployee: 0,
-        esicEmployer: 0,
-        professionalTax: 0,
-    };
+    const employee = { pf: 0, esi: 0, pt: 0, tds: 0 };
+    const employer = { pf: 0, esi: 0, pt: 0, tds: 0 };
     for (const r of records) {
         for (const d of r.deductions ?? []) {
-            if (d.name.includes('PF'))
-                byType.pfEmployee += d.amount;
-            if (d.name.includes('ESIC'))
-                byType.esicEmployee += d.amount;
-            if (d.name.includes('Professional'))
-                byType.professionalTax += d.amount;
+            const type = statutoryTypeOf(d);
+            if (type)
+                employee[type] += d.amount || 0;
         }
         for (const e of r.employerContributions ?? []) {
-            if (e.name.includes('PF'))
-                byType.pfEmployer += e.amount;
-            if (e.name.includes('ESIC'))
-                byType.esicEmployer += e.amount;
+            const type = statutoryTypeOf(e);
+            if (type)
+                employer[type] += e.amount || 0;
         }
     }
     res.json({
@@ -783,15 +774,35 @@ export async function statutoryReport(req, res) {
         data: {
             filter,
             totals: {
-                pfEmployee: round2(byType.pfEmployee),
-                pfEmployer: round2(byType.pfEmployer),
-                esicEmployee: round2(byType.esicEmployee),
-                esicEmployer: round2(byType.esicEmployer),
-                professionalTax: round2(byType.professionalTax),
+                pfEmployee: round2(employee.pf),
+                pfEmployer: round2(employer.pf),
+                esicEmployee: round2(employee.esi),
+                esicEmployer: round2(employer.esi),
+                professionalTax: round2(employee.pt),
+                tds: round2(employee.tds),
             },
             records,
         },
     });
+}
+/**
+ * Which statutory deduction a line is: its `statutoryType`, or — for lines
+ * written before lines carried a type — the names payroll has used for them
+ * ("PF Employee", "ESI Employee"/"ESIC …", "P.Tax"/"Professional Tax", "TDS").
+ */
+function statutoryTypeOf(line) {
+    if (line.statutoryType)
+        return line.statutoryType;
+    const name = line.name ?? '';
+    if (name.includes('PF'))
+        return 'pf';
+    if (/\bESIC?\b/.test(name))
+        return 'esi';
+    if (name.includes('Professional') || /\bP\.?\s?Tax\b/i.test(name))
+        return 'pt';
+    if (/\bTDS\b/.test(name))
+        return 'tds';
+    return null;
 }
 /* ──────────────────────────────────────────────────────────── */
 /* Employee self-service                                         */
@@ -807,7 +818,15 @@ export async function myPayslips(_req, res) {
         res.json({ success: true, data: [] });
         return;
     }
-    const records = await PayrollRecord.find({ employeeId: employee._id })
+    // Only finalised cycles: a processed cycle can still be re-run or edited.
+    const visible = await PayrollCycle.find({ status: { $in: EMPLOYEE_VISIBLE_STATUSES } })
+        .select('_id')
+        .lean()
+        .exec();
+    const records = await PayrollRecord.find({
+        employeeId: employee._id,
+        cycleId: { $in: visible.map((c) => c._id) },
+    })
         .populate('cycleId', 'month year status')
         .sort('-createdAt')
         .lean()

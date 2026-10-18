@@ -12,7 +12,10 @@ export interface IPayrollCycle extends Document {
     totalNet: number;
     employeeCount: number;
     payslipGeneratedAt?: Date;
+    lockedAt?: Date;
+    lockedBy?: Types.ObjectId;
     paidAt?: Date;
+    paidBy?: Types.ObjectId;
     paymentRef?: string;
     createdAt: Date;
     updatedAt: Date;

@@ -1104,6 +1104,15 @@ export const swaggerPaths = {
             responses: { ...res200('Marked as paid') },
         },
     },
+    '/payroll/cycles/{id}/settle': {
+        post: {
+            tags: ['Payroll'],
+            summary: 'Settle a paid cycle',
+            description: 'Marks the loan instalments and expense claims the paid cycle deducted / reimbursed as paid / reimbursed. Idempotent: re-run it after a settlement that failed part-way.',
+            parameters: [idParam()],
+            responses: { ...res200('Instalments paid and claims reimbursed by this call') },
+        },
+    },
     // Records
     '/payroll/records/{id}': {
         get: { tags: ['Payroll'], summary: 'Get payroll record', parameters: [idParam()], responses: { ...res200('Payroll record') } },

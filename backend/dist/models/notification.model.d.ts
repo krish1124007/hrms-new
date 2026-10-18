@@ -1,6 +1,6 @@
 import { type Document, type Model, type Types } from 'mongoose';
 import { type PaginateModel } from '../lib/mongoose-plugins.js';
-export type NotificationType = 'leave_request' | 'expense_request' | 'task_assigned' | 'attendance_anomaly' | 'payment_due' | 'system_alert' | 'approval_request';
+export type NotificationType = 'leave_request' | 'expense_request' | 'task_assigned' | 'attendance_anomaly' | 'payment_due' | 'system_alert' | 'approval_request' | 'regularization_request' | 'regularization_decision' | 'decision' | 'payslip_ready';
 export interface INotification extends Document {
     userId: Types.ObjectId;
     type: NotificationType;

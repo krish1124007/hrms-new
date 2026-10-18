@@ -9,7 +9,7 @@ export declare const createVisitSchema: z.ZodObject<{
     status: z.ZodDefault<z.ZodEnum<["scheduled", "in_progress", "completed", "cancelled"]>>;
     meetingWith: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    status: "cancelled" | "completed" | "in_progress" | "scheduled";
+    status: "cancelled" | "completed" | "scheduled" | "in_progress";
     clientId: string;
     purpose: "collection" | "service" | "other" | "sales" | "followup";
     isPlanned: boolean;
@@ -18,7 +18,7 @@ export declare const createVisitSchema: z.ZodObject<{
     meetingWith?: string | undefined;
 }, {
     clientId: string;
-    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
+    status?: "cancelled" | "completed" | "scheduled" | "in_progress" | undefined;
     employeeId?: string | undefined;
     notes?: string | undefined;
     purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
@@ -34,7 +34,7 @@ export declare const updateVisitSchema: z.ZodObject<{
     photos: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     productsDiscussed: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
-    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
+    status?: "cancelled" | "completed" | "scheduled" | "in_progress" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
     notes?: string | undefined;
     purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;
@@ -42,7 +42,7 @@ export declare const updateVisitSchema: z.ZodObject<{
     photos?: string[] | undefined;
     productsDiscussed?: string[] | undefined;
 }, {
-    status?: "cancelled" | "completed" | "in_progress" | "scheduled" | undefined;
+    status?: "cancelled" | "completed" | "scheduled" | "in_progress" | undefined;
     outcome?: "positive" | "negative" | "neutral" | "followup_required" | undefined;
     notes?: string | undefined;
     purpose?: "collection" | "service" | "other" | "sales" | "followup" | undefined;

@@ -51,8 +51,10 @@ export async function attendanceTrend(_req, res) {
     // Group attendance rows by date + status via one aggregation pipeline
     const attendanceByDay = await Attendance.aggregate([
         {
+            // Aggregations skip the soft-delete query hook: exclude deleted rows here.
             $match: {
                 date: { $gte: from, $lte: to },
+                isDeleted: { $ne: true },
             },
         },
         {
@@ -100,7 +102,8 @@ export async function attendanceTrend(_req, res) {
             bucket.present = row.count;
         else if (row._id.status === 'absent')
             bucket.absent = row.count;
-        else if (row._id.status === 'late' || row._id.status === 'half-day')
+        // Rows store `half_day`; the chart stacks half days with the late arrivals.
+        else if (row._id.status === 'late' || row._id.status === 'half_day')
             bucket.late += row.count;
     }
     for (const l of leavesByDay) {

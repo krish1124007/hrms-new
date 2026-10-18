@@ -3,14 +3,47 @@ import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
 import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertNotSelfApproval, assertOwnOrPermission, currentEmployeeId, hasPermission, } from '../lib/access.js';
+import { getUserId } from '../lib/async-context.js';
+import { logger } from '../config/logger.js';
+import { formatBusinessDate, notifyEmployeeDecision, notifyOvertimeRequest, reportingManagerUserId, } from '../services/notification.service.js';
+import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
+import { assertCanDecide, assertOwnOrCanDecide, isApprover, scopeFilter, scopeFilterFor, } from '../lib/approvals.js';
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own overtime request';
+/**
+ * Tell the employee's reporting manager about a request waiting for them —
+ * not when the manager is the one who filed it. Never throws.
+ */
+async function notifyManagerOfRequest(otReq) {
+    try {
+        const emp = await Employee.findById(otReq.employee).select('firstName lastName userId reportingManager').lean().exec();
+        if (!emp)
+            return;
+        const managerUserId = await reportingManagerUserId(emp);
+        if (!managerUserId || managerUserId === getUserId())
+            return;
+        await notifyOvertimeRequest(managerUserId, `${emp.firstName} ${emp.lastName}`, otReq.hours, formatBusinessDate(otReq.date), { overtimeId: String(otReq._id) });
+    }
+    catch (err) {
+        logger.warn({ err, overtimeId: String(otReq._id) }, 'overtime: manager notification failed');
+    }
+}
+/** Tell the employee how their request was decided — in-app and by e-mail. Never throws. */
+function notifyEmployee(otReq, status, outcome) {
+    return notifyEmployeeDecision(otReq.employee, {
+        module: 'overtime',
+        status,
+        title: `Overtime ${status}`,
+        message: `Your overtime request for ${otReq.hours} h on ${formatBusinessDate(otReq.date)} ${outcome}`,
+        link: '/overtime',
+        metadata: { overtimeId: String(otReq._id) },
+    });
+}
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
 export const createSchema = z.object({
-    // Optional — defaults to the caller's employee record. Only holders of
-    // `overtime.view` (HR / managers) may file on behalf of someone else; for
-    // everyone else it is ignored.
+    // Optional — defaults to the caller's employee record. Only an approver may
+    // file on behalf of someone else, and only for a direct report (HR, with
+    // `overtime.approve_all`, for anyone); for everyone else it is ignored.
     employee: objectId.optional(),
     date: z.coerce.date(),
     hours: z.coerce.number().positive().max(24),
@@ -40,12 +73,11 @@ export const rejectSchema = z.object({
 export async function list(req, res) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const q = req.query;
+    // HR sees everyone's overtime; a manager their direct reports' and their own.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filter = {};
+    const filter = await scopeFilterFor(req, 'overtime', q.employee, 'employee');
     if (q.status)
         filter.status = q.status;
-    if (q.employee)
-        filter.employee = q.employee;
     if (q.from || q.to) {
         filter.date = {};
         if (q.from)
@@ -86,10 +118,12 @@ export async function listMine(req, res) {
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 /** GET /api/v1/overtime/stats */
-export async function stats(_req, res) {
-    const notDeleted = { isDeleted: { $ne: true } };
+export async function stats(req, res) {
+    // The same people the list shows: everyone for HR, reports and self for a manager.
+    const scope = await scopeFilter(req, 'overtime', 'employee');
+    const notDeleted = { isDeleted: { $ne: true }, ...scope };
     const [total, byStatus, hoursAgg] = await Promise.all([
-        OvertimeRequest.countDocuments({}),
+        OvertimeRequest.countDocuments(scope),
         OvertimeRequest.aggregate([
             { $match: notDeleted },
             { $group: { _id: '$status', n: { $sum: 1 } } },
@@ -122,16 +156,17 @@ export async function create(req, res) {
         throw new UnauthorizedError();
     const body = req.body;
     // Resolve which employee the request is for: the caller's own record,
-    // unless an `overtime.view` holder names someone else.
+    // unless an approver names someone they could decide for.
+    const own = await currentEmployeeId(req);
     let employeeId;
-    if (body.employee && hasPermission(req.user, 'overtime.view')) {
+    if (body.employee && isApprover(req, 'overtime') && !own?.equals(body.employee)) {
+        await assertCanDecide(req, body.employee, 'overtime');
         const emp = await Employee.findById(body.employee).select('_id').exec();
         if (!emp)
             throw new NotFoundError('Employee not found');
         employeeId = emp._id;
     }
     else {
-        const own = await currentEmployeeId(req);
         if (!own) {
             throw new ValidationAppError('Cannot determine employee — link the user to an employee record');
         }
@@ -146,6 +181,7 @@ export async function create(req, res) {
         appliedAt: new Date(),
     });
     void audit({ action: 'create', entity: 'OvertimeRequest', entityId: String(otReq._id) });
+    await notifyManagerOfRequest(otReq);
     res.status(201).json({ success: true, data: otReq });
 }
 /** GET /api/v1/overtime/:id */
@@ -156,7 +192,7 @@ export async function get(req, res) {
         .exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
-    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+    await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
     res.json({ success: true, data: otReq });
 }
 /** PATCH /api/v1/overtime/:id */
@@ -165,7 +201,7 @@ export async function update(req, res) {
     const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
-    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+    await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
     if (otReq.status !== 'pending') {
         throw new ValidationAppError('Only pending requests can be edited');
     }
@@ -184,7 +220,7 @@ export async function remove(req, res) {
     const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
-    await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+    await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
     if (otReq.status === 'approved' && otReq.payrollRecordId) {
         throw new ValidationAppError('Cannot withdraw — this request is already in a payroll cycle');
     }
@@ -202,6 +238,7 @@ export async function approve(req, res) {
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
     await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, otReq.employee, 'overtime');
     if (otReq.status !== 'pending') {
         throw new ValidationAppError(`Cannot approve a request with status "${otReq.status}"`);
     }
@@ -217,6 +254,7 @@ export async function approve(req, res) {
         entityId: String(otReq._id),
         metadata: { event: 'approved' },
     });
+    await notifyEmployee(otReq, 'approved', 'was approved.');
     res.json({ success: true, data: otReq });
 }
 /** POST /api/v1/overtime/:id/reject */
@@ -228,6 +266,7 @@ export async function reject(req, res) {
     if (!otReq)
         throw new NotFoundError('Overtime request not found');
     await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
+    await assertCanDecide(req, otReq.employee, 'overtime');
     if (otReq.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a request with status "${otReq.status}"`);
     }
@@ -242,6 +281,7 @@ export async function reject(req, res) {
         entityId: String(otReq._id),
         metadata: { event: 'rejected', reason: body.reason },
     });
+    await notifyEmployee(otReq, 'rejected', `was rejected. Reason: ${body.reason}`);
     res.json({ success: true, data: otReq });
 }
 //# sourceMappingURL=overtime.controller.js.map

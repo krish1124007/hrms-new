@@ -121,6 +121,12 @@ async function bootstrap() {
     const { startBackupWorker, setMonthlyBackupSchedule } = await import('./jobs/backup.jobs.js');
     startBackupWorker();
     logger.info('Backup worker started');
+    // Nightly attendance day-close (auto-absent, leave rows, auto-checkout) at
+    // 23:59 business time. Registering is idempotent; never awaited here.
+    const { startAttendanceWorker, ensureAttendanceSchedules } = await import('./jobs/attendance.jobs.js');
+    startAttendanceWorker();
+    logger.info('Attendance worker started');
+    void ensureAttendanceSchedules().catch((err) => logger.warn({ err }, 'Could not register the attendance day-close schedule'));
     // Re-apply the operator's monthly auto-backup choice, persisted by
     // PUT /api/v1/backups/schedule { enabled } (enabled on a fresh install).
     // Idempotent — re-registering overwrites the repeatable job in Redis.

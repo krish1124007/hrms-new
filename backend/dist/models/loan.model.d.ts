@@ -4,6 +4,8 @@ export type LoanType = 'salary_advance' | 'personal_loan' | 'emergency' | 'educa
 export type LoanStatus = 'pending' | 'approved' | 'rejected' | 'disbursed' | 'active' | 'closed' | 'cancelled';
 export type InstallmentStatus = 'scheduled' | 'paid' | 'partial' | 'skipped' | 'overdue';
 export interface ILoanInstallment {
+    /** Set by Mongoose on every instalment (the subdocument keeps its own `_id`). */
+    _id?: Types.ObjectId;
     installmentNumber: number;
     dueDate: Date;
     amount: number;
@@ -13,6 +15,8 @@ export interface ILoanInstallment {
     paidOn?: Date | null;
     status: InstallmentStatus;
     notes?: string;
+    /** The payroll cycle whose pay-out paid into this instalment (see payroll-settlement.service). */
+    payrollCycleId?: Types.ObjectId | null;
 }
 export interface ILoan extends Document {
     loanNumber: string;
