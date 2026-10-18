@@ -25,13 +25,13 @@ import { isOnProbation } from '../lib/probation.js';
 import { logger } from '../config/logger.js';
 import {
   availableBalance,
+  cancelAndReleaseLeave,
   chargeLeaveBalance,
   ensureLeaveBalance,
   isUnpaidLeaveType,
   leaveWorkingDays,
   leaveYear,
   refundLeaveBalance,
-  releaseApprovedLeave,
   stampLeaveDays,
   unstampLeaveDays,
 } from '../services/leave-attendance.service.js';
@@ -811,40 +811,16 @@ export async function rejectLeaveRequest(req: Request, res: Response): Promise<v
 }
 
 /**
- * Move a request `from` its current status to `cancelled` — a conditional
- * write, so of two concurrent cancels/deletes only one gets past here — and,
- * if it was approved, release its attendance rows and charged days. If the
- * release fails the request goes back to `approved`, so the cancel can simply
- * be retried (releasing is idempotent until its last step, the refund).
+ * Cancel a request and, if it was approved, release its attendance rows and
+ * charged days (`cancelAndReleaseLeave`). 400 when it was decided or
+ * withdrawn meanwhile.
  */
 async function cancelAndRelease(
   doc: ILeaveRequest,
   set: { cancelReason?: string } = {},
 ): Promise<ILeaveRequest> {
-  const from = doc.status;
-  const cancelled = await LeaveRequest.findOneAndUpdate(
-    { _id: doc._id, status: from },
-    { $set: { status: 'cancelled', ...set } },
-    { new: true },
-  ).exec();
+  const cancelled = await cancelAndReleaseLeave(doc, set);
   if (!cancelled) throw new ValidationAppError(DECIDED_MEANWHILE);
-  if (from !== 'approved') return cancelled;
-  try {
-    await releaseApprovedLeave(doc);
-  } catch (err) {
-    try {
-      await LeaveRequest.updateOne(
-        { _id: doc._id, status: 'cancelled' },
-        { $set: { status: 'approved' }, $unset: { cancelReason: 1 } },
-      ).exec();
-    } catch (revertErr) {
-      logger.error(
-        { err: revertErr, cause: err, requestId: String(doc._id) },
-        'leave cancel: release failed and the request could not be put back to approved',
-      );
-    }
-    throw err;
-  }
   return cancelled;
 }
 

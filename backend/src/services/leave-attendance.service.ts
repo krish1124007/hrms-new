@@ -40,6 +40,7 @@ import {
 } from '../lib/business-day.js';
 import { AppError } from '../lib/errors.js';
 import { isDuplicateKey, proRataAllocation } from '../lib/leave-allocation.js';
+import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
 
 // ---------- Leave types ----------
@@ -330,4 +331,47 @@ export async function releaseApprovedLeave(
 ): Promise<void> {
   await unstampLeaveDays(request);
   await refundLeaveBalance(request);
+}
+
+/**
+ * Move a request from its current status to `cancelled` — a conditional
+ * write, so of two concurrent cancels/deletes only one gets past here — and,
+ * if it was approved, release its attendance rows and charged days. If the
+ * release fails the request goes back to `approved` and the error is
+ * rethrown, so the cancel can simply be retried (releasing is idempotent
+ * until its last step, the refund). Returns null, changing nothing, when the
+ * request was decided or withdrawn meanwhile.
+ *
+ * The one cancellation path: HR / the owner cancelling, deleting an approved
+ * request, and an employee's exit cancelling their leave after it.
+ */
+export async function cancelAndReleaseLeave(
+  doc: ILeaveRequest,
+  set: { cancelReason?: string } = {},
+): Promise<ILeaveRequest | null> {
+  const from = doc.status;
+  const cancelled = await LeaveRequest.findOneAndUpdate(
+    { _id: doc._id, status: from },
+    { $set: { status: 'cancelled', ...set } },
+    { new: true },
+  ).exec();
+  if (!cancelled) return null;
+  if (from !== 'approved') return cancelled;
+  try {
+    await releaseApprovedLeave(doc);
+  } catch (err) {
+    try {
+      await LeaveRequest.updateOne(
+        { _id: doc._id, status: 'cancelled' },
+        { $set: { status: 'approved' }, $unset: { cancelReason: 1 } },
+      ).exec();
+    } catch (revertErr) {
+      logger.error(
+        { err: revertErr, cause: err, requestId: String(doc._id) },
+        'leave cancel: release failed and the request could not be put back to approved',
+      );
+    }
+    throw err;
+  }
+  return cancelled;
 }

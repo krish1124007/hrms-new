@@ -1359,8 +1359,9 @@ const sumCounts = (all: DayCloseCounts[]): DayCloseCounts =>
       leaveStamped: acc.leaveStamped + c.leaveStamped,
       autoCheckedOut: acc.autoCheckedOut + c.autoCheckedOut,
       skipped: acc.skipped + c.skipped,
+      exitsApplied: acc.exitsApplied + c.exitsApplied,
     }),
-    { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
+    { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
   );
 
 /**

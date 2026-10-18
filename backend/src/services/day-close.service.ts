@@ -8,8 +8,10 @@
  *   1. writes the row every in-scope employee is missing on a working day:
  *        • approved leave covering the day → the leave row (`source: 'leave'`);
  *        • otherwise → `absent` (`source: 'auto_absent'`).
- *      In scope = `status: 'active'`, joined on or before the day, and no
- *      exit date before it. A day the classifier calls `weekend` or
+ *      In scope = joined on or before the day, no exit date before it, and
+ *      `status: 'active'` — or exited through a recorded exit (`exitStatus`)
+ *      whose exit date is the day or later, so a day closed after the exit
+ *      was applied still gets its row. A day the classifier calls `weekend` or
  *      `holiday` for that employee writes nothing. Existing rows are never
  *      touched.
  *   2. closes every check-in of that day that has no check-out, at the
@@ -22,12 +24,15 @@
  *      belong to the previous day's run and are not touched.
  *   Auto-checkout never grants overtime. The shift is the employee's own,
  *   else the company default shift (`resolveShift`).
+ *   4. after all of that, applies the exits scheduled on or before the day
+ *      (`applyScheduledExits`) — after, so an exit day's own row is written
+ *      first: the exit date is the last working day.
  *
  * Idempotent: a second run for the same day finds every row already there
  * and every check-in already closed, and returns all-zero counts.
  *
- * One bad row does not stop the day: each leave stamp and each auto-checkout
- * is isolated, logged, and the rest carry on. If any failed, the run then
+ * One bad row does not stop the day: each leave stamp, auto-checkout and
+ * exit is isolated, logged, and the rest carry on. If any failed, the run then
  * rejects with a `DayCloseError` (an `AggregateError` carrying the counts of
  * what did succeed), so the job is marked failed and its retry — safe,
  * because the run is idempotent — redoes only what is still missing.
@@ -55,6 +60,7 @@ import {
 import { logger } from '../config/logger.js';
 import { getWeekOffRule } from './week-off.service.js';
 import { stampLeaveDay } from './leave-attendance.service.js';
+import { EXIT_STATUSES, hrRecipients, notifyHrOfExit, releaseOnExit } from './employee-exit.service.js';
 
 export interface DayCloseCounts {
   /** `absent` rows written for working days with no row. */
@@ -73,11 +79,13 @@ export interface DayCloseCounts {
    * an open row on an overnight shift.
    */
   skipped: number;
+  /** Scheduled exits applied: employees whose exit date had come, now out. */
+  exitsApplied: number;
 }
 
-/** One leave stamp or auto-checkout that threw. */
+/** One leave stamp, auto-checkout or scheduled exit that threw. */
 export interface DayCloseFailure {
-  step: 'leave-stamp' | 'auto-checkout';
+  step: 'leave-stamp' | 'auto-checkout' | 'scheduled-exit';
   employeeId: string;
   /** Set for an auto-checkout failure: the open row that could not be closed. */
   attendanceId?: string;
@@ -167,7 +175,7 @@ export async function closeBusinessDay(
   }
   const dayEnd = endOfBusinessDay(day);
   const localDay = localDateOf(day);
-  const counts: DayCloseCounts = { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 };
+  const counts: DayCloseCounts = { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 };
   const failures: DayCloseFailure[] = [];
   const causes: unknown[] = [];
 
@@ -182,9 +190,18 @@ export async function closeBusinessDay(
   // comparison happens below so date-only values stored at UTC or IST
   // midnight are both read as the day they name.
   const candidates = await Employee.find({
-    status: 'active',
     joiningDate: { $lt: new Date(day.getTime() + DAY_MS) },
-    $or: [{ exitDate: null }, { exitDate: { $gte: new Date(day.getTime() - DAY_MS) } }],
+    $or: [
+      { status: 'active', $or: [{ exitDate: null }, { exitDate: { $gte: new Date(day.getTime() - DAY_MS) } }] },
+      // An exit recorded through the status endpoint or `applyScheduledExits`
+      // (`exitStatus` set): employed through the exit date, so closing an
+      // earlier day after the exit was applied still covers them.
+      {
+        status: { $in: [...EXIT_STATUSES] },
+        exitStatus: { $in: [...EXIT_STATUSES] },
+        exitDate: { $gte: new Date(day.getTime() - DAY_MS) },
+      },
+    ],
   })
     .select('_id department shift joiningDate exitDate')
     .populate('shift')
@@ -347,10 +364,82 @@ export async function closeBusinessDay(
     }
   }
 
+  // ── 4. Scheduled exits ─────────────────────────────────────────────────
+  const exits = await applyScheduledExits(day, { dryRun });
+  counts.exitsApplied = exits.exitsApplied;
+  failures.push(...exits.failures);
+  causes.push(...exits.causes);
+
   if (failures.length > 0) {
     throw new DayCloseError(day.toISOString().slice(0, 10), counts, failures, causes);
   }
   return counts;
+}
+
+export interface ScheduledExitsResult {
+  exitsApplied: number;
+  failures: DayCloseFailure[];
+  causes: unknown[];
+}
+
+/**
+ * Apply every exit whose date has come: each employee still `active` or
+ * `onNotice` with an `exitDate` on or before the business day `dateIST`
+ * falls on gets the scheduled `exitStatus` (`resigned` when unset). Before
+ * the status flips, their approved leave starting after that day is
+ * cancelled and refunded and their login deactivated (`releaseOnExit`); once
+ * it has flipped, HR is told what to recover (`notifyHrOfExit`).
+ *
+ * Never throws for one employee: a failure is logged and returned, and that
+ * employee keeps their status so the next run retries them (every step is
+ * idempotent; the conditional flip means one notice per exit). With
+ * `dryRun`, counts the exits it would apply without writing anything.
+ * Callers pass a day that has started — `closeBusinessDay` enforces that.
+ */
+export async function applyScheduledExits(
+  dateIST: Date,
+  opts: { dryRun?: boolean } = {},
+): Promise<ScheduledExitsResult> {
+  const day = startOfBusinessDay(dateIST);
+  const result: ScheduledExitsResult = { exitsApplied: 0, failures: [], causes: [] };
+
+  // Coarse pre-filter (any exit date before the next day); exact below.
+  const candidates = await Employee.find({
+    status: { $in: ['active', 'onNotice'] },
+    exitDate: { $ne: null, $lt: new Date(day.getTime() + DAY_MS) },
+  })
+    .select('_id firstName lastName employeeId userId exitDate exitStatus')
+    .exec();
+  const due = candidates.filter((e) => e.exitDate && dayOf(e.exitDate) <= day.getTime());
+  if (opts.dryRun === true) {
+    result.exitsApplied = due.length;
+    return result;
+  }
+  if (due.length === 0) return result;
+
+  const recipients = await hrRecipients();
+  for (const emp of due) {
+    const status = emp.exitStatus ?? 'resigned';
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await releaseOnExit(emp, day);
+      // eslint-disable-next-line no-await-in-loop
+      const flipped = await Employee.findOneAndUpdate(
+        { _id: emp._id, status: { $in: ['active', 'onNotice'] } },
+        { $set: { status, exitStatus: status } },
+      ).exec();
+      if (!flipped) continue; // changed meanwhile (e.g. HR reactivated them)
+      result.exitsApplied += 1;
+      // eslint-disable-next-line no-await-in-loop
+      await notifyHrOfExit(emp, status, startOfBusinessDay(emp.exitDate!), recipients);
+    } catch (err) {
+      const employeeId = String(emp._id);
+      logger.error({ employeeId, err }, 'day-close: scheduled exit failed');
+      result.failures.push({ step: 'scheduled-exit', employeeId, message: (err as Error).message });
+      result.causes.push(err);
+    }
+  }
+  return result;
 }
 
 /** Stamp the auto check-out on `row` and recompute its hours (in memory). */

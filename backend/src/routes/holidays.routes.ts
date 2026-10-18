@@ -27,6 +27,12 @@ router.post(
   validate(ctrl.importCalendarSchema),
   asyncHandler(ctrl.importCalendar),
 );
+router.post(
+  '/rollover',
+  requirePermission('holidays.create'),
+  validate(ctrl.rolloverSchema),
+  asyncHandler(ctrl.rolloverHolidays),
+);
 router.get('/:id', requirePermission('holidays.view'), asyncHandler(ctrl.getHoliday));
 router.patch(
   '/:id',

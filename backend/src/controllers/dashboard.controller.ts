@@ -57,6 +57,7 @@ interface DayBucket {
   date: string;
   present: number;
   absent: number;
+  /** Late arrivals and half days. */
   late: number;
   leave: number;
 }
@@ -72,8 +73,10 @@ export async function attendanceTrend(_req: Request, res: Response): Promise<voi
     count: number;
   }>([
     {
+      // Aggregations skip the soft-delete query hook: exclude deleted rows here.
       $match: {
         date: { $gte: from, $lte: to },
+        isDeleted: { $ne: true },
       },
     },
     {
@@ -121,7 +124,8 @@ export async function attendanceTrend(_req: Request, res: Response): Promise<voi
     if (!bucket) continue;
     if (row._id.status === 'present') bucket.present = row.count;
     else if (row._id.status === 'absent') bucket.absent = row.count;
-    else if (row._id.status === 'late' || row._id.status === 'half-day')
+    // Rows store `half_day`; the chart stacks half days with the late arrivals.
+    else if (row._id.status === 'late' || row._id.status === 'half_day')
       bucket.late += row.count;
   }
 

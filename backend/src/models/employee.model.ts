@@ -15,6 +15,8 @@ export type EmployeeStatus =
   | 'terminated'
   | 'resigned'
   | 'onNotice';
+/** The statuses an exit can end in. */
+export type ExitStatus = 'resigned' | 'terminated' | 'inactive';
 
 export interface IAddress {
   line1?: string;
@@ -98,7 +100,17 @@ export interface IEmployee extends Document {
   documents: IEmployeeDocument[];
   emergencyContact: IEmergencyContact;
   status: EmployeeStatus;
+  /**
+   * Last working day. When it lies in the future the exit is only scheduled:
+   * the employee stays `active` / `onNotice` until the day-close after it
+   * applies `exitStatus`.
+   */
   exitDate?: Date;
+  /**
+   * The status the recorded exit ends in: set when an exit is scheduled
+   * (applied as `resigned` when unset) and kept once it has been applied.
+   */
+  exitStatus?: ExitStatus;
   exitReason?: string;
   probationEndDate?: Date;
   noticePeriod?: number;
@@ -249,6 +261,7 @@ const employeeSchema = new Schema<IEmployee>({
     default: 'active',
   },
   exitDate: Date,
+  exitStatus: { type: String, enum: ['resigned', 'terminated', 'inactive'] },
   exitReason: String,
   probationEndDate: Date,
   noticePeriod: Number,

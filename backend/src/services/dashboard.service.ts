@@ -14,7 +14,16 @@ import { Visit } from '../models/visit.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { logger } from '../config/logger.js';
-import { startOfBusinessDay, endOfBusinessDay } from '../lib/business-day.js';
+import {
+  businessDayLabels,
+  DAY_MS,
+  endOfBusinessDay,
+  localDateOf,
+  startOfBusinessDay,
+} from '../lib/business-day.js';
+import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
+import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
+import { getWeekOffRule } from './week-off.service.js';
 
 /* ─────────────── Types ─────────────── */
 
@@ -22,9 +31,13 @@ export interface DashboardData {
   employees?: { total: number; active: number; newThisMonth: number };
   attendance?: {
     presentToday: number;
+    /** `absent` rows for today's business day (day-close and unpaid leave write them). */
     absentToday: number;
     lateToday: number;
+    /** `attendanceRateBetween` for the business week so far (Monday on), as a whole percentage. */
     averageThisWeek: number;
+    /** `attendanceRateBetween` for the month so far, as a fraction 0–1 (4 decimals). */
+    monthToDateRate: number;
   };
   leaves?: { pendingRequests: number; onLeaveToday: number };
   payroll?: { lastProcessedMonth: string; totalPayroll: number };
@@ -56,6 +69,68 @@ function startOfWeek(d: Date = new Date()): Date {
   s.setDate(s.getDate() - diff);
   s.setHours(0, 0, 0, 0);
   return s;
+}
+
+/** Statuses that count as attended; `on_leave` counts only when the leave is paid. */
+const PRESENT_ISH = {
+  $or: [{ status: { $in: ['present', 'late', 'half_day'] } }, { status: 'on_leave', isPaidLeave: true }],
+};
+
+/**
+ * Attendance rate over the business days `from`..`to` (day labels,
+ * inclusive): present-ish rows of active employees on the company's working
+ * days, over active employees × those working days. A working day is
+ * `classifyDay`'s verdict with the default shift week (Mon–Sat), the
+ * configured week-off rule and the company-wide public holidays. 0 when
+ * there is nobody active or no working day yet.
+ */
+export async function attendanceRateBetween(from: Date, to: Date): Promise<number> {
+  const labels = businessDayLabels(from, to);
+  if (labels.length === 0) return 0;
+  const [active, weekOffRule, holidays] = await Promise.all([
+    Employee.find({ status: 'active' }).select('_id').lean().exec(),
+    getWeekOffRule(),
+    listHolidaysBetween(localDateOf(labels[0]!), localDateOf(labels[labels.length - 1]!)),
+  ]);
+  const working = new Set(
+    labels
+      .filter(
+        (day) =>
+          classifyDay(localDateOf(day), { workDays: DEFAULT_WORK_DAYS, weekOffRule, holidays, departmentId: null }) ===
+          'working',
+      )
+      .map((day) => day.toISOString().slice(0, 10)),
+  );
+  if (active.length === 0 || working.size === 0) return 0;
+
+  const perDay = await Attendance.aggregate<{ _id: string; count: number }>([
+    {
+      // Aggregations skip the soft-delete query hook: exclude deleted rows here.
+      $match: {
+        employeeId: { $in: active.map((e) => e._id) },
+        date: { $gte: labels[0]!, $lt: new Date(labels[labels.length - 1]!.getTime() + DAY_MS) },
+        isDeleted: { $ne: true },
+        ...PRESENT_ISH,
+      },
+    },
+    { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } }, count: { $sum: 1 } } },
+  ]).exec();
+  const attended = perDay.reduce((sum, d) => (working.has(d._id) ? sum + d.count : sum), 0);
+  return Math.round((attended / (active.length * working.size)) * 10_000) / 10_000;
+}
+
+/** `attendanceRateBetween` from the 1st of the business month through the business day of `now`. */
+export async function monthToDateAttendanceRate(now: Date = new Date()): Promise<number> {
+  const today = startOfBusinessDay(now);
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  return attendanceRateBetween(monthStart, today);
+}
+
+/** `attendanceRateBetween` from Monday of the business week through the business day of `now`. */
+async function weekToDateAttendanceRate(now: Date = new Date()): Promise<number> {
+  const today = startOfBusinessDay(now);
+  const sinceMonday = (today.getUTCDay() + 6) % 7;
+  return attendanceRateBetween(new Date(today.getTime() - sinceMonday * DAY_MS), today);
 }
 
 const MONTH_NAMES = [
@@ -128,25 +203,13 @@ export async function getDashboardData(
             }),
           ]);
 
-          // Weekly average: present records / working days elapsed this week
-          const weekRecords = await Attendance.countDocuments({
-            date: { $gte: weekStart, $lte: todayEnd },
-            status: { $in: ['present', 'late'] },
-          });
-          const daysElapsed = Math.max(
-            1,
-            Math.ceil((now.getTime() - weekStart.getTime()) / (1000 * 60 * 60 * 24)),
-          );
-          const activeEmployees = await Employee.countDocuments({
-            status: 'active',
-            isDeleted: { $ne: true },
-          });
-          const averageThisWeek =
-            activeEmployees > 0
-              ? Math.round((weekRecords / (daysElapsed * activeEmployees)) * 100)
-              : 0;
+          const [weekRate, monthToDateRate] = await Promise.all([
+            weekToDateAttendanceRate(now),
+            monthToDateAttendanceRate(now),
+          ]);
+          const averageThisWeek = Math.round(weekRate * 100);
 
-          data.attendance = { presentToday, absentToday, lateToday, averageThisWeek };
+          data.attendance = { presentToday, absentToday, lateToday, averageThisWeek, monthToDateRate };
         } catch (err) {
           logger.warn({ err }, 'Dashboard: attendance query failed');
         }

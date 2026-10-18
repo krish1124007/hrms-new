@@ -66,7 +66,7 @@ describe('POST /api/v1/attendance/close-day', () => {
     expect(log!.metadata).toMatchObject({
       event: 'day-close',
       date: '2026-10-12',
-      counts: { absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
+      counts: { absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
     });
   });
 
@@ -80,7 +80,7 @@ describe('POST /api/v1/attendance/close-day', () => {
       .send({ date: '2026-10-12' });
 
     expect(again.status).toBe(200);
-    expect(again.body.data).toMatchObject({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(again.body.data).toMatchObject({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     expect(await Attendance.countDocuments()).toBe(1);
   });
 
@@ -134,12 +134,12 @@ describe('POST /api/v1/attendance/close-days', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.days).toEqual([
-      { date: '2026-10-10', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
-      { date: '2026-10-11', absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1 },
-      { date: '2026-10-12', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
-      { date: '2026-10-13', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
+      { date: '2026-10-10', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
+      { date: '2026-10-11', absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1, exitsApplied: 0 },
+      { date: '2026-10-12', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
+      { date: '2026-10-13', absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
     ]);
-    expect(res.body.data.totals).toEqual({ absentCreated: 3, leaveStamped: 0, autoCheckedOut: 0, skipped: 1 });
+    expect(res.body.data.totals).toEqual({ absentCreated: 3, leaveStamped: 0, autoCheckedOut: 0, skipped: 1, exitsApplied: 0 });
 
     const rows = await Attendance.find({ employeeId: emp._id }).sort({ date: 1 }).lean().exec();
     expect(rows.map((r) => isoDay(r.date))).toEqual(['2026-10-10', '2026-10-12', '2026-10-13']);
@@ -156,10 +156,10 @@ describe('POST /api/v1/attendance/close-days', () => {
       expect(l.metadata).toMatchObject({ event: 'day-close', from: '2026-10-10', to: '2026-10-13' });
     }
     expect(byDate.get('2026-10-11')!.metadata).toMatchObject({
-      counts: { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1 },
+      counts: { absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1, exitsApplied: 0 },
     });
     expect(byDate.get('2026-10-12')!.metadata).toMatchObject({
-      counts: { absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 },
+      counts: { absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 },
     });
   });
 

@@ -37,6 +37,7 @@ router.patch(
   asyncHandler(ctrl.updateEmployee),
 );
 router.delete('/:id', requirePermission('employees.delete'), asyncHandler(ctrl.deleteEmployee));
+router.post('/:id/restore', requirePermission('employees.update'), asyncHandler(ctrl.restoreEmployee));
 router.patch(
   '/:id/status',
   requirePermission('employees.update'),

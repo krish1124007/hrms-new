@@ -54,7 +54,7 @@ describe('closeBusinessDay — auto-absent', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     const rows = await rowsFor(emp);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe('absent');
@@ -144,7 +144,7 @@ describe('closeBusinessDay — auto-absent', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     expect(await rowsFor(resigned)).toHaveLength(0);
     expect(await rowsFor(inactive)).toHaveLength(0);
   });
@@ -163,7 +163,7 @@ describe('closeBusinessDay — auto-absent', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     const rows = await rowsFor(emp);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual(before);
@@ -176,7 +176,7 @@ describe('closeBusinessDay — auto-absent', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 1, exitsApplied: 0 });
     expect(await Attendance.countDocuments({ employeeId: emp._id })).toBe(0);
   });
 });
@@ -211,7 +211,7 @@ describe('closeBusinessDay — approved leave', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 1, autoCheckedOut: 0, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 1, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     const [row] = await rowsFor(emp);
     expect(row!.status).toBe('on_leave');
     expect(row!.isPaidLeave).toBe(true);
@@ -274,7 +274,7 @@ describe('closeBusinessDay — auto-checkout', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     const after = await Attendance.findById(row._id).lean().exec();
     expect(after!.checkOut!.time!.toISOString()).toBe('2026-10-12T13:30:00.000Z');
     expect(after!.checkOut!.method).toBe('manual');
@@ -375,7 +375,7 @@ describe('closeBusinessDay — auto-checkout', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 1 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 1, exitsApplied: 0 });
     const nightAfter = await Attendance.findById(nightRow._id).lean().exec();
     expect(nightAfter!.checkOut?.time).toBeFalsy();
     expect(nightAfter!.status).toBe('present');
@@ -456,7 +456,7 @@ describe('closeBusinessDay — overnight sweep of the previous day', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-13', '23:59'));
 
-    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
   });
 
@@ -466,13 +466,13 @@ describe('closeBusinessDay — overnight sweep of the previous day', () => {
     await Attendance.create({ employeeId: owl._id, date: label('2026-10-13'), status: 'absent', source: 'auto_absent' });
 
     const dry = await closeBusinessDay(ist('2026-10-13', '23:59'), { dryRun: true });
-    expect(dry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(dry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     expect((await Attendance.findById(row._id).lean())!.checkOut?.time).toBeFalsy();
 
     const first = await closeBusinessDay(ist('2026-10-13', '23:59'));
-    expect(first).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(first).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     const second = await closeBusinessDay(ist('2026-10-13', '23:59'));
-    expect(second).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(second).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
   });
 
   it("the overnight row left open on its own day is closed by the next day's run", async () => {
@@ -521,7 +521,7 @@ describe('closeBusinessDay — one bad row does not stop the day', () => {
     expect(dayErr.errors).toHaveLength(1);
     expect(dayErr.message).toContain('1 failure(s)');
     expect(dayErr.message).toContain(String(badRow._id));
-    expect(dayErr.counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(dayErr.counts).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     expect((await Attendance.findById(goodRow._id).lean())!.checkOut!.time!.toISOString()).toBe(
       '2026-10-12T13:30:00.000Z',
     );
@@ -530,7 +530,7 @@ describe('closeBusinessDay — one bad row does not stop the day', () => {
     await Attendance.collection.updateOne({ _id: badRow._id }, { $set: { 'checkIn.method': 'manual' } });
     const retry = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     expect((await Attendance.findById(badRow._id).lean())!.checkOut!.time!.toISOString()).toBe(
       '2026-10-12T13:30:00.000Z',
     );
@@ -571,7 +571,7 @@ describe('closeBusinessDay — one bad row does not stop the day', () => {
     }
 
     const retry = await closeBusinessDay(ist('2026-10-12', '23:59'));
-    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 1, autoCheckedOut: 0, skipped: 0 });
+    expect(retry).toEqual({ absentCreated: 0, leaveStamped: 1, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     expect(await Attendance.countDocuments({ source: 'leave' })).toBe(2);
   });
 });
@@ -589,12 +589,12 @@ describe('closeBusinessDay — idempotency and dry run', () => {
     });
 
     const first = await closeBusinessDay(ist('2026-10-12', '23:59'));
-    expect(first).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(first).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     const snapshot = await Attendance.find().sort({ _id: 1 }).lean().exec();
 
     const second = await closeBusinessDay(ist('2026-10-12', '23:59'));
 
-    expect(second).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0 });
+    expect(second).toEqual({ absentCreated: 0, leaveStamped: 0, autoCheckedOut: 0, skipped: 0, exitsApplied: 0 });
     expect(await Attendance.find().sort({ _id: 1 }).lean().exec()).toEqual(snapshot);
     expect(await rowsFor(absentee)).toHaveLength(1);
   });
@@ -613,7 +613,7 @@ describe('closeBusinessDay — idempotency and dry run', () => {
 
     const counts = await closeBusinessDay(ist('2026-10-12', '23:59'), { dryRun: true });
 
-    expect(counts).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 1, skipped: 0 });
+    expect(counts).toEqual({ absentCreated: 1, leaveStamped: 0, autoCheckedOut: 1, skipped: 0, exitsApplied: 0 });
     expect(await Attendance.countDocuments()).toBe(1);
     expect(await Attendance.findById(open._id).lean().exec()).toEqual(before);
   });
