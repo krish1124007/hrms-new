@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { Employee, type IEmployee } from '../models/employee.model.js';
+import { Employee, type EmployeeStatus, type ExitStatus, type IEmployee } from '../models/employee.model.js';
 import { User } from '../models/user.model.js';
 import { Role, type IRole } from '../models/role.model.js';
 import { Department } from '../models/department.model.js';
@@ -117,7 +117,9 @@ export const updateEmployeeSchema = createEmployeeSchema.partial().omit({
 export const updateStatusSchema = z.object({
   status: z.enum(['active', 'inactive', 'terminated', 'resigned', 'onNotice']),
   reason: z.string().optional(),
-  exitDate: z.coerce.date().optional(),
+  // `null` means "no date": coerced, it would be 1 Jan 1970 — an exit long
+  // past, applied by the next nightly run. `.nullable()` keeps it null.
+  exitDate: z.coerce.date().nullable().optional(),
 });
 
 export const addDocumentSchema = z.object({
@@ -505,7 +507,11 @@ export async function deleteEmployee(req: Request, res: Response): Promise<void>
   res.json({ success: true, message: 'Employee deleted' });
 }
 
-/** POST /employees/:id/restore — bring back a soft-deleted employee (and their login, if they are employed). */
+/**
+ * POST /employees/:id/restore — bring back a soft-deleted employee, and — if
+ * they are employed — the login the delete deactivated. A login that was
+ * still `invited` (never accepted) stays invited.
+ */
 export async function restoreEmployee(req: Request, res: Response): Promise<void> {
   const employee = await Employee.findById(String(req.params.id)).setOptions({ withDeleted: true }).exec();
   if (!employee) throw new NotFoundError('Employee not found');
@@ -513,7 +519,7 @@ export async function restoreEmployee(req: Request, res: Response): Promise<void
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (employee as any).restore();
   if (employee.userId && (employee.status === 'active' || employee.status === 'onNotice')) {
-    await User.updateOne({ _id: employee.userId }, { $set: { status: 'active' } }).exec();
+    await User.updateOne({ _id: employee.userId, status: 'inactive' }, { $set: { status: 'active' } }).exec();
   }
   void audit({ action: 'update', entity: 'Employee', entityId: String(employee._id), after: { restored: true } });
   res.json({ success: true, data: employee });
@@ -535,38 +541,60 @@ export async function restoreEmployee(req: Request, res: Response): Promise<void
  */
 export async function updateEmployeeStatus(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateStatusSchema>;
-  const id = String(req.params.id);
-  const current = await Employee.findById(id).exec();
+  const current = await Employee.findById(String(req.params.id)).exec();
   if (!current) throw new NotFoundError('Employee not found');
 
+  const { employee, written } = await changeEmployeeStatus(current, body);
+
+  void audit({ action: 'update', entity: 'Employee', entityId: String(employee._id), after: written });
+  res.json({ success: true, data: employee });
+}
+
+export interface StatusChange {
+  status: EmployeeStatus;
+  /** Absent or null: no date. */
+  exitDate?: Date | null;
+  reason?: string;
+}
+
+/**
+ * The one way an employee's status changes — the status endpoint and the
+ * import both go through it (rules above `updateEmployeeStatus`). Returns the
+ * updated employee and what was written, for the caller's audit entry.
+ */
+async function changeEmployeeStatus(
+  current: IEmployee,
+  change: StatusChange,
+): Promise<{ employee: IEmployee; written: Record<string, unknown> }> {
+  const id = String(current._id);
   const today = startOfBusinessDay(new Date());
-  const exitDay = body.exitDate ? startOfBusinessDay(body.exitDate) : null;
+  const exitDay = change.exitDate ? startOfBusinessDay(change.exitDate) : null;
   const employed = current.status === 'active' || current.status === 'onNotice';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const set: Record<string, any> = {};
   const unset: Record<string, 1> = {};
-  if (body.reason && body.status !== 'active') set.exitReason = body.reason;
+  if (change.reason && change.status !== 'active') set.exitReason = change.reason;
   let exitNow = false;
 
-  if (body.status === 'active') {
+  if (change.status === 'active') {
     set.status = 'active';
     unset.exitDate = 1;
     unset.exitStatus = 1;
-  } else if (body.status === 'onNotice') {
+  } else if (change.status === 'onNotice') {
     set.status = 'onNotice';
-    if (body.exitDate) {
-      set.exitDate = body.exitDate;
+    if (change.exitDate) {
+      set.exitDate = change.exitDate;
       set.exitStatus = 'resigned';
     }
-  } else if (isExitStatus(body.status) && exitDay && exitDay.getTime() > today.getTime() && employed) {
+  } else if (isExitStatus(change.status) && exitDay && exitDay.getTime() > today.getTime() && employed) {
     // Scheduled: status (and login) stay until the exit day has passed.
-    set.exitDate = body.exitDate;
-    set.exitStatus = body.status;
+    set.exitDate = change.exitDate;
+    set.exitStatus = change.status;
   } else {
-    exitNow = isExitStatus(body.status);
-    set.status = body.status;
-    if (body.exitDate) set.exitDate = body.exitDate;
-    if (exitNow) set.exitStatus = body.status;
+    exitNow = isExitStatus(change.status);
+    set.status = change.status;
+    if (change.exitDate) set.exitDate = change.exitDate;
+    if (exitNow) set.exitStatus = change.status;
   }
 
   // Before the status flips, so a failure here leaves it unchanged to retry.
@@ -579,24 +607,18 @@ export async function updateEmployeeStatus(req: Request, res: Response): Promise
   ).exec();
   if (!employee) throw new NotFoundError('Employee not found');
 
-  if (employee.userId && (body.status === 'active' || body.status === 'onNotice')) {
+  if (employee.userId && (change.status === 'active' || change.status === 'onNotice')) {
     await User.findByIdAndUpdate(employee.userId, { status: 'active' });
   }
-  if (exitNow && isExitStatus(body.status)) {
+  if (exitNow && isExitStatus(change.status)) {
     try {
-      await notifyHrOfExit(employee, body.status, exitDay ?? today);
+      await notifyHrOfExit(employee, change.status, exitDay ?? today);
     } catch (err) {
       logger.warn({ err, employeeId: id }, 'employee exit: HR notification failed');
     }
   }
 
-  void audit({
-    action: 'update',
-    entity: 'Employee',
-    entityId: String(employee._id),
-    after: { ...set, ...(Object.keys(unset).length ? { unset: Object.keys(unset) } : {}) },
-  });
-  res.json({ success: true, data: employee });
+  return { employee, written: { ...set, ...(Object.keys(unset).length ? { unset: Object.keys(unset) } : {}) } };
 }
 
 export async function addEmployeeDocument(req: Request, res: Response): Promise<void> {
@@ -699,6 +721,23 @@ export interface ImportRowResult {
 
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** A date cell of an import row, or undefined when blank / null / not a date. */
+function importedDate(value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+/** How a row's exit was recorded (`written` by `changeEmployeeStatus`), for its report line. */
+function exitOutcome(
+  exit: { status: ExitStatus; exitDate: Date } | undefined,
+  written: Record<string, unknown> | undefined,
+): string {
+  if (!exit || !written) return '';
+  const day = startOfBusinessDay(exit.exitDate).toISOString().slice(0, 10);
+  return written.status ? `; ${exit.status} as of ${day}` : `; ${exit.status} scheduled for ${day}`;
+}
+
 /** The Employee ID a row carries (`employeeId`, or the export's "Employee ID" column), if any. */
 function importedEmployeeId(data: Record<string, unknown>): string | undefined {
   const raw = data.employeeId ?? data['Employee ID'];
@@ -739,10 +778,25 @@ export async function importEmployees(req: Request, res: Response): Promise<void
       const { password, ...validData } = parsed.data as z.infer<typeof rowSchema> & Record<string, unknown>;
       // Fields the row actually carries: an update must not reset the rest to schema defaults.
       const given = new Set(Object.keys(data));
+      // An exit (resigned / terminated / inactive) is never written as a bare
+      // status: it goes through the status endpoint's path (scheduled or
+      // applied, leave released, login off, HR told) once the row is saved,
+      // and needs the row's exitDate. Without one the status is left alone.
+      let exit: { status: ExitStatus; exitDate: Date; reason?: string } | undefined;
+      let exitNote = '';
       if (data.status && ['active', 'inactive', 'terminated', 'resigned', 'onnotice'].includes(String(data.status).toLowerCase())) {
         const st = String(data.status).toLowerCase();
-        validData.status = st === 'onnotice' ? 'onNotice' : st;
-        given.add('status');
+        if (isExitStatus(st)) {
+          const exitDate = importedDate(data.exitDate);
+          if (exitDate) {
+            exit = { status: st, exitDate, ...(data.exitReason ? { reason: String(data.exitReason) } : {}) };
+          } else {
+            exitNote = ` — status not changed to ${st}: an exit needs an exitDate`;
+          }
+        } else {
+          validData.status = st === 'onnotice' ? 'onNotice' : st;
+          given.add('status');
+        }
       }
       if (data.departmentName) {
         const name = String(data.departmentName);
@@ -787,7 +841,16 @@ export async function importEmployees(req: Request, res: Response): Promise<void
         if (employeeId) update.employeeId = employeeId;
         // eslint-disable-next-line no-await-in-loop
         await applyEmployeeUpdate(dup, update);
-        report('updated', 'Existing employee updated', email);
+        // eslint-disable-next-line no-await-in-loop
+        const exited = exit ? (await changeEmployeeStatus(dup, exit)).written : undefined;
+        void audit({
+          action: 'update',
+          entity: 'Employee',
+          entityId: String(dup._id),
+          after: { ...update, ...(exited ? { exit: exited } : {}) },
+          metadata: { source: 'import', row },
+        });
+        report('updated', `Existing employee updated${exitOutcome(exit, exited)}${exitNote}`, email);
         continue;
       }
 
@@ -800,16 +863,27 @@ export async function importEmployees(req: Request, res: Response): Promise<void
           )
         : undefined;
       // eslint-disable-next-line no-await-in-loop
-      await createWithLogin({ ...validData, email, ...(employeeId ? { employeeId } : {}) }, login);
+      const created = await createWithLogin({ ...validData, email, ...(employeeId ? { employeeId } : {}) }, login);
+      // eslint-disable-next-line no-await-in-loop
+      const exited = exit ? (await changeEmployeeStatus(created, exit)).written : undefined;
+      void audit({
+        action: 'create',
+        entity: 'Employee',
+        entityId: String(created._id),
+        after: { email, employeeId: created.employeeId, ...(exited ? { exit: exited } : {}) },
+        metadata: { source: 'import', row },
+      });
       report(
         'created',
-        !login
+        (!login
           ? 'Employee created without a login: no employee role is set up'
           : login.invite
             ? 'Employee created; invitation sent'
             : login.createdUserId
               ? 'Employee created with an active login'
-              : 'Employee created and linked to the existing login',
+              : 'Employee created and linked to the existing login') +
+          exitOutcome(exit, exited) +
+          exitNote,
         email,
       );
     } catch (err) {

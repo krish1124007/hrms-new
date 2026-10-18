@@ -33,7 +33,7 @@ const schema = z.object({
   encashable: z.boolean().default(false),
   halfDayAllowed: z.boolean().default(true),
   attachmentRequired: z.boolean().default(false),
-  probationAllowed: z.boolean().default(false),
+  probationAllowed: z.boolean().default(true),
   isActive: z.boolean().default(true),
   applicableGender: z.enum(['all', 'male', 'female']).default('all'),
   color: z.string().default('#3b82f6'),
@@ -61,7 +61,7 @@ export default function LeaveTypesPage(): ReactElement {
     defaultValues: {
       paidLeave: true,
       halfDayAllowed: true,
-      probationAllowed: false,
+      probationAllowed: true,
       isActive: true,
       color: '#3b82f6',
       applicableGender: 'all',
@@ -78,7 +78,7 @@ export default function LeaveTypesPage(): ReactElement {
       encashable: false,
       halfDayAllowed: true,
       attachmentRequired: false,
-      probationAllowed: false,
+      probationAllowed: true,
       isActive: true,
       applicableGender: 'all',
       color: '#3b82f6',
@@ -98,7 +98,7 @@ export default function LeaveTypesPage(): ReactElement {
       encashable: lt.encashable,
       halfDayAllowed: lt.halfDayAllowed,
       attachmentRequired: lt.attachmentRequired,
-      probationAllowed: lt.probationAllowed ?? false,
+      probationAllowed: lt.probationAllowed ?? true,
       isActive: lt.isActive ?? true,
       applicableGender: lt.applicableGender,
       color: lt.color,
@@ -161,7 +161,7 @@ export default function LeaveTypesPage(): ReactElement {
       cell: (lt) => {
         const rules = [
           lt.applicableGender && lt.applicableGender !== 'all' ? `${lt.applicableGender} only` : null,
-          lt.probationAllowed ? 'open to probationers' : 'not for probationers',
+          lt.probationAllowed !== false ? 'open to probationers' : 'not for probationers',
           lt.halfDayAllowed ? 'half days' : null,
           lt.attachmentRequired ? 'attachment required' : null,
         ].filter(Boolean);

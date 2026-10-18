@@ -81,7 +81,9 @@ export interface DayTally {
  * Counts the window's days from the attendance rows, each row in exactly one
  * bucket:
  *   - `weekend` / `holiday` rows → weekly off (never loss of pay);
- *   - `half_day` → half day, half a day's loss of pay unless `isPaidLeave`;
+ *   - `half_day` → half day, half a day's loss of pay unless `isPaidLeave` —
+ *     and a paid half day of leave on a day already over with no check-in
+ *     costs the unworked half (0.5) too;
  *   - any row with `isPaidLeave: true` → paid leave, never loss of pay (a day
  *     of paid leave the employee also punched on counts once, as paid);
  *   - `absent` → a day's loss of pay: unpaid leave when it is a leave row

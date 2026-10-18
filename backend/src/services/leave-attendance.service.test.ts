@@ -250,6 +250,62 @@ describe('unstampLeaveDays', () => {
     expect(rows[0]!.isPaidLeave).toBeUndefined();
   });
 
+  it('a punched day loses its leave status: re-judged from its punches (a worked unpaid-leave day → present)', async () => {
+    const emp = await makeEmployee();
+    const type = await makeType(false);
+    const leave = await approvedLeave(emp, type, '2026-10-13', '2026-10-13');
+    await stampLeaveDays(leave, type, emp);
+    // The employee came in anyway, 09:30–18:30 IST: the row keeps its leave status (absent).
+    await Attendance.updateOne(
+      { employeeId: emp._id },
+      {
+        $set: {
+          checkIn: { time: new Date('2026-10-13T04:00:00.000Z'), method: 'manual' },
+          checkOut: { time: new Date('2026-10-13T13:00:00.000Z'), method: 'manual' },
+          source: 'punch',
+        },
+      },
+    ).exec();
+    expect((await rowsFor(emp))[0]!.status).toBe('absent');
+
+    await unstampLeaveDays(leave, { now: new Date('2026-10-14T06:30:00.000Z') });
+
+    const rows = await rowsFor(emp);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('present');
+    expect(rows[0]!.totalWorkingHours).toBe(9);
+    expect(rows[0]!.source).toBe('punch');
+    expect(rows[0]!.leaveRequestId).toBeUndefined();
+    expect(rows[0]!.isPaidLeave).toBeUndefined();
+  });
+
+  it("a punched day is re-judged against the employee's shift (late check-in → late)", async () => {
+    const shift = await Shift.create({ name: 'Day', startTime: '09:30', endTime: '18:30', graceMinutes: 15 });
+    const emp = await makeEmployee({ shift: shift._id });
+    const type = await makeType(true);
+    const leave = await approvedLeave(emp, type, '2026-10-13', '2026-10-13');
+    await stampLeaveDays(leave, type, emp);
+    // 10:30–18:30 IST on a paid-leave day: on_leave until the leave goes.
+    await Attendance.updateOne(
+      { employeeId: emp._id },
+      {
+        $set: {
+          checkIn: { time: new Date('2026-10-13T05:00:00.000Z'), method: 'manual' },
+          checkOut: { time: new Date('2026-10-13T13:00:00.000Z'), method: 'manual' },
+          source: 'punch',
+        },
+      },
+    ).exec();
+
+    await unstampLeaveDays(leave, { now: new Date('2026-10-14T06:30:00.000Z') });
+
+    const [row] = await rowsFor(emp);
+    expect(row!.status).toBe('late');
+    expect(row!.lateBy).toBe(45);
+    expect(row!.totalWorkingHours).toBe(8);
+    expect(row!.leaveRequestId).toBeUndefined();
+  });
+
   it("never touches another leave's rows", async () => {
     const emp = await makeEmployee();
     const type = await makeType(true);

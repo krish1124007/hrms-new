@@ -37,9 +37,16 @@ const LABEL: Record<Status, string> = {
 const formatDay = (key: string): string =>
   new Date(`${key}T00:00:00Z`).toLocaleDateString('en-IN', { timeZone: 'UTC', dateStyle: 'medium' });
 
-/** What saving will do, in words — scheduled or at once. */
-function outcome(status: Status, exitDate: string, today: string): string {
+/**
+ * What saving will do, in words — scheduled or at once — by the rules the
+ * server applies (`PATCH /employees/:id/status`): an exit with a future date
+ * is only scheduled for someone still employed (`active` / `onNotice`), who
+ * stays as they are until then; for anyone already out, or with today or an
+ * earlier date, it applies now.
+ */
+function outcome(status: Status, exitDate: string, today: string, current: Status | undefined): string {
   const future = !!exitDate && exitDate > today;
+  const employed = current === 'active' || current === 'onNotice';
   switch (status) {
     case 'active':
       return 'The employee is active and can sign in. Any scheduled exit is cleared.';
@@ -48,8 +55,8 @@ function outcome(status: Status, exitDate: string, today: string): string {
         ? `On notice from now; on ${formatDay(exitDate)} they become resigned and their login is turned off.`
         : 'On notice: they keep working and signing in. Add a last working day to schedule the exit.';
     default:
-      return future
-        ? `Scheduled: they stay active until ${formatDay(exitDate)}, then become ${LABEL[status]} and their login is turned off.`
+      return future && employed
+        ? `Scheduled: they stay ${LABEL[current!]} until ${formatDay(exitDate)}, then become ${LABEL[status]} and their login is turned off.`
         : `Applies now: they become ${LABEL[status]} and their login is turned off.`;
   }
 }
@@ -137,7 +144,7 @@ export function EmployeeStatusDialog({ employee, onClose }: EmployeeStatusDialog
                 className="mt-1"
               />
               <p className="mt-1 text-xs text-muted-foreground">
-                A future date schedules the exit; blank or today applies it now.
+                A future date schedules the exit for someone still employed; blank, today or an earlier date — or an employee already out — applies it now.
               </p>
             </div>
             <div>
@@ -153,7 +160,7 @@ export function EmployeeStatusDialog({ employee, onClose }: EmployeeStatusDialog
           </>
         )}
         <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          {outcome(status, exitDate, today)}
+          {outcome(status, exitDate, today, employee?.status)}
         </p>
       </DialogBody>
       <DialogFooter>

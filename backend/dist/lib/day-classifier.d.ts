@@ -33,11 +33,16 @@ export interface DayClassifierContext {
     /** The employee's department; `null`/absent matches company-wide holidays only. */
     departmentId?: Types.ObjectId | string | null;
 }
+/**
+ * `date` is a server-local calendar date (`localDateOf(label)` for a day
+ * label); holidays are matched by the business day their stored date names.
+ */
 export declare function classifyDay(date: Date, ctx: DayClassifierContext): DayKind;
 /**
- * Every holiday whose date falls on a calendar day in `[start, end]`
- * (inclusive, local time) — one query, so a caller classifying a whole month
- * for many employees loads the calendar once and reuses it.
+ * Every holiday whose date names a business day in `[start, end]` — the
+ * server-local calendar dates of `start` and `end`, inclusive (as
+ * `classifyDay` reads them) — one query, so a caller classifying a whole
+ * month for many employees loads the calendar once and reuses it.
  */
 export declare function listHolidaysBetween(start: Date, end: Date): Promise<HolidayLite[]>;
 //# sourceMappingURL=day-classifier.d.ts.map

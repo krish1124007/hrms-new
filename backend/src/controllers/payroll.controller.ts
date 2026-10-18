@@ -673,12 +673,19 @@ async function announcePayslips(cycle: Pick<IPayrollCycle, '_id' | 'month' | 'ye
     const period = { month: cycle.month, year: cycle.year };
     const mail = payslipReadyEmail({ ...period, link: '/payroll/my-payslips' });
     for (let i = 0; i < employees.length; i += PAYSLIP_NOTICE_BATCH) {
-      await Promise.all(
+      // Settled, not all: one notice that fails must not cost everyone after
+      // it theirs.
+      const results = await Promise.allSettled(
         employees.slice(i, i + PAYSLIP_NOTICE_BATCH).map(async (emp) => {
           await notifyPayslipReady(String(emp.userId), period);
           if (emp.email) sendMailQuietly({ to: emp.email, ...mail });
         }),
       );
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          logger.warn({ err: r.reason, cycleId: String(cycle._id) }, 'payroll: a payslip-ready notification failed');
+        }
+      }
     }
   } catch (err) {
     logger.warn({ err, cycleId: String(cycle._id) }, 'payroll: payslip-ready notifications failed');
@@ -702,7 +709,8 @@ export async function lockCycle(req: Request, res: Response): Promise<void> {
 
 export const markPaidSchema = z.object({
   paymentRef: z.string().min(1),
-  paidAt: z.coerce.date().optional(),
+  // `null` means "not given" (now): coerced, it would be 1 Jan 1970.
+  paidAt: z.coerce.date().nullable().optional(),
 });
 
 /**

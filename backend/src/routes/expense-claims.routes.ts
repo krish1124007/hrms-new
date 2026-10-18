@@ -75,6 +75,7 @@ router.delete(
 router.patch(
   '/requests/:id/approve',
   requirePermission('expenses.approve'),
+  validate(ctrl.approveClaimSchema),
   asyncHandler(ctrl.approveClaim),
 );
 router.patch(

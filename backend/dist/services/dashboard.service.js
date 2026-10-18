@@ -44,8 +44,8 @@ const PRESENT_ISH = {
 };
 /**
  * Attendance rate over the business days `from`..`to` (day labels,
- * inclusive): present-ish rows of active employees on the company's working
- * days, over active employees × those working days. A working day is
+ * inclusive): present-ish rows of active (and on-notice) employees on the
+ * company's working days, over those employees × those working days. A working day is
  * `classifyDay`'s verdict with the default shift week (Mon–Sat), the
  * configured week-off rule and the company-wide public holidays. 0 when
  * there is nobody active or no working day yet.
@@ -55,7 +55,8 @@ export async function attendanceRateBetween(from, to) {
     if (labels.length === 0)
         return 0;
     const [active, weekOffRule, holidays] = await Promise.all([
-        Employee.find({ status: 'active' }).select('_id').lean().exec(),
+        // On notice still works (and is paid): their days count like anyone's.
+        Employee.find({ status: { $in: ['active', 'onNotice'] } }).select('_id').lean().exec(),
         getWeekOffRule(),
         listHolidaysBetween(localDateOf(labels[0]), localDateOf(labels[labels.length - 1])),
     ]);

@@ -10,8 +10,8 @@
  * The nightly day-close stamps through the same `stampLeaveDay`, so there is
  * one definition of "the row a day of leave produces".
  *
- * "Working day" is `classifyDay`'s verdict for that employee (shift work
- * days, company week-off rule, public holidays of their department) — the
+ * "Working day" is `classifyDay`'s verdict for that employee (work days of
+ * their shift, else the default shift; company week-off rule, public holidays of their department) — the
  * same verdict day-close uses, and the one an application's `days` is
  * counted with, so the days charged are the days stamped.
  *
@@ -66,8 +66,10 @@ export declare function stampLeaveDays(request: ILeaveRequest, leaveType: LeaveT
  *     a day already over, which day-close will not revisit: with the leave
  *     gone that day is the absence day-close would have recorded, so it
  *     becomes `absent` / `auto_absent` instead of silently paid;
- *   • rows it only tagged keep their status and lose `leaveRequestId` /
- *     `isPaidLeave`.
+ *   • rows with a check-in lose `leaveRequestId` / `isPaidLeave` and are
+ *     re-judged from their punches (`rejudgePunchedRows`): a worked day of a
+ *     cancelled unpaid leave becomes `present` / `late`, not a stale `absent`;
+ *   • any other row it tagged just loses the tag.
  * Returns the number of rows changed or removed.
  */
 export declare function unstampLeaveDays(request: Pick<ILeaveRequest, '_id'>, opts?: {

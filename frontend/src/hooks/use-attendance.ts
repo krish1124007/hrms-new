@@ -87,7 +87,10 @@ export function useCheckOut() {
       toast.success('Checked out successfully');
     },
     onError: (e: any) => {
-      if (e?.response?.data?.error?.code !== 'LOCATION_REQUIRED') {
+      // LOCATION_REQUIRED opens the location help and EXPENSE_REQUIRED_FOR_CHECKOUT
+      // today's expense form (both in the caller), so neither is an error toast.
+      const code = e?.response?.data?.error?.code;
+      if (code !== 'LOCATION_REQUIRED' && code !== 'EXPENSE_REQUIRED_FOR_CHECKOUT') {
         toast.error(errMsg(e, 'Check-out failed'));
       }
     },
@@ -187,11 +190,12 @@ export function useDecideRegularization() {
       refresh();
       toast.success(vars.status === 'approved' ? 'Regularization approved' : 'Regularization rejected');
     },
-    onError: (e) => {
+    onError: () => {
       // 409 DECIDED_MEANWHILE / an already-decided request: the row is stale,
       // so reload the queue rather than leave it offering a dead decision.
+      // The message itself is toasted once, by the global mutation handler
+      // (main.tsx) — toasting here too showed it twice.
       refresh();
-      toast.error(errMsg(e, 'Failed to update regularization'));
     },
   });
 }

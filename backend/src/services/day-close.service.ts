@@ -9,7 +9,7 @@
  *        • approved leave covering the day → the leave row (`source: 'leave'`);
  *        • otherwise → `absent` (`source: 'auto_absent'`).
  *      In scope = joined on or before the day, no exit date before it, and
- *      `status: 'active'` — or exited through a recorded exit (`exitStatus`)
+ *      `status` `active` or `onNotice` — or exited through a recorded exit (`exitStatus`)
  *      whose exit date is the day or later, so a day closed after the exit
  *      was applied still gets its row. A day the classifier calls `weekend` or
  *      `holiday` for that employee writes nothing. Existing rows are never
@@ -192,7 +192,12 @@ export async function closeBusinessDay(
   const candidates = await Employee.find({
     joiningDate: { $lt: new Date(day.getTime() + DAY_MS) },
     $or: [
-      { status: 'active', $or: [{ exitDate: null }, { exitDate: { $gte: new Date(day.getTime() - DAY_MS) } }] },
+      // Still employed — `onNotice` included: payroll pays the notice period,
+      // so a notice-period no-show must be docked like anyone else's.
+      {
+        status: { $in: ['active', 'onNotice'] },
+        $or: [{ exitDate: null }, { exitDate: { $gte: new Date(day.getTime() - DAY_MS) } }],
+      },
       // An exit recorded through the status endpoint or `applyScheduledExits`
       // (`exitStatus` set): employed through the exit date, so closing an
       // earlier day after the exit was applied still covers them.
@@ -210,8 +215,17 @@ export async function closeBusinessDay(
     (e) =>
       dayOf(e.joiningDate) <= day.getTime() && (!e.exitDate || dayOf(e.exitDate) >= day.getTime()),
   );
-  const shiftOf = (e: (typeof candidates)[number]): IShift | null =>
-    (e.shift as unknown as IShift | null | undefined) ?? null;
+  // Work days come from the shift that governs the day — the employee's own,
+  // else the company default (`resolveShift`), the same one late marks,
+  // half days and auto-checkout use — else Mon–Sat.
+  const defaultShift = await Shift.findOne({ isDefault: true }).exec();
+  const workDaysOf = new Map<string, number[]>(
+    await Promise.all(
+      candidates.map(
+        async (e) => [String(e._id), (await resolveShift(e, { defaultShift }))?.workDays ?? DEFAULT_WORK_DAYS] as const,
+      ),
+    ),
+  );
 
   const ids = inScope.map((e) => e._id as Types.ObjectId);
   // Soft-deleted rows count: the unique (employeeId, date) index still holds them.
@@ -246,7 +260,7 @@ export async function closeBusinessDay(
   for (const emp of inScope) {
     const key = String(emp._id);
     const kind = classifyDay(localDay, {
-      workDays: shiftOf(emp)?.workDays ?? DEFAULT_WORK_DAYS,
+      workDays: workDaysOf.get(key) ?? DEFAULT_WORK_DAYS,
       weekOffRule,
       holidays,
       departmentId: emp.department ?? null,
@@ -301,14 +315,11 @@ export async function closeBusinessDay(
     const autoCheckoutTime = HHMM.test(cfg?.settings.autoCheckoutTime ?? '')
       ? cfg!.settings.autoCheckoutTime!
       : DEFAULT_AUTO_CHECKOUT_TIME;
-    const [owners, defaultShift] = await Promise.all([
-      Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
-        .setOptions({ withDeleted: true })
-        .select('_id shift')
-        .populate('shift')
-        .exec(),
-      Shift.findOne({ isDefault: true }).exec(),
-    ]);
+    const owners = await Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
+      .setOptions({ withDeleted: true })
+      .select('_id shift')
+      .populate('shift')
+      .exec();
     // Owners are populated and the default is preloaded: no further queries.
     const ownerShift = new Map<string, IShift | null>(
       await Promise.all(

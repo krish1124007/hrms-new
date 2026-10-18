@@ -54,6 +54,7 @@ const regularizationSchema = new Schema({
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     requestedCheckIn: Date,
     requestedCheckOut: Date,
+    createdByRequest: Boolean,
 }, { _id: false });
 const attendanceSchema = new Schema({
     employeeId: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },

@@ -188,13 +188,22 @@ async function carryForward(
       : impliedAllocation(type, employee, year - 1);
     const amount = Math.min(Math.max(remaining, 0), type.carryForward?.maxDays ?? 0);
     if (!(amount > 0)) continue;
-    // Only while nothing has been carried yet, so a re-run leaves it be.
-    // eslint-disable-next-line no-await-in-loop
-    const result = await LeaveBalance.updateOne(
-      { employeeId: employee._id, leaveTypeId: type._id, year, carried: { $in: [0, null] } },
-      { $set: { carried: amount } },
-    ).exec();
-    if (result.modifiedCount > 0) counts.carried += 1;
+    // Only while nothing has been carried yet, so a re-run leaves it be. An
+    // upsert: when allocation made no new-year row (nothing allocated this
+    // year) the carry still lands, in a row of its own. If the row exists
+    // with a carry already, the filter misses and the insert hits the unique
+    // (employee, type, year) index — nothing to do.
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await LeaveBalance.updateOne(
+        { employeeId: employee._id, leaveTypeId: type._id, year, carried: { $in: [0, null] } },
+        { $set: { carried: amount }, $setOnInsert: { allocated: 0 } },
+        { upsert: true },
+      ).exec();
+      if (result.modifiedCount > 0 || result.upsertedCount > 0) counts.carried += 1;
+    } catch (err) {
+      if (!isDuplicateKey(err)) throw err;
+    }
   }
 }
 

@@ -227,13 +227,14 @@ export declare function createClaim(req: Request, res: Response): Promise<void>;
 export declare function getClaim(req: Request, res: Response): Promise<void>;
 export declare function updateClaim(req: Request, res: Response): Promise<void>;
 export declare function deleteClaim(req: Request, res: Response): Promise<void>;
-export declare const approveClaimSchema: z.ZodObject<{
+/** A bodyless approve (no `acceptedAmount`) approves the full amount. */
+export declare const approveClaimSchema: z.ZodDefault<z.ZodObject<{
     acceptedAmount: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     acceptedAmount?: number | undefined;
 }, {
     acceptedAmount?: number | undefined;
-}>;
+}>>;
 export declare function approveClaim(req: Request, res: Response): Promise<void>;
 export declare function rejectClaim(req: Request, res: Response): Promise<void>;
 /**

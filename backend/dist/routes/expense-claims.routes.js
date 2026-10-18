@@ -26,7 +26,7 @@ router.post('/requests', requirePermission('expenses.create'), validate(ctrl.cre
 router.get('/requests/:id', requirePermission('expenses.view'), asyncHandler(ctrl.getClaim));
 router.patch('/requests/:id', requirePermission('expenses.update'), validate(ctrl.updateClaimSchema), asyncHandler(ctrl.updateClaim));
 router.delete('/requests/:id', requirePermission('expenses.delete'), asyncHandler(ctrl.deleteClaim));
-router.patch('/requests/:id/approve', requirePermission('expenses.approve'), asyncHandler(ctrl.approveClaim));
+router.patch('/requests/:id/approve', requirePermission('expenses.approve'), validate(ctrl.approveClaimSchema), asyncHandler(ctrl.approveClaim));
 router.patch('/requests/:id/reject', requirePermission('expenses.approve'), validate(ctrl.rejectClaimSchema), asyncHandler(ctrl.rejectClaim));
 router.patch('/requests/:id/reimburse', requirePermission('expenses.approve'), validate(ctrl.reimburseClaimSchema), asyncHandler(ctrl.reimburseClaim));
 export default router;

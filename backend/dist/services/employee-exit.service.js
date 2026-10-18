@@ -16,20 +16,28 @@ const MAX_LISTED = 20;
 export const EXIT_CANCEL_REASON = 'Employee exited';
 /**
  * Cancel (and release) every approved leave of the employee that starts after
- * `day` (a day label), and deactivate their login. Idempotent, so a failed
- * exit can simply be run again. Returns how many requests were cancelled.
+ * `day` (a day label), reject every pending one that does (reason
+ * "Employee exited" — nobody should approve leave from a job already left),
+ * and deactivate their login. Idempotent, so a failed exit can simply be run
+ * again. Returns how many approved requests were cancelled.
  */
 export async function releaseOnExit(employee, day) {
     // Coarse pre-filter; the exact business-day comparison follows, so a
     // start stored at UTC or IST midnight is read as the day it names.
     const candidates = await LeaveRequest.find({
         employeeId: employee._id,
-        status: 'approved',
+        status: { $in: ['approved', 'pending'] },
         startDate: { $gte: day },
     }).exec();
+    const afterExit = candidates.filter((l) => startOfBusinessDay(l.startDate).getTime() > day.getTime());
+    const pendingIds = afterExit.filter((l) => l.status === 'pending').map((l) => l._id);
+    if (pendingIds.length > 0) {
+        // Conditional on still pending: one decided meanwhile keeps its decision.
+        await LeaveRequest.updateMany({ _id: { $in: pendingIds }, status: 'pending' }, { $set: { status: 'rejected', rejectedReason: EXIT_CANCEL_REASON, approvedAt: new Date() } }).exec();
+    }
     let cancelled = 0;
-    for (const leave of candidates) {
-        if (startOfBusinessDay(leave.startDate).getTime() <= day.getTime())
+    for (const leave of afterExit) {
+        if (leave.status !== 'approved')
             continue;
         // eslint-disable-next-line no-await-in-loop
         if (await cancelAndReleaseLeave(leave, { cancelReason: EXIT_CANCEL_REASON }))

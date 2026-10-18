@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { OvertimeRequest, type IOvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
-import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { logger } from '../config/logger.js';
@@ -23,6 +23,7 @@ import {
 } from '../lib/approvals.js';
 
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own overtime request';
+const DECIDED_MEANWHILE_MESSAGE = 'This request was decided meanwhile — reload and try again';
 
 /**
  * Tell the employee's reporting manager about a request waiting for them —
@@ -241,18 +242,48 @@ export async function update(req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: otReq });
 }
 
-/** DELETE /api/v1/overtime/:id — withdraw a pending request */
+/**
+ * DELETE /api/v1/overtime/:id — withdraw a request while it is still pending.
+ * Decided requests stay: payroll pays approved overtime, and a rejection is
+ * the record of the decision. The soft delete is conditional on `pending`,
+ * so a decision landing meanwhile wins (409 `DECIDED_MEANWHILE`).
+ */
 export async function remove(req: Request, res: Response): Promise<void> {
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
   await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
-  if (otReq.status === 'approved' && otReq.payrollRecordId) {
-    throw new ValidationAppError('Cannot withdraw — this request is already in a payroll cycle');
+  if (otReq.status !== 'pending') {
+    throw new ValidationAppError(`Only pending requests can be withdrawn (this one is ${otReq.status})`);
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (otReq as any).softDelete();
+  const userId = getUserId();
+  const withdrawn = await OvertimeRequest.findOneAndUpdate(
+    { _id: otReq._id, status: 'pending' },
+    {
+      $set: {
+        isDeleted: true,
+        deletedAt: new Date(),
+        ...(userId ? { deletedBy: new Types.ObjectId(userId) } : {}),
+      },
+    },
+  ).exec();
+  if (!withdrawn) throw new AppError(DECIDED_MEANWHILE_MESSAGE, 409, 'DECIDED_MEANWHILE');
   void audit({ action: 'delete', entity: 'OvertimeRequest', entityId: String(otReq._id) });
   res.json({ success: true, message: 'Overtime request withdrawn' });
+}
+
+/**
+ * Record a decision on a still-pending request — one conditional write, so of
+ * two deciders racing only one lands; the other gets 409 `DECIDED_MEANWHILE`
+ * and the employee is told once.
+ */
+async function decidePending(id: unknown, set: Record<string, unknown>): Promise<IOvertimeRequest> {
+  const decided = await OvertimeRequest.findOneAndUpdate(
+    { _id: id, status: 'pending' },
+    { $set: set },
+    { new: true, runValidators: true },
+  ).exec();
+  if (!decided) throw new AppError(DECIDED_MEANWHILE_MESSAGE, 409, 'DECIDED_MEANWHILE');
+  return decided;
 }
 
 /** POST /api/v1/overtime/:id/approve */
@@ -266,19 +297,20 @@ export async function approve(req: Request, res: Response): Promise<void> {
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a request with status "${otReq.status}"`);
   }
-  otReq.status = 'approved';
-  otReq.approvedBy = req.user._id;
-  otReq.approvedAt = new Date();
-  if (body.notes) otReq.approverNotes = body.notes;
-  await otReq.save();
+  const decided = await decidePending(otReq._id, {
+    status: 'approved',
+    approvedBy: req.user._id,
+    approvedAt: new Date(),
+    ...(body.notes ? { approverNotes: body.notes } : {}),
+  });
   void audit({
     action: 'update',
     entity: 'OvertimeRequest',
-    entityId: String(otReq._id),
+    entityId: String(decided._id),
     metadata: { event: 'approved' },
   });
-  await notifyEmployee(otReq, 'approved', 'was approved.');
-  res.json({ success: true, data: otReq });
+  await notifyEmployee(decided, 'approved', 'was approved.');
+  res.json({ success: true, data: decided });
 }
 
 /** POST /api/v1/overtime/:id/reject */
@@ -292,17 +324,18 @@ export async function reject(req: Request, res: Response): Promise<void> {
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a request with status "${otReq.status}"`);
   }
-  otReq.status = 'rejected';
-  otReq.approvedBy = req.user._id;
-  otReq.approvedAt = new Date();
-  otReq.rejectedReason = body.reason;
-  await otReq.save();
+  const decided = await decidePending(otReq._id, {
+    status: 'rejected',
+    approvedBy: req.user._id,
+    approvedAt: new Date(),
+    rejectedReason: body.reason,
+  });
   void audit({
     action: 'update',
     entity: 'OvertimeRequest',
-    entityId: String(otReq._id),
+    entityId: String(decided._id),
     metadata: { event: 'rejected', reason: body.reason },
   });
-  await notifyEmployee(otReq, 'rejected', `was rejected. Reason: ${body.reason}`);
-  res.json({ success: true, data: otReq });
+  await notifyEmployee(decided, 'rejected', `was rejected. Reason: ${body.reason}`);
+  res.json({ success: true, data: decided });
 }

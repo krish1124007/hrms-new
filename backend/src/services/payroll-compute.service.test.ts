@@ -304,7 +304,17 @@ describe('days paid', () => {
     const emp = await makeEmployee();
     await Attendance.create([
       { employeeId: emp._id, date: label('2026-09-02'), status: 'half_day' },
-      { employeeId: emp._id, date: label('2026-09-03'), status: 'half_day', isPaidLeave: true, leaveRequestId: new Types.ObjectId(), source: 'leave' },
+      // A paid half day of leave whose other half was worked (punched in).
+      {
+        employeeId: emp._id,
+        date: label('2026-09-03'),
+        status: 'half_day',
+        isPaidLeave: true,
+        leaveRequestId: new Types.ObjectId(),
+        source: 'punch',
+        checkIn: { time: new Date('2026-09-03T08:30:00.000Z'), method: 'manual' },
+        checkOut: { time: new Date('2026-09-03T12:30:00.000Z'), method: 'manual' },
+      },
       { employeeId: emp._id, date: label('2026-09-04'), status: 'on_leave', isPaidLeave: true, leaveRequestId: new Types.ObjectId(), source: 'leave' },
       { employeeId: emp._id, date: label('2026-09-06'), status: 'weekend' },
     ]);
@@ -313,6 +323,21 @@ describe('days paid', () => {
 
     expect(tally).toMatchObject({ halfDay: 2, paidLeave: 1, weeklyOff: 1, lopDays: 0.5 });
     expect((await computeRecord(emp, await september(), cfg))!.daysPaid).toBe(29.5);
+  });
+
+  it('a half-day leave row with no punch costs the unworked half: 0.5 LOP, paid or unpaid', async () => {
+    const emp = await makeEmployee();
+    await Attendance.create([
+      // Paid half day of leave; the employee never came in for the other half.
+      { employeeId: emp._id, date: label('2026-09-02'), status: 'half_day', isPaidLeave: true, leaveRequestId: new Types.ObjectId(), source: 'leave' },
+      // Unpaid half day of leave, no punch.
+      { employeeId: emp._id, date: label('2026-09-03'), status: 'half_day', isPaidLeave: false, leaveRequestId: new Types.ObjectId(), source: 'leave' },
+    ]);
+
+    const tally = await dayTally(emp._id as Types.ObjectId, paidWindow(emp, 2026, 9)!);
+
+    expect(tally).toMatchObject({ halfDay: 2, lopDays: 1 });
+    expect((await computeRecord(emp, await september(), cfg))!.daysPaid).toBe(29);
   });
 
   it('rows outside the paid window do not count', async () => {

@@ -15,7 +15,8 @@ router.post('/', requirePermission('employees.create'), validate(ctrl.createEmpl
 router.get('/:id', requirePermission('employees.view'), asyncHandler(ctrl.getEmployee));
 router.patch('/:id', requirePermission('employees.update'), validate(ctrl.updateEmployeeSchema), asyncHandler(ctrl.updateEmployee));
 router.delete('/:id', requirePermission('employees.delete'), asyncHandler(ctrl.deleteEmployee));
-router.post('/:id/restore', requirePermission('employees.update'), asyncHandler(ctrl.restoreEmployee));
+// Undoing a delete takes the permission that deletes.
+router.post('/:id/restore', requirePermission('employees.delete'), asyncHandler(ctrl.restoreEmployee));
 router.patch('/:id/status', requirePermission('employees.update'), validate(ctrl.updateStatusSchema), asyncHandler(ctrl.updateEmployeeStatus));
 router.post('/:id/documents', requirePermission('employees.update'), validate(ctrl.addDocumentSchema), asyncHandler(ctrl.addEmployeeDocument));
 router.delete('/:id/documents/:docId', requirePermission('employees.update'), asyncHandler(ctrl.deleteEmployeeDocument));

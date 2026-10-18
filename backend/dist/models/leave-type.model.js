@@ -11,7 +11,9 @@ const leaveTypeSchema = new Schema({
     encashable: { type: Boolean, default: false },
     paidLeave: { type: Boolean, default: true },
     applicableGender: { type: String, enum: ['all', 'male', 'female'], default: 'all' },
-    probationAllowed: { type: Boolean, default: false },
+    // Open to employees on probation unless HR says otherwise per type: a
+    // closed default refused every recent joiner every leave type on deploy.
+    probationAllowed: { type: Boolean, default: true },
     halfDayAllowed: { type: Boolean, default: true },
     attachmentRequired: { type: Boolean, default: false },
     color: { type: String, default: '#3b82f6' },

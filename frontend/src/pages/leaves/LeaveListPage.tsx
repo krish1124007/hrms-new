@@ -122,6 +122,9 @@ export default function LeaveListPage(): ReactElement {
           {r.status === 'rejected' && (
             <RejectionReason reason={r.rejectedReason} title="Leave rejection reason" />
           )}
+          {r.status === 'cancelled' && (
+            <RejectionReason reason={r.cancelReason} title="Leave cancellation reason" />
+          )}
         </div>
       ),
     },

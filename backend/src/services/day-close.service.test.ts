@@ -149,6 +149,39 @@ describe('closeBusinessDay — auto-absent', () => {
     expect(await rowsFor(inactive)).toHaveLength(0);
   });
 
+  it('marks an onNotice employee absent too (the notice period is paid, so a no-show must be docked)', async () => {
+    const emp = await makeEmployee({ status: 'onNotice', exitDate: new Date('2026-11-30'), exitStatus: 'resigned' });
+
+    const counts = await closeBusinessDay(ist('2026-10-12', '23:59'));
+
+    expect(counts.absentCreated).toBe(1);
+    const rows = await rowsFor(emp);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('absent');
+    expect(rows[0]!.source).toBe('auto_absent');
+  });
+
+  it("uses the default shift's work days for an employee without a shift", async () => {
+    await Shift.create({
+      name: 'Default Mon-Fri',
+      startTime: '09:30',
+      endTime: '18:30',
+      workDays: [1, 2, 3, 4, 5],
+      isDefault: true,
+    });
+    const emp = await makeEmployee();
+
+    // Sat 10 Oct is the 2nd Saturday: a company working day, but not on the default shift.
+    const sat = await closeBusinessDay(ist('2026-10-10', '23:59'));
+    expect(sat.absentCreated).toBe(0);
+    expect(await rowsFor(emp)).toHaveLength(0);
+
+    // Monday is on the default shift: still marked.
+    const mon = await closeBusinessDay(ist('2026-10-12', '23:59'));
+    expect(mon.absentCreated).toBe(1);
+    expect(await rowsFor(emp)).toHaveLength(1);
+  });
+
   it('leaves a day that already has a row untouched', async () => {
     const emp = await makeEmployee();
     const existing = await Attendance.create({

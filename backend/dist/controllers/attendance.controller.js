@@ -11,8 +11,9 @@ import { Shift } from '../models/shift.model.js';
 import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
-import { isWeekOff, toKey } from '../lib/week-off.js';
-import { DAY_MS, startOfBusinessDay } from '../lib/business-day.js';
+import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
+import { DAY_MS, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
+import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { applyShiftRules, attendanceDayFor, computeHours, isRowInProgress, resolveShift, } from '../lib/attendance-hours.js';
 import { getWeekOffRule, invalidateWeekOffRule } from '../services/week-off.service.js';
 import { closeBusinessDay, DayCloseError } from '../services/day-close.service.js';
@@ -835,9 +836,30 @@ export const regularizeSchema = z.object({
 /** A regularized check-out is at most this long after the check-in: one shift, not a day. */
 const MAX_REQUESTED_SPAN_MS = 12 * 60 * 60 * 1000;
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own regularization request';
+const CORRECT_OWN_MESSAGE = 'You cannot correct your own attendance record';
 const LEAVE_DAY_MESSAGE = 'Cancel the leave before regularizing this day';
 const DECIDED_MEANWHILE_MESSAGE = 'This request was decided meanwhile — reload and try again';
 const leaveDayError = () => new AppError(LEAVE_DAY_MESSAGE, 400, 'LEAVE_DAY');
+/**
+ * Whether `day` (a day label) is a working day for `employee` — `classifyDay`
+ * with their shift (else the default shift), the company week-off rule and
+ * the public holidays of their department: the verdict day-close uses.
+ */
+async function isWorkingDayFor(employee, day) {
+    const localDay = localDateOf(day);
+    const [shift, weekOffRule, holidays] = await Promise.all([
+        resolveShift(employee),
+        getWeekOffRule(),
+        listHolidaysBetween(localDay, localDay),
+    ]);
+    const department = employee?.department;
+    return (classifyDay(localDay, {
+        workDays: shift?.workDays ?? DEFAULT_WORK_DAYS,
+        weekOffRule,
+        holidays,
+        departmentId: department ?? null,
+    }) === 'working');
+}
 const pendingError = () => new AppError('A regularization request is already pending for this day', 409, 'REGULARIZATION_PENDING');
 /**
  * The punches a request asks for must be believable for `day` (a day label):
@@ -918,7 +940,15 @@ export async function requestRegularization(req, res) {
     if (att?.regularization?.status === 'pending')
         throw pendingError();
     assertRequestedTimes(date, body, { checkIn: att?.checkIn?.time, checkOut: att?.checkOut?.time }, now);
+    const createsRow = !att;
     if (!att) {
+        // A day with no row that is not a working day (week-off, holiday, outside
+        // the shift) has nothing to regularize: an `absent` row made for it would
+        // only dock pay. A non-working day the employee punched on has a row and
+        // may still be corrected.
+        if (!(await isWorkingDayFor(emp.doc, date))) {
+            throw new AppError('This day is not a working day for you — there is nothing to regularize', 400, 'NOT_A_WORKING_DAY');
+        }
         try {
             att = await Attendance.create({ employeeId: emp.id, date, status: 'absent' });
         }
@@ -942,6 +972,7 @@ export async function requestRegularization(req, res) {
                 status: 'pending',
                 ...(body.checkIn ? { requestedCheckIn: body.checkIn } : {}),
                 ...(body.checkOut ? { requestedCheckOut: body.checkOut } : {}),
+                ...(createsRow ? { createdByRequest: true } : {}),
             },
         },
     }, { new: true }).exec();
@@ -1010,7 +1041,10 @@ export async function decideRegularization(req, res) {
         checkOut: att.checkOut?.time,
         totalWorkingHours: att.totalWorkingHours,
     };
-    const owner = await Employee.findById(att.employeeId).setOptions({ withDeleted: true }).select('userId shift').exec();
+    const owner = await Employee.findById(att.employeeId)
+        .setOptions({ withDeleted: true })
+        .select('userId shift department')
+        .exec();
     // The write below only lands if this exact request is still pending, so two
     // deciders racing cannot both succeed (one would leave punches and a
     // `present` day under a rejection).
@@ -1066,8 +1100,32 @@ export async function decideRegularization(req, res) {
         }
         throw err;
     }
+    // A rejected request leaves no row of its own making behind on a day that
+    // is not a working day (a holiday declared since, a legacy weekend
+    // request): that `absent` row would dock pay for a day nobody had to work.
+    // Only while still bare — no punch, no leave stamp. On a working day the
+    // row stays: the day was not worked, and day-close may already have
+    // passed it by.
+    let removed = false;
+    if (status === 'rejected' &&
+        att.regularization.createdByRequest === true &&
+        !att.checkIn?.time &&
+        !att.checkOut?.time &&
+        att.leaveRequestId == null &&
+        att.isPaidLeave == null &&
+        !(await isWorkingDayFor(owner, startOfBusinessDay(att.date)))) {
+        const deleted = await Attendance.deleteOne({
+            _id: att._id,
+            'regularization.status': 'rejected',
+            'checkIn.time': null,
+            'checkOut.time': null,
+            leaveRequestId: null,
+            isPaidLeave: null,
+        }).exec();
+        removed = deleted.deletedCount > 0;
+    }
     void audit({
-        action: 'update',
+        action: removed ? 'delete' : 'update',
         entity: 'Attendance',
         entityId: String(att._id),
         before,
@@ -1106,6 +1164,9 @@ export async function correctRecord(req, res) {
     const att = await Attendance.findById(String(req.params.id)).exec();
     if (!att)
         throw new NotFoundError('Attendance record not found');
+    // Correcting a day is deciding it: nobody turns their own absence into a
+    // paid day, whatever their permissions.
+    await assertNotSelfApproval(req, att.employeeId, CORRECT_OWN_MESSAGE);
     // A correction rewrites `regularization`; doing so over an open request
     // would silently discard what the employee asked for.
     if (att.regularization?.status === 'pending') {

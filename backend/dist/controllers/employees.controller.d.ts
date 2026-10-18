@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { type EmployeeStatus } from '../models/employee.model.js';
 export declare const createEmployeeSchema: z.ZodObject<{
     firstName: z.ZodString;
     lastName: z.ZodString;
@@ -570,15 +571,15 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
 export declare const updateStatusSchema: z.ZodObject<{
     status: z.ZodEnum<["active", "inactive", "terminated", "resigned", "onNotice"]>;
     reason: z.ZodOptional<z.ZodString>;
-    exitDate: z.ZodOptional<z.ZodDate>;
+    exitDate: z.ZodOptional<z.ZodNullable<z.ZodDate>>;
 }, "strip", z.ZodTypeAny, {
     status: "active" | "inactive" | "terminated" | "resigned" | "onNotice";
     reason?: string | undefined;
-    exitDate?: Date | undefined;
+    exitDate?: Date | null | undefined;
 }, {
     status: "active" | "inactive" | "terminated" | "resigned" | "onNotice";
     reason?: string | undefined;
-    exitDate?: Date | undefined;
+    exitDate?: Date | null | undefined;
 }>;
 export declare const addDocumentSchema: z.ZodObject<{
     type: z.ZodString;
@@ -631,7 +632,11 @@ export declare function createEmployee(req: Request, res: Response): Promise<voi
 export declare function getEmployee(req: Request, res: Response): Promise<void>;
 export declare function updateEmployee(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployee(req: Request, res: Response): Promise<void>;
-/** POST /employees/:id/restore — bring back a soft-deleted employee (and their login, if they are employed). */
+/**
+ * POST /employees/:id/restore — bring back a soft-deleted employee, and — if
+ * they are employed — the login the delete deactivated. A login that was
+ * still `invited` (never accepted) stays invited.
+ */
 export declare function restoreEmployee(req: Request, res: Response): Promise<void>;
 /**
  * Change an employee's employment status.
@@ -648,6 +653,12 @@ export declare function restoreEmployee(req: Request, res: Response): Promise<vo
  *     refunded, the login deactivated, and HR told what to recover.
  */
 export declare function updateEmployeeStatus(req: Request, res: Response): Promise<void>;
+export interface StatusChange {
+    status: EmployeeStatus;
+    /** Absent or null: no date. */
+    exitDate?: Date | null;
+    reason?: string;
+}
 export declare function addEmployeeDocument(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployeeDocument(req: Request, res: Response): Promise<void>;
 export declare function exportEmployees(_req: Request, res: Response): Promise<void>;

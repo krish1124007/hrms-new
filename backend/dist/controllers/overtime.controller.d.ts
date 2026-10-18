@@ -80,7 +80,12 @@ export declare function create(req: Request, res: Response): Promise<void>;
 export declare function get(req: Request, res: Response): Promise<void>;
 /** PATCH /api/v1/overtime/:id */
 export declare function update(req: Request, res: Response): Promise<void>;
-/** DELETE /api/v1/overtime/:id — withdraw a pending request */
+/**
+ * DELETE /api/v1/overtime/:id — withdraw a request while it is still pending.
+ * Decided requests stay: payroll pays approved overtime, and a rejection is
+ * the record of the decision. The soft delete is conditional on `pending`,
+ * so a decision landing meanwhile wins (409 `DECIDED_MEANWHILE`).
+ */
 export declare function remove(req: Request, res: Response): Promise<void>;
 /** POST /api/v1/overtime/:id/approve */
 export declare function approve(req: Request, res: Response): Promise<void>;

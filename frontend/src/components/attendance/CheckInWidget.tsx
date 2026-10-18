@@ -18,6 +18,7 @@ import {
   LocationPermissionDialog,
   type LocationFailureReason,
 } from '@/components/common/LocationPermissionDialog';
+import { CheckoutExpenseDialog, isExpenseRequiredError } from '@/components/attendance/CheckoutExpenseDialog';
 
 const METHOD_LABELS: Record<AttendanceMethod, string> = {
   manual: 'Manual',
@@ -76,9 +77,15 @@ export function CheckInWidget(): ReactElement {
   const startBreak = useStartBreak();
   const endBreak = useEndBreak();
 
-  const enabledMethods = cfgRes?.data.enabledMethods ?? ['manual'];
+  // Face recognition is not offered: the server has no face check and
+  // refuses it (METHOD_UNAVAILABLE), so a stored config listing it first must
+  // not make it the default.
+  const configured = (cfgRes?.data.enabledMethods ?? ['manual']).filter((m) => m !== 'face');
+  const enabledMethods: AttendanceMethod[] = configured.length > 0 ? configured : ['manual'];
   const today = todayRes?.data;
   const [method, setMethod] = useState<AttendanceMethod>(enabledMethods[0] ?? 'manual');
+  // Today's expense form — only when a check-out answers EXPENSE_REQUIRED_FOR_CHECKOUT.
+  const [expenseOpen, setExpenseOpen] = useState(false);
   // kind is unset when the failure came from the proactive on-mount check —
   // there is no pending check-in/out to resume after the user fixes location.
   const [locFailure, setLocFailure] = useState<{
@@ -88,11 +95,11 @@ export function CheckInWidget(): ReactElement {
   const [locRetrying, setLocRetrying] = useState(false);
 
 
+  const firstMethod = enabledMethods[0] ?? 'manual';
+  const methodOffered = enabledMethods.includes(method);
   useEffect(() => {
-    if (cfgRes?.data?.enabledMethods && !cfgRes.data.enabledMethods.includes(method)) {
-      setMethod(cfgRes.data.enabledMethods[0]);
-    }
-  }, [cfgRes, method]);
+    if (!methodOffered) setMethod(firstMethod);
+  }, [methodOffered, firstMethod]);
 
   const isCheckedIn = !!today?.checkIn?.time;
   const isCheckedOut = !!today?.checkOut?.time;
@@ -115,17 +122,28 @@ export function CheckInWidget(): ReactElement {
     // with LOCATION_REQUIRED only for employees whose admin turned the
     // per-employee location requirement on. Blocking everyone here would
     // apply the rule to staff it was never meant for.
+    await send(kind, payload, res.ok ? 'unavailable' : res.reason);
+  };
+
+  /**
+   * Check in/out. Other errors are already toasted by the check-in/out
+   * mutations; LOCATION_REQUIRED gets the permission dialog, and
+   * EXPENSE_REQUIRED_FOR_CHECKOUT opens today's expense form, which checks
+   * out again once the claim is filed.
+   */
+  const send = async (kind: 'in' | 'out', payload: CheckInPayload, locReason: LocationFailureReason): Promise<void> => {
     try {
       if (kind === 'in') {
         await checkIn.mutateAsync(payload);
       } else {
         await checkOut.mutateAsync(payload);
+        setExpenseOpen(false);
       }
     } catch (e: unknown) {
-      // Other errors are already toasted by the check-in/out mutations;
-      // LOCATION_REQUIRED is skipped there and gets the permission dialog.
       if (isLocationRequiredError(e)) {
-        setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind });
+        setLocFailure({ reason: locReason, kind });
+      } else if (kind === 'out' && isExpenseRequiredError(e)) {
+        setExpenseOpen(true);
       }
     }
   };
@@ -143,9 +161,7 @@ export function CheckInWidget(): ReactElement {
     setLocFailure(null);
     toast.success('Location enabled');
     if (!kind) return; // proactive check — nothing pending to submit
-    const payload: CheckInPayload = { method, location: res.loc };
-    if (kind === 'in') checkIn.mutate(payload);
-    else checkOut.mutate(payload);
+    await send(kind, { method, location: res.loc }, 'unavailable');
   };
 
   return (
@@ -233,6 +249,13 @@ export function CheckInWidget(): ReactElement {
           </div>
         )}
       </CardContent>
+
+      <CheckoutExpenseDialog
+        open={expenseOpen}
+        onClose={() => setExpenseOpen(false)}
+        onFiled={() => void submit('out')}
+        checkingOut={checkOut.isPending}
+      />
 
       <LocationPermissionDialog
         open={!!locFailure}

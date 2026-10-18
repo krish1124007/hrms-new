@@ -80,6 +80,16 @@ describe('monthToDateAttendanceRate', () => {
     expect(await attendanceRateBetween(label('2026-10-01'), label('2026-10-04'))).toBe(0.75);
   });
 
+  it('counts employees on notice: they still work, so their absence lowers the rate', async () => {
+    const [present] = await employees(1);
+    await employees(1, { status: 'onNotice', exitDate: new Date('2026-11-30'), exitStatus: 'resigned' });
+    await row(present!, '2026-10-01', 'present');
+    await row(present!, '2026-10-02', 'present');
+
+    // 2 present-ish rows over 2 employees × 2 working days.
+    expect(await attendanceRateBetween(label('2026-10-01'), label('2026-10-02'))).toBe(0.5);
+  });
+
   it('is 0 with no active employees', async () => {
     expect(await monthToDateAttendanceRate(ist('2026-10-02', '18:00'))).toBe(0);
   });

@@ -24,6 +24,7 @@ import { sendMail } from '../services/email.service.js';
 import { invalidateWeekOffRule } from '../services/week-off.service.js';
 import { applyScheduledExits, closeBusinessDay } from '../services/day-close.service.js';
 import { Asset } from '../models/asset.model.js';
+import { AuditLog } from '../models/audit-log.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
@@ -142,6 +143,18 @@ describe('PATCH /employees/:id/status — scheduled exits', () => {
     expect((await userNow(emp)).status).toBe('active');
   });
 
+  it('exitDate: null is no date (not 1 Jan 1970): on notice with nothing scheduled, and nothing applied', async () => {
+    const res = await setStatus(emp, { status: 'onNotice', exitDate: null });
+
+    expect(res.status).toBe(200);
+    const after = await employeeNow(emp);
+    expect(after.status).toBe('onNotice');
+    expect(after.exitDate).toBeFalsy();
+    expect(after.exitStatus).toBeFalsy();
+    expect((await applyScheduledExits(label('2026-10-14'))).exitsApplied).toBe(0);
+    expect((await employeeNow(emp)).status).toBe('onNotice');
+  });
+
   it('setting the employee active again clears a scheduled exit', async () => {
     await setStatus(emp, { status: 'terminated', exitDate: '2026-10-21' });
     await setStatus(emp, { status: 'active' });
@@ -206,6 +219,27 @@ describe('applyScheduledExits', () => {
     expect(await Notification.countDocuments({ userId: emp.user._id, type: 'system_alert' })).toBe(0);
   });
 
+  it('rejects pending leave starting after the exit day ("Employee exited"); pending leave before it stays pending', async () => {
+    const cl = await leaveType();
+    await setStatus(emp, { status: 'resigned', exitDate: '2026-10-21' });
+    const apply = (startDate: string, endDate: string) =>
+      request(app)
+        .post('/api/v1/leaves/requests')
+        .set(auth(emp.token))
+        .send({ leaveTypeId: String(cl._id), startDate, endDate, reason: 'Family function' });
+    const before = await apply('2026-10-19', '2026-10-19');
+    const after = await apply('2026-10-26', '2026-10-27');
+    expect(before.status).toBe(201);
+    expect(after.status).toBe(201);
+
+    expect((await applyScheduledExits(label('2026-10-22'))).exitsApplied).toBe(1);
+
+    const rejected = await LeaveRequest.findById(after.body.data._id).lean();
+    expect(rejected?.status).toBe('rejected');
+    expect(rejected?.rejectedReason).toBe('Employee exited');
+    expect((await LeaveRequest.findById(before.body.data._id).lean())?.status).toBe('pending');
+  });
+
   it('applies the scheduled status (terminated) and is idempotent', async () => {
     await setStatus(emp, { status: 'terminated', exitDate: '2026-10-21' });
 
@@ -260,9 +294,28 @@ describe('POST /employees/:id/restore', () => {
     expect(live.status).toBe(409);
   });
 
-  it('needs employees.update', async () => {
-    const res = await request(app).post(`/api/v1/employees/${hr.employee._id}/restore`).set(auth(emp.token));
-    expect(res.status).toBe(403);
+  it('needs employees.delete — the permission that deleted them; employees.update (hr_executive) is not enough', async () => {
+    const hrExec = await actor('hr_executive');
+    expect((await request(app).delete(`/api/v1/employees/${emp.employee._id}`).set(auth(hr.token))).status).toBe(200);
+
+    const asEmployee = await request(app).post(`/api/v1/employees/${hr.employee._id}/restore`).set(auth(emp.token));
+    const asHrExec = await request(app).post(`/api/v1/employees/${emp.employee._id}/restore`).set(auth(hrExec.token));
+
+    expect(asEmployee.status).toBe(403);
+    expect(asHrExec.status).toBe(403);
+    expect(await Employee.findById(emp.employee._id).lean()).toBeNull();
+  });
+
+  it('keeps an invited login invited (only a deactivated one is reactivated)', async () => {
+    await User.updateOne({ _id: emp.user._id }, { $set: { status: 'invited' } });
+    await Employee.updateOne({ _id: emp.employee._id }, { $set: { isDeleted: true, deletedAt: new Date() } }).setOptions({
+      withDeleted: true,
+    });
+
+    const res = await request(app).post(`/api/v1/employees/${emp.employee._id}/restore`).set(auth(hr.token));
+
+    expect(res.status).toBe(200);
+    expect((await userNow(emp)).status).toBe('invited');
   });
 });
 
@@ -375,6 +428,81 @@ describe('POST /employees/import — creates logins', () => {
     expect(res.body.data.failed).toHaveLength(1);
     expect((await employeeNow(emp)).firstName).toBe('Renamed');
     expect(vi.mocked(sendMail)).not.toHaveBeenCalled();
+  });
+
+  it('writes an audit entry per created and per updated row, and returns every count', async () => {
+    const res = await request(app)
+      .post('/api/v1/employees/import')
+      .set(auth(hr.token))
+      .send({
+        employees: [
+          { firstName: 'Audit', lastName: 'New', email: 'audit.new@test.local', joiningDate: '2024-01-15' },
+          { firstName: 'Renamed', lastName: 'Person', email: emp.user.email, joiningDate: '2024-01-15' },
+          { firstName: 'No', lastName: 'Email', joiningDate: '2024-01-15' },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 1, updated: 1, skipped: 0, errors: 1 });
+    const created = await Employee.findOne({ email: 'audit.new@test.local' }).lean();
+    await vi.waitFor(async () => expect(await AuditLog.countDocuments({ entity: 'Employee' })).toBe(2));
+    const logs = await AuditLog.find({ entity: 'Employee' }).lean();
+    expect(logs.find((l) => l.entityId === String(created!._id))?.action).toBe('create');
+    expect(logs.find((l) => l.entityId === String(emp.employee._id))?.action).toBe('update');
+    for (const log of logs) {
+      expect(log.metadata).toMatchObject({ source: 'import' });
+      expect(String(log.userId)).toBe(String(hr.user._id));
+    }
+  });
+
+  it('an exit status goes through the exit path: past exitDate applies (login off, HR told), future schedules', async () => {
+    const other = await actor('employee', { confirmationDate: new Date('2025-01-01') });
+    const res = await request(app)
+      .post('/api/v1/employees/import')
+      .set(auth(hr.token))
+      .send({
+        employees: [
+          { firstName: 'Gone', lastName: 'Now', email: emp.user.email, joiningDate: '2024-01-15', status: 'resigned', exitDate: '2026-10-12' },
+          { firstName: 'Going', lastName: 'Soon', email: other.user.email, joiningDate: '2024-01-15', status: 'terminated', exitDate: '2026-10-30' },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.updated).toBe(2);
+    const gone = await employeeNow(emp);
+    expect(gone.status).toBe('resigned');
+    expect(gone.exitStatus).toBe('resigned');
+    expect(gone.exitDate?.toISOString().slice(0, 10)).toBe('2026-10-12');
+    expect((await userNow(emp)).status).toBe('inactive');
+    expect(await Notification.countDocuments({ userId: hr.user._id, type: 'system_alert' })).toBe(1);
+
+    const going = await employeeNow(other);
+    expect(going.status).toBe('active');
+    expect(going.exitStatus).toBe('terminated');
+    expect(going.exitDate?.toISOString().slice(0, 10)).toBe('2026-10-30');
+    expect((await userNow(other)).status).toBe('active');
+  });
+
+  it('an exit status without an exitDate is never set directly: the status is left alone and the row says why', async () => {
+    const res = await request(app)
+      .post('/api/v1/employees/import')
+      .set(auth(hr.token))
+      .send({
+        employees: [
+          { firstName: 'Still', lastName: 'Here', email: emp.user.email, joiningDate: '2024-01-15', status: 'terminated' },
+          { firstName: 'New', lastName: 'Leaver', email: 'new.leaver@test.local', joiningDate: '2024-01-15', status: 'inactive' },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.rows.map((r: { status: string }) => r.status)).toEqual(['updated', 'created']);
+    for (const row of res.body.data.rows) expect(row.message).toMatch(/exitDate/);
+    const still = await employeeNow(emp);
+    expect(still.status).toBe('active');
+    expect(still.firstName).toBe('Still');
+    expect(still.exitStatus).toBeFalsy();
+    expect((await userNow(emp)).status).toBe('active');
+    expect((await Employee.findOne({ email: 'new.leaver@test.local' }).lean())?.status).toBe('active');
   });
 
   it('an Employee ID already used by someone else is a row error, and no login is left behind', async () => {

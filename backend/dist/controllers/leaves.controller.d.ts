@@ -8,7 +8,7 @@ export { isUnpaidLeaveType };
  * application, including one HR files on an employee's behalf — they are
  * about the employee, not the person filing.
  */
-export declare function validateLeaveTypeRules(leaveType: Pick<ILeaveType, 'name' | 'isActive' | 'applicableGender' | 'probationAllowed' | 'halfDayAllowed' | 'attachmentRequired'>, employee: Pick<IEmployee, 'gender' | 'probationEndDate' | 'confirmationDate' | 'joiningDate'>, body: {
+export declare function validateLeaveTypeRules(leaveType: Pick<ILeaveType, 'name' | 'isActive' | 'applicableGender' | 'probationAllowed' | 'halfDayAllowed' | 'attachmentRequired' | 'paidLeave' | 'code'>, employee: Pick<IEmployee, 'gender' | 'probationEndDate' | 'confirmationDate' | 'joiningDate'>, body: {
     isHalfDay?: boolean;
     attachments?: unknown[];
 }, today?: Date): void;

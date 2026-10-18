@@ -8,6 +8,7 @@ import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/dat
 import { ExpandableText } from '@/components/common/ExpandableText';
 import { useDecideRegularization, useRegularizations } from '@/hooks/use-attendance';
 import type { Attendance, RegularizationStatus } from '@/lib/attendance.api';
+import { BUSINESS_TIMEZONE } from '@/lib/business-day';
 
 const STATUS_VARIANT: Record<RegularizationStatus, 'success' | 'warning' | 'destructive'> = {
   pending: 'warning',
@@ -21,11 +22,12 @@ const PAGE_SIZE = 20;
 const dayLabel = (iso: string): string =>
   new Date(iso).toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
+/** Punch and request times in business time (IST), whatever the browser's timezone. */
 const time = (iso: string): string =>
-  new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  new Date(iso).toLocaleTimeString('en-IN', { timeZone: BUSINESS_TIMEZONE, hour: '2-digit', minute: '2-digit' });
 
 const dateTime = (iso: string): string =>
-  new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  new Date(iso).toLocaleString('en-IN', { timeZone: BUSINESS_TIMEZONE, dateStyle: 'medium', timeStyle: 'short' });
 
 /**
  * Attendance → Regularizations: the approval queue for "please correct my

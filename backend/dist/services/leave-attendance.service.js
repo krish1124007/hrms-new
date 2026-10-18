@@ -10,8 +10,8 @@
  * The nightly day-close stamps through the same `stampLeaveDay`, so there is
  * one definition of "the row a day of leave produces".
  *
- * "Working day" is `classifyDay`'s verdict for that employee (shift work
- * days, company week-off rule, public holidays of their department) — the
+ * "Working day" is `classifyDay`'s verdict for that employee (work days of
+ * their shift, else the default shift; company week-off rule, public holidays of their department) — the
  * same verdict day-close uses, and the one an application's `days` is
  * counted with, so the days charged are the days stamped.
  *
@@ -25,12 +25,14 @@
  */
 import { Types } from 'mongoose';
 import { Attendance } from '../models/attendance.model.js';
+import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { Employee } from '../models/employee.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { Shift } from '../models/shift.model.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
+import { applyShiftRules, computeHours, resolveShift } from '../lib/attendance-hours.js';
 import { businessDayLabels, endOfBusinessDay, localDateOf, startOfBusinessDay, } from '../lib/business-day.js';
 import { AppError } from '../lib/errors.js';
 import { isDuplicateKey, proRataAllocation } from '../lib/leave-allocation.js';
@@ -69,13 +71,13 @@ const idOf = (value) => {
         return value._id;
     return String(value);
 };
+/**
+ * The work days of the shift that governs the employee's days — their own,
+ * else the company default (`resolveShift`, the chain late marks and
+ * day-close use) — else Mon–Sat.
+ */
 async function workDaysOf(employee) {
-    const shift = employee.shift;
-    if (shift instanceof Types.ObjectId) {
-        const doc = await Shift.findById(shift).select('workDays').lean().exec();
-        return doc?.workDays ?? DEFAULT_WORK_DAYS;
-    }
-    return shift?.workDays ?? DEFAULT_WORK_DAYS;
+    return (await resolveShift(employee))?.workDays ?? DEFAULT_WORK_DAYS;
 }
 /** The day labels in `[start, end]` that are working days for `employee`. */
 export async function leaveWorkingDays(start, end, employee) {
@@ -142,8 +144,10 @@ export async function stampLeaveDays(request, leaveType, employee) {
  *     a day already over, which day-close will not revisit: with the leave
  *     gone that day is the absence day-close would have recorded, so it
  *     becomes `absent` / `auto_absent` instead of silently paid;
- *   • rows it only tagged keep their status and lose `leaveRequestId` /
- *     `isPaidLeave`.
+ *   • rows with a check-in lose `leaveRequestId` / `isPaidLeave` and are
+ *     re-judged from their punches (`rejudgePunchedRows`): a worked day of a
+ *     cancelled unpaid leave becomes `present` / `late`, not a stale `absent`;
+ *   • any other row it tagged just loses the tag.
  * Returns the number of rows changed or removed.
  */
 export async function unstampLeaveDays(request, opts = {}) {
@@ -153,8 +157,42 @@ export async function unstampLeaveDays(request, opts = {}) {
     const created = { leaveRequestId, source: 'leave', 'checkIn.time': null };
     const closed = await Attendance.updateMany({ ...created, date: { $lt: today } }, { $set: { status: 'absent', source: 'auto_absent' }, ...untag }).exec();
     const removed = await Attendance.deleteMany({ ...created, date: { $gte: today } }).exec();
+    // Before the bulk untag, so a retry after a failure here still finds them.
+    const rejudged = await rejudgePunchedRows(leaveRequestId);
     const untagged = await Attendance.updateMany({ leaveRequestId }, untag).exec();
-    return closed.modifiedCount + removed.deletedCount + untagged.modifiedCount;
+    return closed.modifiedCount + removed.deletedCount + rejudged + untagged.modifiedCount;
+}
+/**
+ * Strip the leave from every punched row it tagged and judge the day from
+ * its punches — the same `computeHours` + `applyShiftRules` with the
+ * employee's shift (else the default shift) that check-out applies. A row
+ * still open keeps its stored hours (they are only persisted at check-out).
+ * Each row is saved on its own, untagged in the same write. Returns how many.
+ */
+async function rejudgePunchedRows(leaveRequestId) {
+    const rows = await Attendance.find({ leaveRequestId, 'checkIn.time': { $ne: null } }).exec();
+    if (rows.length === 0)
+        return 0;
+    const [cfg, defaultShift, owners] = await Promise.all([
+        AttendanceConfig.findOne({}).exec(),
+        Shift.findOne({ isDefault: true }).exec(),
+        Employee.find({ _id: { $in: [...new Set(rows.map((r) => String(r.employeeId)))] } })
+            .setOptions({ withDeleted: true })
+            .select('_id shift')
+            .populate('shift')
+            .exec(),
+    ]);
+    const shiftOf = new Map(await Promise.all(owners.map(async (e) => [String(e._id), await resolveShift(e, { defaultShift })])));
+    for (const row of rows) {
+        row.set('leaveRequestId', undefined);
+        row.set('isPaidLeave', undefined);
+        if (row.checkOut?.time)
+            row.totalWorkingHours = computeHours(row, row.checkOut.time);
+        applyShiftRules(row, shiftOf.get(String(row.employeeId)) ?? defaultShift, cfg);
+        // eslint-disable-next-line no-await-in-loop
+        await row.save();
+    }
+    return rows.length;
 }
 const balanceKeyOf = (request) => ({
     employeeId: request.employeeId,

@@ -87,9 +87,11 @@ const queryClient = new QueryClient({
       const silent = (mutation.meta as any)?.silent;
       if (silent) return;
       
-      // Do not toast for LOCATION_REQUIRED as it has a dedicated popup dialog
+      // No toast for LOCATION_REQUIRED or EXPENSE_REQUIRED_FOR_CHECKOUT: each
+      // opens a dedicated dialog (location help / today's expense form).
       const body = (err as AxiosError)?.response?.data as any;
-      if (body?.error?.code === 'LOCATION_REQUIRED') return;
+      const code = body?.error?.code;
+      if (code === 'LOCATION_REQUIRED' || code === 'EXPENSE_REQUIRED_FOR_CHECKOUT') return;
       
       toast.error(errorMessage(err));
     },

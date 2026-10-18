@@ -135,6 +135,9 @@ export default function MyLeavesPage(): ReactElement {
           {r.status === 'rejected' && (
             <RejectionReason reason={r.rejectedReason} title="Why your leave was rejected" />
           )}
+          {r.status === 'cancelled' && (
+            <RejectionReason reason={r.cancelReason} title="Why your leave was cancelled" />
+          )}
         </div>
       ),
     },

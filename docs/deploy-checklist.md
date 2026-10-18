@@ -585,16 +585,24 @@ Run these on the server before the `git pull`. They only read, except where a fi
    Employees now see payslips only for `locked` and `paid` cycles, so a `processed` cycle drops out of
    My Payslips until HR locks it.
 
-5. **Leave types and probation.** Each leave type now says whether employees on probation may take it,
-   and a type without the setting counts as **not allowed**. Probation lasts until `probationEndDate`,
-   else `confirmationDate`, else 6 months after joining, so after the deploy everyone who joined in the
-   last 6 months is refused every existing leave type until HR decides. List the types:
+5. **Leave types and probation.** Each leave type's *Allowed during probation* setting is now
+   enforced (before, it was stored but never checked). Probation lasts until `probationEndDate`, else
+   `confirmationDate`, else 6 months after joining. A type without the setting — and every new type —
+   **allows** leave during probation; unpaid types (Leave Without Pay and the like) are always open to
+   probationers. Existing types may carry a stored `false` that nobody chose (the old default), which
+   would now refuse everyone who joined in the last 6 months. List the types:
 
    ```bash
-   mongosh hrms --quiet --eval 'db.leavetypes.find({ isActive: { $ne: false } }, { name: 1, code: 1, probationAllowed: 1 }).forEach(printjson)'
+   mongosh hrms --quiet --eval 'db.leavetypes.find({ isActive: { $ne: false } }, { name: 1, code: 1, paidLeave: 1, probationAllowed: 1 }).forEach(printjson)'
    ```
 
-   Ask HR which ones probationers may take; tick them in step E.6.
+   So that existing types keep today's behaviour (open to everyone), open them all once:
+
+   ```bash
+   mongosh hrms --quiet --eval 'printjson(db.leavetypes.updateMany({ probationAllowed: { $ne: true } }, { $set: { probationAllowed: true } }))'
+   ```
+
+   Then ask HR which types must **not** be available during probation; untick them in step E.6.
 
 6. **Reporting managers.** Managers will see only the requests of employees whose *Reporting manager*
    is set to them:
@@ -740,8 +748,9 @@ indexes. It runs through `tsx`, so only where dev dependencies are installed:
    the only method ticked, tick another (for example Manual) first. Until then, anyone using face gets
    `400 METHOD_UNAVAILABLE`.
 
-6. **Probation** (A.5). Leaves → Leave Types: tick **Allowed during probation** on the types probationers
-   may take.
+6. **Probation** (A.5). Leave types now allow leave during probation by default. Review
+   `probationAllowed` per leave type: in Leaves → Leave Types, **untick** *Allowed during probation* on
+   the types that must not be available to employees on probation (unpaid types stay open regardless).
 
 ### F. What changes for users (tell HR)
 

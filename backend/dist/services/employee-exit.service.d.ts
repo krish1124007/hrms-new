@@ -7,7 +7,7 @@
  *   • approved leave starting after the exit day is cancelled through the one
  *     cancellation path (`cancelAndReleaseLeave`) — its attendance rows go,
  *     its days are refunded — because nobody takes leave from a job they have
- *     left;
+ *     left; pending leave starting after it is rejected ("Employee exited");
  *   • their login is deactivated;
  *   • HR (everyone holding `employees.update`) gets one in-app notice saying
  *     which assets to collect and which loans are still open.
@@ -23,8 +23,10 @@ type ExitingEmployee = Pick<IEmployee, '_id' | 'firstName' | 'lastName' | 'emplo
 };
 /**
  * Cancel (and release) every approved leave of the employee that starts after
- * `day` (a day label), and deactivate their login. Idempotent, so a failed
- * exit can simply be run again. Returns how many requests were cancelled.
+ * `day` (a day label), reject every pending one that does (reason
+ * "Employee exited" — nobody should approve leave from a job already left),
+ * and deactivate their login. Idempotent, so a failed exit can simply be run
+ * again. Returns how many approved requests were cancelled.
  */
 export declare function releaseOnExit(employee: ExitingEmployee, day: Date): Promise<number>;
 /**

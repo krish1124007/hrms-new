@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { classifyDay, listHolidaysBetween, type HolidayLite } from './day-classifier.js';
 import { Holiday } from '../models/holiday.model.js';
 import { DEFAULT_WEEK_OFF_RULE, DEFAULT_WORK_DAYS } from './week-off.js';
+import { localDateOf } from './business-day.js';
 
 const deptA = new Types.ObjectId();
 const deptB = new Types.ObjectId();
@@ -131,7 +132,8 @@ describe('listHolidaysBetween', () => {
       { name: 'First day', date: new Date(2026, 9, 5), type: 'public' },
       { name: 'Optional', date: new Date(2026, 9, 8), type: 'optional' },
       { name: 'Dept only', date: new Date(2026, 9, 9), type: 'public', departments: [deptA] },
-      { name: 'Last day evening', date: new Date(2026, 9, 12, 18, 30), type: 'public' },
+      // 18:30 business time (IST) on the last day — holidays are matched by business day.
+      { name: 'Last day evening', date: new Date('2026-10-12T18:30:00.000+05:30'), type: 'public' },
       { name: 'After', date: new Date(2026, 9, 13), type: 'public' },
     ]);
 
@@ -144,6 +146,15 @@ describe('listHolidaysBetween', () => {
     expect(String(deptRow?.departments[0])).toBe(String(deptA));
     // Only the lite fields come back.
     expect(Object.keys(rows[0]).sort()).toEqual(['date', 'departments', 'type']);
+  });
+
+  it('matches a date-only holiday (stored at UTC midnight) to the business day it names, whatever the server TZ', async () => {
+    await Holiday.create({ name: 'Founders Day', date: new Date('2026-10-14'), type: 'public' });
+    const day = localDateOf(new Date('2026-10-14T00:00:00.000Z'));
+    const holidays = await listHolidaysBetween(day, day);
+    expect(holidays).toHaveLength(1);
+    expect(classifyDay(day, ctx({ holidays }))).toBe('holiday');
+    expect(classifyDay(localDateOf(new Date('2026-10-13T00:00:00.000Z')), ctx({ holidays }))).toBe('working');
   });
 
   it('feeds classifyDay end to end', async () => {

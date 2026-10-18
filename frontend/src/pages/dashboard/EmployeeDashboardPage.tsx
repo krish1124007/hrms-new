@@ -11,7 +11,7 @@
  * stats, no pending-approval queue, no audit feed.
  */
 
-import { useRef, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -40,9 +40,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { useAuth } from '@/hooks/use-auth';
 import {
   useTodayAttendance,
@@ -55,13 +52,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '@/lib/dashboard.api';
 import { type Attendance } from '@/lib/attendance.api';
 import { payrollApi } from '@/lib/payroll.api';
-import { expenseCategoriesApi, expenseClaimsApi } from '@/lib/expense-claims.api';
-import { documentsApi } from '@/lib/documents.api';
 import { noticesApi, type Notice } from '@/lib/notices.api';
 import { useEffect } from 'react';
 import { Megaphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { LocationPermissionDialog } from '@/components/common/LocationPermissionDialog';
+import { CheckoutExpenseDialog, isExpenseRequiredError } from '@/components/attendance/CheckoutExpenseDialog';
 
 function fmtTime(iso?: string): string {
   if (!iso) return '—';
@@ -113,13 +109,9 @@ export default function EmployeeDashboardPage(): ReactElement {
   const checkOut = useCheckOut();
   const qc = useQueryClient();
 
-  // Expense-before-checkout modal state
+  // Today's expense form — opened only when a check-out answers
+  // EXPENSE_REQUIRED_FOR_CHECKOUT (company policy `expenseBeforeCheckout`).
   const [expenseOpen, setExpenseOpen] = useState(false);
-  const [expCategory, setExpCategory] = useState<string>('');
-  const [expAmount, setExpAmount] = useState<string>('');
-  const [expReceiptUrl, setExpReceiptUrl] = useState<string>('');
-  const [expUploading, setExpUploading] = useState(false);
-  const [expDescription, setExpDescription] = useState<string>('');
   const [activeNotice, setActiveNotice] = useState<Notice | null>(null);
 
   const [locFailure, setLocFailure] = useState<{
@@ -152,82 +144,26 @@ export default function EmployeeDashboardPage(): ReactElement {
     },
   });
 
-  const categoriesQ = useQuery({
-    queryKey: ['expense-categories'],
-    queryFn: () => expenseCategoriesApi.list({ limit: 50 }),
-    enabled: expenseOpen, // only fetch when the modal opens
-  });
-  const categories = categoriesQ.data?.data ?? [];
-  // Default to "Daily expense" (code DAILY) when categories load
-  const defaultCategoryId =
-    categories.find((c) => c.code === 'DAILY')?._id ?? categories[0]?._id ?? '';
-
-  // Set once the expense for this modal session exists. If the check-out half
-  // then fails, retrying must NOT create a second claim — that is how people
-  // ended up with duplicate expenses for one day.
-  const expenseCreatedRef = useRef(false);
-
-  const submitExpenseAndCheckOut = useMutation({
-    mutationFn: async (): Promise<void> => {
-      const today = new Date().toISOString();
-      if (!expenseCreatedRef.current) {
-        await expenseClaimsApi.create({
-          category: expCategory || defaultCategoryId,
-          amount: Number(expAmount),
-          date: today,
-          description: expDescription || "Today's expense",
-          currency: 'INR',
-          status: 'pending',
-          receiptUrls: expReceiptUrl
-            ? [{ name: 'Receipt', fileUrl: expReceiptUrl }]
-            : [],
-        });
-        expenseCreatedRef.current = true;
-      }
-      
-      const payload: any = { method: 'manual' };
-      const res = await getLocation();
-      if (res.ok) {
-        payload.location = res.loc;
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        checkOut.mutate(
-          payload,
-          {
-            onSuccess: () => resolve(),
-            onError: (err: any) => {
-              if (isLocationRequiredError(err)) {
-                setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind: 'out' });
-              }
-              reject(err);
-            },
-          },
-        );
-      });
-    },
-    onSuccess: () => {
+  /**
+   * Check out straight away. Only if the server answers
+   * EXPENSE_REQUIRED_FOR_CHECKOUT does today's expense form open; once the
+   * claim is filed it calls this again. LOCATION_REQUIRED opens the
+   * location help instead. Other errors are toasted by the mutation.
+   */
+  const submitCheckOut = async (known?: { lat: number; lng: number }): Promise<void> => {
+    const payload: any = { method: 'manual' };
+    const res: LocationResult = known ? { ok: true, loc: known } : await getLocation();
+    if (res.ok) payload.location = res.loc;
+    try {
+      await checkOut.mutateAsync(payload);
       setExpenseOpen(false);
-      setExpAmount('');
-      setExpDescription('');
-      setExpReceiptUrl('');
-      expenseCreatedRef.current = false;
-      qc.invalidateQueries({ queryKey: ['attendance', 'today'] });
-      qc.invalidateQueries({ queryKey: ['attendance', 'my'] });
-      toast.success('Expense saved · Checked out');
-    },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Could not check out');
-    },
-  });
-
-  const handleCheckOutClick = (): void => {
-    // Always open the expense modal — company policy is that every checkout
-    // is preceded by today's expense entry. Backend enforces this anyway
-    // (`EXPENSE_REQUIRED_FOR_CHECKOUT`), the modal makes it a one-click flow.
-    expenseCreatedRef.current = false;
-    setExpCategory(defaultCategoryId);
-    setExpenseOpen(true);
+    } catch (e: unknown) {
+      if (isExpenseRequiredError(e)) {
+        setExpenseOpen(true);
+      } else if (isLocationRequiredError(e)) {
+        setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind: 'out' });
+      }
+    }
   };
 
   const submitCheckIn = async (): Promise<void> => {
@@ -264,7 +200,7 @@ export default function EmployeeDashboardPage(): ReactElement {
       const payload: any = { method: 'manual', location: res.loc };
       checkIn.mutate(payload);
     } else {
-      submitExpenseAndCheckOut.mutate();
+      void submitCheckOut(res.loc);
     }
   };
 
@@ -373,7 +309,7 @@ export default function EmployeeDashboardPage(): ReactElement {
                 <Button
                   size="lg"
                   variant="destructive"
-                  onClick={handleCheckOutClick}
+                  onClick={() => void submitCheckOut()}
                   loading={checkOut.isPending}
                 >
                   <LogOut className="size-4" /> Check out
@@ -576,138 +512,12 @@ export default function EmployeeDashboardPage(): ReactElement {
         </CardContent>
       </Card>
 
-      {/* Expense-before-checkout modal — opens whenever the employee clicks
-          "Check out". Submitting the expense and the check-out happen as one
-          atomic mutation so the user sees a single loading state. */}
-      <Dialog
+      <CheckoutExpenseDialog
         open={expenseOpen}
-        onClose={() => !submitExpenseAndCheckOut.isPending && setExpenseOpen(false)}
-        size="md"
-      >
-        <DialogHeader>
-          <DialogTitle>Submit today's expense to check out</DialogTitle>
-        </DialogHeader>
-        <DialogBody className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Company policy: every check-out requires today's expense entry.
-            Fill it in below and click <span className="font-medium text-foreground">Submit & Check out</span>.
-          </p>
-          <div>
-            <Label htmlFor="exp-category">Category *</Label>
-            <Select
-              id="exp-category"
-              value={expCategory || defaultCategoryId}
-              onChange={(e) => setExpCategory(e.target.value)}
-              disabled={categoriesQ.isLoading}
-            >
-              {categoriesQ.isLoading ? (
-                <option>Loading…</option>
-              ) : categories.length === 0 ? (
-                <option value="">No categories — ask HR to create one</option>
-              ) : (
-                categories.map((c) => (
-                  <option key={c._id} value={c._id}>
-                    {c.name}
-                  </option>
-                ))
-              )}
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="exp-amount">Amount (₹)</Label>
-            <Input
-              id="exp-amount"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.01"
-              value={expAmount}
-              onChange={(e) => setExpAmount(e.target.value)}
-              placeholder="0"
-              autoFocus
-            />
-          </div>
-          <div>
-            <Label htmlFor="exp-description">Description</Label>
-            <Input
-              id="exp-description"
-              value={expDescription}
-              onChange={(e) => setExpDescription(e.target.value)}
-              placeholder="What was this for?"
-            />
-          </div>
-          {/* A claim for money needs a bill — the server enforces it. Without
-              this field an employee with a real expense could not check out
-              at all: the claim was rejected and the check-out never ran. */}
-          {Number(expAmount) > 0 && (
-            <div>
-              <Label htmlFor="exp-receipt">Bill / receipt *</Label>
-              {expReceiptUrl ? (
-                <p className="mt-1 flex items-center gap-2 text-xs text-success">
-                  <Receipt className="size-3.5" /> Bill attached
-                  <button
-                    type="button"
-                    className="text-muted-foreground underline"
-                    onClick={() => setExpReceiptUrl('')}
-                  >
-                    remove
-                  </button>
-                </p>
-              ) : (
-                <Input
-                  id="exp-receipt"
-                  type="file"
-                  accept="image/*,application/pdf"
-                  disabled={expUploading}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    try {
-                      setExpUploading(true);
-                      const res = await documentsApi.upload(file, {
-                        folder: 'expenses',
-                        category: 'Receipt',
-                      });
-                      setExpReceiptUrl(res.data.file.url);
-                    } catch {
-                      toast.error('Could not upload the bill. Please try again.');
-                    } finally {
-                      setExpUploading(false);
-                    }
-                  }}
-                />
-              )}
-              <p className="mt-1 text-xs text-muted-foreground">
-                {expUploading
-                  ? 'Uploading…'
-                  : 'Required to claim an amount. Enter 0 if there was no expense today.'}
-              </p>
-            </div>
-          )}
-        </DialogBody>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => setExpenseOpen(false)}
-            disabled={submitExpenseAndCheckOut.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => submitExpenseAndCheckOut.mutate()}
-            loading={submitExpenseAndCheckOut.isPending}
-            disabled={
-              (!expCategory && !defaultCategoryId) ||
-              expUploading ||
-              // Server rejects a money claim with no bill, and that failure
-              // also blocks the check-out — so stop it here with a clear cause.
-              (Number(expAmount) > 0 && !expReceiptUrl)
-            }
-          >
-            <LogOut className="size-4" /> Submit & Check out
-          </Button>
-        </DialogFooter>
-      </Dialog>
+        onClose={() => setExpenseOpen(false)}
+        onFiled={() => void submitCheckOut()}
+        checkingOut={checkOut.isPending}
+      />
 
       <Dialog
         open={!!activeNotice}

@@ -17,6 +17,7 @@ const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
  * only on their own.
  */
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
+const DECIDED_MEANWHILE_MESSAGE = 'This claim was decided meanwhile — reload and try again';
 /**
  * Tell the claimant's reporting manager about a claim waiting for them — not
  * when the manager is the one who filed it. Never throws.
@@ -332,11 +333,26 @@ export async function deleteClaim(req, res) {
     void audit({ action: 'delete', entity: 'ExpenseClaim', entityId: String(doc._id) });
     res.json({ success: true, message: 'Expense claim deleted' });
 }
-export const approveClaimSchema = z.object({
+/** A bodyless approve (no `acceptedAmount`) approves the full amount. */
+export const approveClaimSchema = z
+    .object({
     acceptedAmount: z.coerce.number().min(0).optional(),
-});
+})
+    .default({});
+/**
+ * Record a decision on a still-pending claim — one conditional write, so of
+ * two deciders racing only one lands; the other gets 409 `DECIDED_MEANWHILE`
+ * and nobody is notified twice.
+ */
+async function decidePendingClaim(id, set) {
+    const userId = getUserId();
+    const decided = await ExpenseClaim.findOneAndUpdate({ _id: id, status: 'pending' }, { $set: { ...set, approvedAt: new Date(), ...(userId ? { approvedBy: new Types.ObjectId(userId) } : {}) } }, { new: true, runValidators: true }).exec();
+    if (!decided)
+        throw new AppError(DECIDED_MEANWHILE_MESSAGE, 409, 'DECIDED_MEANWHILE');
+    return decided;
+}
 export async function approveClaim(req, res) {
-    const body = req.body;
+    const body = (req.body ?? {});
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
@@ -345,19 +361,19 @@ export async function approveClaim(req, res) {
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot approve a ${doc.status} claim`);
     }
-    doc.status = 'approved';
-    if (body.acceptedAmount !== undefined) {
-        doc.acceptedAmount = body.acceptedAmount;
+    // Payroll pays `acceptedAmount ?? amount`: approving more than was claimed
+    // would pay out money nobody asked for.
+    if (body.acceptedAmount !== undefined && body.acceptedAmount > doc.amount) {
+        throw new ValidationAppError(`The accepted amount (${formatInr(body.acceptedAmount)}) cannot exceed the amount claimed (${formatInr(doc.amount)})`);
     }
-    const userId = getUserId();
-    if (userId)
-        doc.approvedBy = new Types.ObjectId(userId);
-    doc.approvedAt = new Date();
-    await doc.save();
-    void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'approved' } });
-    const accepted = doc.acceptedAmount;
-    await notifyClaimant(doc, 'approved', accepted !== undefined && accepted !== doc.amount ? `was approved for ${formatInr(accepted)}.` : 'was approved.');
-    res.json({ success: true, data: doc });
+    const decided = await decidePendingClaim(doc._id, {
+        status: 'approved',
+        ...(body.acceptedAmount !== undefined ? { acceptedAmount: body.acceptedAmount } : {}),
+    });
+    void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(decided._id), after: { status: 'approved' } });
+    const accepted = decided.acceptedAmount;
+    await notifyClaimant(decided, 'approved', accepted !== undefined && accepted !== decided.amount ? `was approved for ${formatInr(accepted)}.` : 'was approved.');
+    res.json({ success: true, data: decided });
 }
 export async function rejectClaim(req, res) {
     const body = req.body;
@@ -369,16 +385,10 @@ export async function rejectClaim(req, res) {
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a ${doc.status} claim`);
     }
-    doc.status = 'rejected';
-    doc.rejectedReason = body.reason;
-    const userId = getUserId();
-    if (userId)
-        doc.approvedBy = new Types.ObjectId(userId);
-    doc.approvedAt = new Date();
-    await doc.save();
-    void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(doc._id), after: { status: 'rejected' } });
-    await notifyClaimant(doc, 'rejected', `was rejected. Reason: ${body.reason}`);
-    res.json({ success: true, data: doc });
+    const decided = await decidePendingClaim(doc._id, { status: 'rejected', rejectedReason: body.reason });
+    void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(decided._id), after: { status: 'rejected' } });
+    await notifyClaimant(decided, 'rejected', `was rejected. Reason: ${body.reason}`);
+    res.json({ success: true, data: decided });
 }
 /**
  * Manual reimbursement (cash, a separate transfer). Approved claims are
@@ -391,6 +401,7 @@ export async function reimburseClaim(req, res) {
     const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
     if (!doc)
         throw new NotFoundError('Expense claim not found');
+    await assertNotSelfApproval(req, doc.employeeId, 'You cannot reimburse your own claim');
     await assertCanDecide(req, doc.employeeId, 'expenses');
     if (doc.status !== 'approved') {
         throw new ValidationAppError(`Can only reimburse approved claims (current: ${doc.status})`);

@@ -1,1 +1,0 @@
-const e="Asia/Kolkata",a="+05:30",o=new Intl.DateTimeFormat("en-CA",{timeZone:e,year:"numeric",month:"2-digit",day:"2-digit"});function s(t){return o.format(t instanceof Date?t:new Date(t))}function i(t=new Date){return s(t)}function r(t,n){return new Date(`${t}T${n}:00${a}`)}export{r as a,s as b,i as t};

@@ -112,7 +112,9 @@ export function payrollEmployeeFilter(year, month) {
  * Counts the window's days from the attendance rows, each row in exactly one
  * bucket:
  *   - `weekend` / `holiday` rows → weekly off (never loss of pay);
- *   - `half_day` → half day, half a day's loss of pay unless `isPaidLeave`;
+ *   - `half_day` → half day, half a day's loss of pay unless `isPaidLeave` —
+ *     and a paid half day of leave on a day already over with no check-in
+ *     costs the unworked half (0.5) too;
  *   - any row with `isPaidLeave: true` → paid leave, never loss of pay (a day
  *     of paid leave the employee also punched on counts once, as paid);
  *   - `absent` → a day's loss of pay: unpaid leave when it is a leave row
@@ -137,9 +139,10 @@ export async function dayTally(employeeId, window, opts = {}) {
     };
     const { from, to } = instantsOf(window.start, window.end);
     const rows = await Attendance.find({ employeeId, date: { $gte: from, $lt: to } })
-        .select('date status isPaidLeave leaveRequestId lateBy')
+        .select('date status isPaidLeave leaveRequestId lateBy checkIn.time')
         .lean()
         .exec();
+    const today = startOfBusinessDay(new Date()).getTime();
     const counted = new Set();
     for (const row of rows) {
         counted.add(dayLabel(row.date).getTime());
@@ -150,8 +153,15 @@ export async function dayTally(employeeId, window, opts = {}) {
         }
         else if (row.status === 'half_day') {
             tally.halfDay += 1;
-            if (!paid)
+            const leaveStamped = row.leaveRequestId != null || row.isPaidLeave != null;
+            if (!paid) {
                 tally.lopDays += 0.5;
+            }
+            else if (leaveStamped && !row.checkIn?.time && dayLabel(row.date).getTime() < today) {
+                // A paid half day of leave on a day that is over, with no punch: the
+                // other half was never worked.
+                tally.lopDays += 0.5;
+            }
         }
         else if (paid) {
             tally.paidLeave += 1;

@@ -251,13 +251,13 @@ export declare function generatePayslips(req: Request, res: Response): Promise<v
 export declare function lockCycle(req: Request, res: Response): Promise<void>;
 export declare const markPaidSchema: z.ZodObject<{
     paymentRef: z.ZodString;
-    paidAt: z.ZodOptional<z.ZodDate>;
+    paidAt: z.ZodOptional<z.ZodNullable<z.ZodDate>>;
 }, "strip", z.ZodTypeAny, {
     paymentRef: string;
-    paidAt?: Date | undefined;
+    paidAt?: Date | null | undefined;
 }, {
     paymentRef: string;
-    paidAt?: Date | undefined;
+    paidAt?: Date | null | undefined;
 }>;
 /**
  * locked → paid: every record is marked paid, then loans/claims settle. The

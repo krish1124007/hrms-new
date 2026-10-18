@@ -35,6 +35,9 @@ export function RegularizationRequestDialog({ open, onClose }: RegularizationReq
   const [reason, setReason] = useState('');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
+  // A check-out-only request on a night shift: the punch-out was the next
+  // morning, after the check-in already recorded the evening before.
+  const [nextDay, setNextDay] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,8 +46,11 @@ export function RegularizationRequestDialog({ open, onClose }: RegularizationReq
     setReason('');
     setCheckIn('');
     setCheckOut('');
+    setNextDay(false);
     setError(null);
   }, [open]);
+
+  const checkOutOnly = !!checkOut && !checkIn;
 
   const submit = (): void => {
     if (!date || date > today) {
@@ -58,8 +64,10 @@ export function RegularizationRequestDialog({ open, onClose }: RegularizationReq
     const input: RegularizationRequestInput = { date, reason: reason.trim() };
     const inAt = checkIn ? businessInstant(date, checkIn) : null;
     let outAt = checkOut ? businessInstant(date, checkOut) : null;
-    // A check-out at or before the check-in is the next morning (a night shift).
+    // A check-out at or before the check-in is the next morning (a night shift);
+    // with no check-in given, the employee says so with the "next day" toggle.
     if (inAt && outAt && outAt.getTime() <= inAt.getTime()) outAt = new Date(outAt.getTime() + DAY_MS);
+    else if (!inAt && outAt && nextDay) outAt = new Date(outAt.getTime() + DAY_MS);
     if (inAt) input.checkIn = inAt.toISOString();
     if (outAt) input.checkOut = outAt.toISOString();
     setError(null);
@@ -109,6 +117,18 @@ export function RegularizationRequestDialog({ open, onClose }: RegularizationReq
             />
           </div>
         </div>
+        {checkOutOnly && (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              id="reg-out-next-day"
+              type="checkbox"
+              checked={nextDay}
+              onChange={(e) => setNextDay(e.target.checked)}
+              className="size-4"
+            />
+            Check-out was the next day (night shift)
+          </label>
+        )}
         <p className="text-xs text-muted-foreground">
           Both optional. Give only the punch that is wrong or missing — the other one stays as
           recorded. A check-out earlier than the check-in counts as the next morning (night shift).

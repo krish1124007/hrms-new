@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useImportEmployees } from '@/hooks/use-systemcore';
+import type { EmployeeImportResult } from '@/lib/systemcore.api';
 import { toast } from 'sonner';
 
 interface EmployeeImportModalProps {
@@ -29,6 +30,8 @@ interface ParsedRow {
   departmentName?: string;
   designationName?: string;
   status?: string;
+  /** Needed for an exit status (resigned / terminated / inactive). */
+  exitDate?: string;
   employmentType?: string;
   workLocation?: string;
   bankName?: string;
@@ -42,10 +45,7 @@ interface ParsedRow {
 export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps): ReactElement {
   const [file, setFile] = useState<File | null>(null);
   const [previewRows, setPreviewRows] = useState<ParsedRow[]>([]);
-  const [importResult, setImportResult] = useState<{
-    created: number;
-    failed: Array<{ email: string; reason: string }>;
-  } | null>(null);
+  const [importResult, setImportResult] = useState<EmployeeImportResult | null>(null);
 
   const importMutation = useImportEmployees();
 
@@ -79,6 +79,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
           const departmentKey = findKey(/^department$/i);
           const designationKey = findKey(/^designation$/i);
           const statusKey = findKey(/^status$/i);
+          const exitDateKey = findKey(/exit.*date|last.*working.*day|relieving.*date/i);
           const employmentTypeKey = findKey(/employment.*type/i);
           const workLocationKey = findKey(/work.*location/i);
           const bankNameKey = findKey(/bank.*name/i);
@@ -110,6 +111,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
             departmentName: String(row[departmentKey ?? ''] ?? '').trim(),
             designationName: String(row[designationKey ?? ''] ?? '').trim(),
             status: String(row[statusKey ?? ''] ?? '').trim().toLowerCase(),
+            exitDate: parseDate(row[exitDateKey ?? '']),
             employmentType: String(row[employmentTypeKey ?? ''] ?? '').trim().toLowerCase(),
             workLocation: String(row[workLocationKey ?? ''] ?? '').trim(),
             bankName: String(row[bankNameKey ?? ''] ?? '').trim(),
@@ -172,6 +174,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
       if (r.departmentName) p.departmentName = r.departmentName;
       if (r.designationName) p.designationName = r.designationName;
       if (r.status) p.status = r.status;
+      if (r.exitDate) p.exitDate = r.exitDate;
       if (r.employmentType) p.employmentType = r.employmentType;
       if (r.workLocation) p.workLocation = r.workLocation;
       if (r.bankName || r.accountNumber || r.ifscCode) {
@@ -295,7 +298,8 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
               <div>
                 <h4 className="font-semibold text-sm">Import Finished</h4>
                 <p className="text-xs mt-0.5">
-                  Successfully processed {importResult.created} employees.
+                  {importResult.created} created · {importResult.updated ?? 0} updated ·{' '}
+                  {importResult.skipped ?? 0} skipped · {importResult.errors ?? 0} with errors
                 </p>
               </div>
             </div>
@@ -304,7 +308,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
               <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-destructive font-semibold text-xs">
                   <AlertCircle className="size-4" />
-                  Failed Imports ({importResult.failed.length}):
+                  Skipped or failed rows ({importResult.failed.length}):
                 </div>
                 <ul className="text-xs space-y-1 max-h-40 overflow-y-auto text-destructive/90">
                   {importResult.failed.map((err, i) => (

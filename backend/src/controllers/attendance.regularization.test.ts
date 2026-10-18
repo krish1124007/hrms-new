@@ -15,6 +15,7 @@ import { createUser, createEmployeeFor, type RoleSlug } from '../test/factories.
 import { Attendance } from '../models/attendance.model.js';
 import { Department } from '../models/department.model.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
+import { Holiday } from '../models/holiday.model.js';
 import { Notification } from '../models/notification.model.js';
 import { Shift } from '../models/shift.model.js';
 import type { IUser } from '../models/user.model.js';
@@ -287,6 +288,54 @@ describe('requesting a regularization', () => {
     expect(res.body.error.message).toBe('Cancel the leave before regularizing this day');
     const row = await rowOf(who, YESTERDAY);
     expect(row!.regularization).toBeUndefined();
+  });
+
+  describe('non-working days', () => {
+    it('a weekend day with no row is refused, NOT_A_WORKING_DAY, and no row is left behind', async () => {
+      const who = await person();
+
+      // Sun 11 Oct 2026: the company week-off.
+      const res = await requestRegularization(who, { date: '2026-10-11', reason: 'Worked from home' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('NOT_A_WORKING_DAY');
+      expect(await rowOf(who, '2026-10-11')).toBeNull();
+    });
+
+    it("a public holiday, or a day outside the employee's shift, is refused the same way", async () => {
+      const who = await person();
+      await Holiday.create({ name: 'Founders Day', date: new Date('2026-10-12'), type: 'public' });
+      const monFri = await Shift.create({ name: 'Mon-Fri', startTime: '09:30', endTime: '18:00', workDays: [1, 2, 3, 4, 5] });
+      const weekdays = await person('employee', { shift: monFri._id });
+
+      const holiday = await requestRegularization(who, { date: '2026-10-12', reason: 'Came in anyway' });
+      // Sat 10 Oct is the 2nd Saturday: a company working day, but not on this shift.
+      const saturday = await requestRegularization(weekdays, { date: '2026-10-10', reason: 'Came in anyway' });
+
+      expect(holiday.status).toBe(400);
+      expect(holiday.body.error.code).toBe('NOT_A_WORKING_DAY');
+      expect(saturday.status).toBe(400);
+      expect(saturday.body.error.code).toBe('NOT_A_WORKING_DAY');
+      expect(await Attendance.countDocuments({ employeeId: { $in: [who.emp._id, weekdays.emp._id] } })).toBe(0);
+    });
+
+    it('a non-working day the employee actually punched on can still be regularized', async () => {
+      const who = await person();
+      await Attendance.create({
+        employeeId: who.emp._id,
+        date: label('2026-10-11'),
+        status: 'present',
+        checkIn: { time: ist('2026-10-11', '10:00'), method: 'manual' },
+      });
+
+      const res = await requestRegularization(who, {
+        date: '2026-10-11',
+        reason: 'Forgot to punch out',
+        checkOut: ist('2026-10-11', '16:00').toISOString(),
+      });
+
+      expect(res.status).toBe(201);
+    });
   });
 
   describe('requested times', () => {
@@ -824,6 +873,46 @@ describe('rejecting a regularization', () => {
     expect(row!.regularization!.approvedAt).toBeInstanceOf(Date);
   });
 
+  it('removes the bare row the request itself created when the day is not a working day (holiday declared since)', async () => {
+    const who = await person();
+    const hr = await approver();
+    const id = await requestDay(who, {});
+    await Holiday.create({ name: 'Declared later', date: new Date(YESTERDAY), type: 'public' });
+
+    const res = await decide(hr, id, 'rejected');
+
+    expect(res.status).toBe(200);
+    // No `absent` row stays behind for payroll to dock.
+    expect(await rowOf(who, YESTERDAY)).toBeNull();
+    expect(await Attendance.countDocuments({ employeeId: who.emp._id }).setOptions({ withDeleted: true })).toBe(0);
+  });
+
+  it("keeps a pre-existing row on a non-working day: only a row the request created is removed", async () => {
+    const who = await person();
+    const hr = await approver();
+    await Attendance.create({ employeeId: who.emp._id, date: label(YESTERDAY), status: 'absent', source: 'auto_absent' });
+    const id = await requestDay(who, {});
+    await Holiday.create({ name: 'Declared later', date: new Date(YESTERDAY), type: 'public' });
+
+    expect((await decide(hr, id, 'rejected')).status).toBe(200);
+
+    const row = await rowOf(who, YESTERDAY);
+    expect(row).not.toBeNull();
+    expect(row!.regularization!.status).toBe('rejected');
+  });
+
+  it('keeps a row the request created on a working day: the day was not worked, so it stays absent', async () => {
+    const who = await person();
+    const hr = await approver();
+    const id = await requestDay(who, {});
+
+    expect((await decide(hr, id, 'rejected')).status).toBe(200);
+
+    const row = await rowOf(who, YESTERDAY);
+    expect(row!.status).toBe('absent');
+    expect(row!.regularization!.status).toBe('rejected');
+  });
+
   it('a reason-only request on an auto-absent day stays absent when rejected', async () => {
     const who = await person();
     const hr = await approver();
@@ -967,6 +1056,20 @@ describe('HR correction while a request is pending', () => {
     expect(row!.regularization!.status).toBe('pending');
     expect(row!.regularization!.reason).toBe('Biometric was down');
     expect(row!.checkIn).toBeUndefined();
+  });
+
+  it("nobody corrects their own record, even with attendance.manage: 403 SELF_APPROVAL, row untouched", async () => {
+    const hr = await person('hr_manager');
+    const own = await Attendance.create({ employeeId: hr.emp._id, date: label(YESTERDAY), status: 'absent', source: 'auto_absent' });
+
+    const res = await correct(hr, own._id);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('SELF_APPROVAL');
+    const row = await rowOf(hr, YESTERDAY);
+    expect(row!.status).toBe('absent');
+    expect(row!.checkIn).toBeUndefined();
+    expect(row!.isRegularized).toBe(false);
   });
 
   it('works again once the request is decided', async () => {

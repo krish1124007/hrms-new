@@ -317,6 +317,25 @@ export interface EmployeeStats {
   exitsThisMonth: number;
 }
 
+/** One import row's outcome, as `POST /employees/import` reports it. */
+export interface EmployeeImportRow {
+  row: number;
+  email?: string;
+  employeeId?: string;
+  status: 'created' | 'updated' | 'skipped' | 'error';
+  message: string;
+}
+
+export interface EmployeeImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+  /** The skipped and errored rows, the way older clients read them. */
+  failed: Array<{ email: string; reason: string }>;
+  rows: EmployeeImportRow[];
+}
+
 export const employeesApi = {
   list: async (params?: Record<string, unknown>): Promise<ListResponse<Employee>> =>
     (await api.get('/employees', { params })).data,
@@ -328,7 +347,9 @@ export const employeesApi = {
     (await api.get(`/employees/${id}`)).data,
   create: async (input: EmployeeInput): Promise<ItemResponse<Employee>> =>
     (await api.post('/employees', input)).data,
-  import: async (employees: Omit<EmployeeInput, 'createUserAccount' | 'roleId'>[]): Promise<{ success: boolean; data: { created: number; failed: any[] } }> =>
+  import: async (
+    employees: Omit<EmployeeInput, 'createUserAccount' | 'roleId'>[],
+  ): Promise<{ success: boolean; data: EmployeeImportResult }> =>
     (await api.post('/employees/import', { employees })).data,
   update: async (id: string, input: Partial<EmployeeInput>): Promise<ItemResponse<Employee>> =>
     (await api.patch(`/employees/${id}`, input)).data,

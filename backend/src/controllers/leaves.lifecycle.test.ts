@@ -30,6 +30,7 @@ import { LeaveBalance } from '../models/leave-balance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType, type ILeaveType } from '../models/leave-type.model.js';
 import { Notification } from '../models/notification.model.js';
+import { Shift } from '../models/shift.model.js';
 import type { IUser } from '../models/user.model.js';
 
 vi.mock('../services/email.service.js', () => ({
@@ -179,6 +180,29 @@ describe('approval stamps attendance', () => {
   });
 });
 
+describe('working days follow the default shift', () => {
+  it('an employee without a shift on a Mon–Fri default shift: a leave over a weekend charges 5 days, not 6', async () => {
+    await Shift.create({
+      name: 'Default Mon-Fri',
+      startTime: '09:30',
+      endTime: '18:30',
+      workDays: [1, 2, 3, 4, 5],
+      isDefault: true,
+    });
+    const type = await leaveType();
+    // Tue 27 · Wed 28 · Thu 29 · Fri 30 · Sat 31 (5th Sat: company working day, off this shift) · Sun 1 · Mon 2.
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-27', endDate: '2026-11-02' });
+    expect(applied.status).toBe(201);
+    expect(applied.body.data.days).toBe(5);
+
+    expect((await approve(applied.body.data._id)).status).toBe(200);
+
+    const rows = await rowsOf(emp);
+    expect(rows.map((r) => isoDay(r.date))).toEqual(['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-11-02']);
+    expect(await usedOf(type)).toBe(5);
+  });
+});
+
 describe('balances', () => {
   it('cancelling an approved leave removes the stamped rows and restores used', async () => {
     const type = await leaveType();
@@ -269,6 +293,32 @@ describe('leave type rules', () => {
     const allowed = await leaveType({ code: 'SL', name: 'Sick Leave', probationAllowed: true });
     const ok = await apply(emp, { leaveTypeId: String(allowed._id), startDate: '2026-10-19', endDate: '2026-10-19' });
     expect(ok.status).toBe(201);
+  });
+
+  it('a type that does not say (model default, or created through the API) is open to probationers', async () => {
+    await Employee.updateOne({ _id: emp.employee._id }, { $set: { confirmationDate: new Date('2026-12-01') } });
+    const byModel = await leaveType();
+    const viaApi = await request(app)
+      .post('/api/v1/leaves/types')
+      .set(auth(hr.token))
+      .send({ name: 'Sick Leave', code: 'SL', daysAllowed: 6 });
+    expect(viaApi.status).toBe(201);
+
+    expect(byModel.probationAllowed).toBe(true);
+    expect(viaApi.body.data.probationAllowed).toBe(true);
+    const first = await apply(emp, { leaveTypeId: String(byModel._id), startDate: '2026-10-19', endDate: '2026-10-19' });
+    const second = await apply(emp, { leaveTypeId: String(viaApi.body.data._id), startDate: '2026-10-20', endDate: '2026-10-20' });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+  });
+
+  it('an unpaid leave type is exempt from the probation rule, even with probationAllowed: false', async () => {
+    await Employee.updateOne({ _id: emp.employee._id }, { $set: { confirmationDate: new Date('2026-12-01') } });
+    const lwp = await leaveType({ name: 'Leave Without Pay', code: 'LWP', daysAllowed: 0, paidLeave: false, probationAllowed: false });
+
+    const res = await apply(emp, { leaveTypeId: String(lwp._id), startDate: '2026-10-19', endDate: '2026-10-19' });
+
+    expect(res.status).toBe(201);
   });
 
   it('attachmentRequired without attachments → 400; with one → 201', async () => {
@@ -404,6 +454,36 @@ describe('notifications', () => {
   });
 });
 
+/**
+ * Hold the first two `LeaveRequest.findById().exec()` reads until both have
+ * returned, so two racing requests have both read the request before either
+ * writes — the race is forced, not hoped for.
+ */
+function holdLeaveReads(count = 2): void {
+  const original = LeaveRequest.findById.bind(LeaveRequest) as unknown as (
+    ...args: unknown[]
+  ) => { exec: () => Promise<unknown> };
+  let held = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(LeaveRequest, 'findById').mockImplementation(((...args: unknown[]) => {
+    const query = original(...args);
+    const exec = query.exec.bind(query);
+    query.exec = async () => {
+      const doc = await exec();
+      if (held < count) {
+        held += 1;
+        if (held === count) release();
+        await gate;
+      }
+      return doc;
+    };
+    return query;
+  }) as never);
+}
+
 describe('races and partial failures', () => {
   async function pending(type: ILeaveType, startDate: string, endDate: string, days: number) {
     return LeaveRequest.create({
@@ -447,10 +527,69 @@ describe('races and partial failures', () => {
 
     const statuses = results.map((r) => r.status).sort();
     expect(statuses[0]).toBe(200);
-    expect([400, 404]).toContain(statuses[1]);
+    // The loser either finds it gone (404) or decided meanwhile (409).
+    expect([404, 409]).toContain(statuses[1]);
     expect(await usedOf(type)).toBe(2);
     expect(await Attendance.countDocuments({ leaveRequestId: id })).toBe(0);
     expect(await Attendance.countDocuments({ leaveRequestId: other })).toBe(2);
+  });
+
+  it('an approve and a reject that both read the pending request: one 200, one 409 DECIDED_MEANWHILE, balance consistent', async () => {
+    const type = await leaveType();
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
+    const id = applied.body.data._id as string;
+    holdLeaveReads();
+
+    const [a, r] = await Promise.all([
+      approve(id),
+      request(app).patch(`/api/v1/leaves/requests/${id}/reject`).set(auth(hr.token)).send({ reason: 'Short-staffed' }),
+    ]);
+    vi.restoreAllMocks();
+
+    expect([a.status, r.status].sort()).toEqual([200, 409]);
+    expect((a.status === 409 ? a : r).body.error.code).toBe('DECIDED_MEANWHILE');
+    const stored = (await LeaveRequest.findById(id).lean())!;
+    if (a.status === 200) {
+      expect(stored.status).toBe('approved');
+      expect(await usedOf(type)).toBe(3);
+    } else {
+      expect(stored.status).toBe('rejected');
+      expect(await usedOf(type) ?? 0).toBe(0);
+      expect(await Attendance.countDocuments({ leaveRequestId: id })).toBe(0);
+    }
+  });
+
+  it("an approval landing between a delete's read and its write: the delete is 409 and no charged days are stranded", async () => {
+    const type = await leaveType();
+    const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
+    const id = applied.body.data._id as string;
+    const original = LeaveRequest.findById.bind(LeaveRequest) as unknown as (
+      ...args: unknown[]
+    ) => { exec: () => Promise<unknown> };
+    let approval: request.Response | undefined;
+    // The delete reads the request (pending); the approval lands; then the delete writes.
+    vi.spyOn(LeaveRequest, 'findById').mockImplementationOnce(((...args: unknown[]) => {
+      const query = original(...args);
+      const exec = query.exec.bind(query);
+      query.exec = async () => {
+        const doc = await exec();
+        approval = await approve(id);
+        return doc;
+      };
+      return query;
+    }) as never);
+
+    const deleted = await request(app).delete(`/api/v1/leaves/requests/${id}`).set(auth(hr.token));
+    vi.restoreAllMocks();
+
+    expect(approval!.status).toBe(200);
+    expect(deleted.status).toBe(409);
+    expect(deleted.body.error.code).toBe('DECIDED_MEANWHILE');
+    const stored = await LeaveRequest.findById(id).setOptions({ withDeleted: true }).lean();
+    expect(stored!.isDeleted).toBe(false);
+    expect(stored!.status).toBe('approved');
+    expect(await usedOf(type)).toBe(3);
+    expect(await Attendance.countDocuments({ leaveRequestId: id })).toBe(3);
   });
 
   it('a cancel whose release fails leaves the request approved, and a retry completes it', async () => {
@@ -478,7 +617,7 @@ describe('races and partial failures', () => {
     expect(await Attendance.countDocuments({ employeeId: emp.employee._id })).toBe(0);
   });
 
-  it('a cancel landing while approval is stamping: approve → 400 and no rows stay tagged to the request', async () => {
+  it('a cancel landing while approval is stamping: approve → 409 DECIDED_MEANWHILE and no rows stay tagged to the request', async () => {
     const type = await leaveType();
     const applied = await apply(emp, { leaveTypeId: String(type._id), startDate: '2026-10-23', endDate: '2026-10-27' });
     const id = applied.body.data._id as string;
@@ -491,7 +630,8 @@ describe('races and partial failures', () => {
 
     try {
       const res = await approve(id);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('DECIDED_MEANWHILE');
     } finally {
       create.mockRestore();
     }

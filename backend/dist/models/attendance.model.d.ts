@@ -53,6 +53,12 @@ export interface IRegularization {
     /** Punch times the employee is asking to be recorded; applied on approval. */
     requestedCheckIn?: Date;
     requestedCheckOut?: Date;
+    /**
+     * The request made this row (the day had none). Rejected on a day that is
+     * not a working day, such a row is removed rather than left as an
+     * `absent` day payroll would dock.
+     */
+    createdByRequest?: boolean;
 }
 export interface IAttendance extends Document {
     employeeId: Types.ObjectId;

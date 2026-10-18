@@ -286,7 +286,7 @@ describe('new joiners', () => {
 
   it('a mid-year joiner who applies before HR opened the year gets the pro-rated figure', async () => {
     const joiner = await actor('employee', { joiningDate: new Date('2026-07-15') });
-    const cl = await leaveType({ daysAllowed: 12, probationAllowed: true });
+    const cl = await leaveType({ daysAllowed: 12 });
 
     const res = await request(app)
       .post('/api/v1/leaves/requests')
@@ -300,8 +300,8 @@ describe('new joiners', () => {
 
   it('applying still says "contact HR" when the allocation comes to nothing', async () => {
     const joiner = await actor('employee', { joiningDate: new Date('2026-12-01') });
-    const floater = await leaveType({ name: 'Floater', code: 'FL', daysAllowed: 1, probationAllowed: true });
-    const manual = await leaveType({ name: 'Manual Leave', code: 'ML', daysAllowed: 0, probationAllowed: true });
+    const floater = await leaveType({ name: 'Floater', code: 'FL', daysAllowed: 1 });
+    const manual = await leaveType({ name: 'Manual Leave', code: 'ML', daysAllowed: 0 });
 
     for (const type of [floater, manual]) {
       const res = await request(app)

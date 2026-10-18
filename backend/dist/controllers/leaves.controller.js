@@ -23,6 +23,8 @@ async function getCurrentEmployee() {
 }
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
 const DECIDED_MEANWHILE = 'This request was decided or withdrawn meanwhile — reload and try again';
+/** 409: the request moved on between our read and our write (the code regularization uses too). */
+const decidedMeanwhile = () => new AppError(DECIDED_MEANWHILE, 409, 'DECIDED_MEANWHILE');
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
 /**
  * The rules a leave type sets on who may take it and how. Checked on every
@@ -36,7 +38,8 @@ export function validateLeaveTypeRules(leaveType, employee, body, today = new Da
     if (leaveType.applicableGender && leaveType.applicableGender !== 'all' && employee.gender !== leaveType.applicableGender) {
         throw new ValidationAppError(`${leaveType.name} is only available to ${leaveType.applicableGender} employees`);
     }
-    if (!leaveType.probationAllowed && isOnProbation(employee, today)) {
+    // Unpaid leave costs the company nothing, so probation never bars it.
+    if (leaveType.probationAllowed === false && !isUnpaidLeaveType(leaveType) && isOnProbation(employee, today)) {
         throw new ValidationAppError(`${leaveType.name} is not available during probation`);
     }
     if (body.isHalfDay && leaveType.halfDayAllowed === false) {
@@ -96,7 +99,7 @@ export const createLeaveTypeSchema = z.object({
     encashable: z.boolean().default(false),
     paidLeave: z.boolean().default(true),
     applicableGender: z.enum(['all', 'male', 'female']).default('all'),
-    probationAllowed: z.boolean().default(false),
+    probationAllowed: z.boolean().default(true),
     halfDayAllowed: z.boolean().default(true),
     attachmentRequired: z.boolean().default(false),
     color: z.string().default('#3b82f6'),
@@ -654,7 +657,7 @@ export async function approveLeaveRequest(req, res) {
     const approved = await LeaveRequest.findOneAndUpdate({ _id: doc._id, status: 'pending' }, { $set: { status: 'approved', ...decidedNow() } }, { new: true }).exec();
     if (!approved) {
         await refundLeaveBalance(doc);
-        throw new ValidationAppError(DECIDED_MEANWHILE);
+        throw decidedMeanwhile();
     }
     // 3. The attendance payroll reads.
     let stamped;
@@ -671,7 +674,7 @@ export async function approveLeaveRequest(req, res) {
     const current = await LeaveRequest.findById(approved._id).select('status').lean().exec();
     if (current?.status !== 'approved') {
         await unstampLeaveDays(approved);
-        throw new ValidationAppError(DECIDED_MEANWHILE);
+        throw decidedMeanwhile();
     }
     // The calendar or shift changed since the request was counted.
     const expected = Math.ceil(approved.days);
@@ -694,7 +697,7 @@ export async function rejectLeaveRequest(req, res) {
     }
     const rejected = await LeaveRequest.findOneAndUpdate({ _id: doc._id, status: 'pending' }, { $set: { status: 'rejected', rejectedReason: body.reason, ...decidedNow() } }, { new: true }).exec();
     if (!rejected)
-        throw new ValidationAppError(DECIDED_MEANWHILE);
+        throw decidedMeanwhile();
     void audit({ action: 'update', entity: 'LeaveRequest', entityId: String(doc._id), after: { status: 'rejected' } });
     const leaveType = await LeaveType.findById(doc.leaveTypeId).setOptions({ withDeleted: true }).exec();
     await notifyEmployeeOfDecision(rejected, 'rejected', leaveType, body.reason);
@@ -702,13 +705,13 @@ export async function rejectLeaveRequest(req, res) {
 }
 /**
  * Cancel a request and, if it was approved, release its attendance rows and
- * charged days (`cancelAndReleaseLeave`). 400 when it was decided or
- * withdrawn meanwhile.
+ * charged days (`cancelAndReleaseLeave`). 409 `DECIDED_MEANWHILE` when it was
+ * decided or withdrawn meanwhile.
  */
 async function cancelAndRelease(doc, set = {}) {
     const cancelled = await cancelAndReleaseLeave(doc, set);
     if (!cancelled)
-        throw new ValidationAppError(DECIDED_MEANWHILE);
+        throw decidedMeanwhile();
     return cancelled;
 }
 /**
@@ -751,10 +754,24 @@ export async function deleteLeaveRequest(req, res) {
         throw new NotFoundError('Leave request not found');
     // An approved request takes its attendance rows and charged days with it.
     // Claiming it first means two concurrent deletes refund once.
-    if (doc.status === 'approved')
+    let status = doc.status;
+    if (status === 'approved') {
         await cancelAndRelease(doc);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await doc.softDelete();
+        status = 'cancelled';
+    }
+    // Soft-delete only if the request is still in the state just read: an
+    // approval landing meanwhile (charged days, stamped rows) must not end up
+    // under a deleted request nobody can cancel.
+    const userId = getUserId();
+    const deleted = await LeaveRequest.findOneAndUpdate({ _id: doc._id, status }, {
+        $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            ...(userId ? { deletedBy: new Types.ObjectId(userId) } : {}),
+        },
+    }).exec();
+    if (!deleted)
+        throw decidedMeanwhile();
     void audit({ action: 'delete', entity: 'LeaveRequest', entityId: String(doc._id) });
     res.json({ success: true, message: 'Leave request deleted and balance restored' });
 }

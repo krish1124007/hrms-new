@@ -371,6 +371,21 @@ describe('openLeaveYear', () => {
     expect(await balanceOf(alice, el, 2027)).toMatchObject({ allocated: 20, carried: 3 });
   });
 
+  it('carries into a new-year row that allocation did not create (nothing allocated this year)', async () => {
+    // HR stopped allocating this type (0 days a year) but its unused days still carry.
+    const el = await makeType({ name: 'Earned Leave', daysAllowed: 0, carryForward: { enabled: true, maxDays: 5 } });
+    const alice = await makeEmployee();
+    await seedBalance(alice, el, 2026, { allocated: 10, used: 2 });
+
+    const counts = await openLeaveYear(2027);
+
+    expect(counts).toEqual({ created: 0, carried: 1, skipped: 1 });
+    expect(await balanceOf(alice, el, 2027)).toMatchObject({ allocated: 0, carried: 5 });
+    // A second run neither duplicates the row nor carries again.
+    expect(await openLeaveYear(2027)).toEqual({ created: 0, carried: 0, skipped: 1 });
+    expect(await LeaveBalance.countDocuments({ employeeId: alice._id, leaveTypeId: el._id, year: 2027 })).toBe(1);
+  });
+
   it('leaves an existing carried figure alone', async () => {
     const { el, alice } = await company();
     await seedBalance(alice, el, 2026, { allocated: 15, used: 0 });

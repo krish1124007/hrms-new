@@ -433,6 +433,23 @@ describe('POST /payroll/cycles/:id/mark-paid', () => {
     expect(String(settled._id)).toBe(String(c._id));
     expect(settled.status).toBe('paid');
   });
+
+  it('paidAt: null means "now", not 1 January 1970', async () => {
+    const hr = await actor('hr_manager');
+    const c = await cycle('locked');
+    const r = await record(c, otherEmployeeId());
+    const before = Date.now();
+
+    const res = await request(app)
+      .post(`${API}/cycles/${String(c._id)}/mark-paid`)
+      .set(hr.auth)
+      .send({ paymentRef: 'NEFT-7', paidAt: null });
+
+    expect(res.status).toBe(200);
+    const after = (await PayrollCycle.findById(c._id).lean())!;
+    expect(after.paidAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect((await PayrollRecord.findById(r._id).lean())!.paidAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+  });
 });
 
 /* ──────────────────────────────────────────────────────────── */
