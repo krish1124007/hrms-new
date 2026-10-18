@@ -51,6 +51,14 @@ function scanRoutes(): RouteScan {
 
 const permissionsUsedByRoutes = (): Set<string> => scanRoutes().used;
 
+/**
+ * Permissions no route guard names, on purpose: a route can only require "approve"
+ * (every approver), and `lib/approvals.ts` then widens it to everybody's requests
+ * for the holder of one of these. They are real, grantable and enforced — see the
+ * "controller-enforced" tests below, which check the enforcement is still there.
+ */
+const CONTROLLER_ENFORCED = ['leaves.approve_all', 'expenses.approve_all', 'overtime.approve_all'];
+
 /** Names the old catalogue listed although no route ever checked them. */
 const INERT_PERMISSIONS = [
   'expense-claims.view',
@@ -85,8 +93,29 @@ describe('permission catalogue', () => {
 
   it('lists nothing that no route checks', () => {
     const used = permissionsUsedByRoutes();
-    const inert = [...ALL_PERMISSIONS].filter((perm) => !used.has(perm)).sort();
+    const inert = [...ALL_PERMISSIONS]
+      .filter((perm) => !used.has(perm) && !CONTROLLER_ENFORCED.includes(perm))
+      .sort();
     expect(inert).toEqual([]);
+  });
+
+  describe('controller-enforced approve_all permissions', () => {
+    it('are catalogued under their module, next to the plain approve they widen', () => {
+      expect(PERMISSIONS_BY_MODULE.leaves).toContain('leaves.approve_all');
+      expect(PERMISSIONS_BY_MODULE.expenses).toContain('expenses.approve_all');
+      expect(PERMISSIONS_BY_MODULE.overtime).toContain('overtime.approve_all');
+      for (const perm of CONTROLLER_ENFORCED) expect(ALL_PERMISSIONS.has(perm)).toBe(true);
+    });
+
+    it('are really checked: approvals.ts names each one', () => {
+      const source = fs.readFileSync(path.resolve(ROUTES_DIR, '../lib/approvals.ts'), 'utf8');
+      for (const perm of CONTROLLER_ENFORCED) expect(source).toContain(perm);
+    });
+
+    it('are not what any route requires (a route requiring one would lock plain approvers out)', () => {
+      const used = permissionsUsedByRoutes();
+      for (const perm of CONTROLLER_ENFORCED) expect(used.has(perm)).toBe(false);
+    });
   });
 
   it('contains none of the known-inert names', () => {
@@ -126,6 +155,22 @@ describe('DEFAULT_ROLES', () => {
       expect([...lower].filter((perm) => !higher.has(perm))).toEqual([]);
       expect(higher.size).toBeGreaterThan(lower.size);
     }
+  });
+
+  it('gives HR the approve_all permissions and managers only the plain approve ones', () => {
+    const perms = (slug: string): Set<string> =>
+      new Set(DEFAULT_ROLES.find((role) => role.slug === slug)!.permissions);
+    for (const slug of ['hr_executive', 'hr_manager']) {
+      for (const perm of CONTROLLER_ENFORCED) expect({ slug, perm, has: perms(slug).has(perm) }).toEqual({ slug, perm, has: true });
+    }
+    for (const slug of ['employee', 'manager']) {
+      for (const perm of CONTROLLER_ENFORCED) expect({ slug, perm, has: perms(slug).has(perm) }).toEqual({ slug, perm, has: false });
+    }
+    // A manager acts on the regularization requests they are notified about —
+    // scoped to direct reports; only HR's attendance.manage sees everybody's.
+    expect(perms('manager').has('attendance.approve')).toBe(true);
+    expect(perms('manager').has('attendance.manage')).toBe(false);
+    expect(perms('employee').has('attendance.approve')).toBe(false);
   });
 
   it('keeps admin as the wildcard only', () => {

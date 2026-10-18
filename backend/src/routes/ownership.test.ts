@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createApp } from '../app.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
 import { User } from '../models/user.model.js';
-import type { IEmployee } from '../models/employee.model.js';
+import { Employee, type IEmployee } from '../models/employee.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { ExpenseCategory } from '../models/expense-category.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
@@ -174,7 +174,9 @@ describe('overtime', () => {
     expect(reject.body.error?.code).toBe('SELF_APPROVAL');
     expect((await OvertimeRequest.findById(ownId))?.status).toBe('pending');
 
-    // Somebody else's request is still approvable.
+    // A direct report's request is still approvable. (A manager decides only
+    // for their reports, so A is made to report to this manager.)
+    await Employee.updateOne({ _id: A.employee._id }, { $set: { reportingManager: manager.employee._id } });
     const theirs = await OvertimeRequest.create({
       employee: A.employee._id,
       date: new Date('2026-03-13'),

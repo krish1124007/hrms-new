@@ -5,12 +5,14 @@ import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { Employee } from '../models/employee.model.js';
 import { NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
+import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
 import {
-  assertNotSelfApproval,
-  assertOwnOrPermission,
-  currentEmployeeId,
-  hasPermission,
-} from '../lib/access.js';
+  assertCanDecide,
+  assertOwnOrCanDecide,
+  isApprover,
+  scopeFilter,
+  scopeFilterFor,
+} from '../lib/approvals.js';
 
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own overtime request';
 
@@ -18,9 +20,9 @@ const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const objectId = z.string().regex(objectIdRegex, 'Invalid id');
 
 export const createSchema = z.object({
-  // Optional — defaults to the caller's employee record. Only holders of
-  // `overtime.view` (HR / managers) may file on behalf of someone else; for
-  // everyone else it is ignored.
+  // Optional — defaults to the caller's employee record. Only an approver may
+  // file on behalf of someone else, and only for a direct report (HR, with
+  // `overtime.approve_all`, for anyone); for everyone else it is ignored.
   employee: objectId.optional(),
   date: z.coerce.date(),
   hours: z.coerce.number().positive().max(24),
@@ -55,10 +57,10 @@ export const rejectSchema = z.object({
 export async function list(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
+  // HR sees everyone's overtime; a manager their direct reports' and their own.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
+  const filter: Record<string, any> = await scopeFilterFor(req, 'overtime', q.employee, 'employee');
   if (q.status) filter.status = q.status;
-  if (q.employee) filter.employee = q.employee;
   if (q.from || q.to) {
     filter.date = {};
     if (q.from) filter.date.$gte = q.from;
@@ -99,10 +101,12 @@ export async function listMine(req: Request, res: Response): Promise<void> {
 }
 
 /** GET /api/v1/overtime/stats */
-export async function stats(_req: Request, res: Response): Promise<void> {
-  const notDeleted = { isDeleted: { $ne: true } };
+export async function stats(req: Request, res: Response): Promise<void> {
+  // The same people the list shows: everyone for HR, reports and self for a manager.
+  const scope = await scopeFilter(req, 'overtime', 'employee');
+  const notDeleted = { isDeleted: { $ne: true }, ...scope };
   const [total, byStatus, hoursAgg] = await Promise.all([
-    OvertimeRequest.countDocuments({}),
+    OvertimeRequest.countDocuments(scope),
     OvertimeRequest.aggregate([
       { $match: notDeleted },
       { $group: { _id: '$status', n: { $sum: 1 } } },
@@ -137,14 +141,15 @@ export async function create(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createSchema>;
 
   // Resolve which employee the request is for: the caller's own record,
-  // unless an `overtime.view` holder names someone else.
+  // unless an approver names someone they could decide for.
+  const own = await currentEmployeeId(req);
   let employeeId: Types.ObjectId;
-  if (body.employee && hasPermission(req.user, 'overtime.view')) {
+  if (body.employee && isApprover(req, 'overtime') && !own?.equals(body.employee)) {
+    await assertCanDecide(req, body.employee, 'overtime');
     const emp = await Employee.findById(body.employee).select('_id').exec();
     if (!emp) throw new NotFoundError('Employee not found');
     employeeId = emp._id as Types.ObjectId;
   } else {
-    const own = await currentEmployeeId(req);
     if (!own) {
       throw new ValidationAppError(
         'Cannot determine employee — link the user to an employee record',
@@ -172,7 +177,7 @@ export async function get(req: Request, res: Response): Promise<void> {
     .populate('approvedBy', 'firstName lastName email')
     .exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
-  await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+  await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
   res.json({ success: true, data: otReq });
 }
 
@@ -181,7 +186,7 @@ export async function update(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateSchema>;
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
-  await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+  await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
   if (otReq.status !== 'pending') {
     throw new ValidationAppError('Only pending requests can be edited');
   }
@@ -197,7 +202,7 @@ export async function update(req: Request, res: Response): Promise<void> {
 export async function remove(req: Request, res: Response): Promise<void> {
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
-  await assertOwnOrPermission(req, otReq.employee, 'overtime.view');
+  await assertOwnOrCanDecide(req, otReq.employee, 'overtime');
   if (otReq.status === 'approved' && otReq.payrollRecordId) {
     throw new ValidationAppError('Cannot withdraw — this request is already in a payroll cycle');
   }
@@ -214,6 +219,7 @@ export async function approve(req: Request, res: Response): Promise<void> {
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
   await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, otReq.employee, 'overtime');
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a request with status "${otReq.status}"`);
   }
@@ -238,6 +244,7 @@ export async function reject(req: Request, res: Response): Promise<void> {
   const otReq = await OvertimeRequest.findById(String(req.params.id)).exec();
   if (!otReq) throw new NotFoundError('Overtime request not found');
   await assertNotSelfApproval(req, otReq.employee, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, otReq.employee, 'overtime');
   if (otReq.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a request with status "${otReq.status}"`);
   }

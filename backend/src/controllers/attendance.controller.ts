@@ -28,6 +28,7 @@ import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { assertCanDecide, canSeeAll, directReportIds } from '../lib/approvals.js';
 import { isDuplicateKey } from '../lib/leave-allocation.js';
 import { logger } from '../config/logger.js';
 import {
@@ -1110,11 +1111,16 @@ export const listRegularizationsSchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
-/** GET /api/v1/attendance/regularizations — the approval queue, newest request first. */
+/**
+ * GET /api/v1/attendance/regularizations — the approval queue, newest request
+ * first. HR (`attendance.manage`) sees everyone's; a manager (`attendance.approve`)
+ * only their direct reports' — their own requests are not theirs to decide.
+ */
 export async function listRegularizations(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof listRegularizationsSchema>;
+  const scope = canSeeAll(req, 'attendance') ? {} : { employeeId: { $in: await directReportIds(req) } };
   const result = await Attendance.paginate(
-    { 'regularization.status': q.status },
+    { 'regularization.status': q.status, ...scope },
     {
       page: q.page,
       limit: q.limit,
@@ -1135,6 +1141,7 @@ export async function decideRegularization(req: Request, res: Response): Promise
   if (!att) throw new NotFoundError('Attendance record not found');
   if (!att.regularization) throw new ValidationAppError('No regularization request on this record');
   await assertNotSelfApproval(req, att.employeeId, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, att.employeeId, 'attendance');
   if (att.regularization.status !== 'pending') {
     throw new ValidationAppError(`This regularization request was already ${att.regularization.status}`);
   }

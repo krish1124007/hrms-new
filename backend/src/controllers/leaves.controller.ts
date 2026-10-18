@@ -10,6 +10,14 @@ import {
   currentEmployeeId,
   hasPermission,
 } from '../lib/access.js';
+import {
+  assertCanDecide,
+  assertOwnOrCanDecide,
+  canSeeAll,
+  isApprover,
+  scopeFilter,
+  scopeFilterFor,
+} from '../lib/approvals.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { isSameBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
@@ -52,12 +60,6 @@ const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own leave';
 const DECIDED_MEANWHILE = 'This request was decided or withdrawn meanwhile — reload and try again';
 
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
-
-/** Approvers and HR see every employee's leave; everyone else only their own. */
-const SEE_ALL_LEAVES = ['leaves.approve', 'leaves.update'] as const;
-function canSeeAllLeaves(req: Request): boolean {
-  return SEE_ALL_LEAVES.some((perm) => hasPermission(req.user, perm));
-}
 
 /**
  * The rules a leave type sets on who may take it and how. Checked on every
@@ -233,14 +235,10 @@ export const adjustBalanceSchema = z.object({
 export async function listLeaveBalances(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
+  // HR sees every employee; a manager their direct reports and themselves;
+  // everyone else only their own. (No employee record matches nothing.)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
-  if (canSeeAllLeaves(req)) {
-    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
-  } else {
-    // `null` (no employee record) matches nothing — employeeId is required.
-    filter.employeeId = await currentEmployeeId(req);
-  }
+  const filter: Record<string, any> = await scopeFilterFor(req, 'leaves', q.employeeId);
   if (q.leaveTypeId) filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
   if (q.year) filter.year = q.year;
   const result = await LeaveBalance.paginate(filter, {
@@ -458,15 +456,11 @@ export const cancelLeaveSchema = z
 export async function listLeaveRequests(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
+  // HR sees every employee; a manager their direct reports and themselves;
+  // everyone else only their own. (No employee record matches nothing.)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
+  const filter: Record<string, any> = await scopeFilterFor(req, 'leaves', q.employeeId);
   if (q.status) filter.status = q.status;
-  if (canSeeAllLeaves(req)) {
-    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
-  } else {
-    // `null` (no employee record) matches nothing — employeeId is required.
-    filter.employeeId = await currentEmployeeId(req);
-  }
   if (q.leaveTypeId) filter.leaveTypeId = new Types.ObjectId(q.leaveTypeId);
   if (q.from || q.to) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -539,23 +533,41 @@ export async function leaveCalendar(req: Request, res: Response): Promise<void> 
   const q = req.query as any;
   const from = q.from ? new Date(q.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const to = q.to ? new Date(q.to) : new Date(from.getFullYear(), from.getMonth() + 1, 0);
-  const query = LeaveRequest.find({
+  const inRange = {
     status: { $in: ['approved', 'pending'] },
     startDate: { $lte: to },
     endDate: { $gte: from },
-  });
-  if (SEE_ALL_LEAVES.some((p) => hasPermission(req.user, p))) {
-    query
+  };
+  const detailed = (filter: Record<string, unknown>) =>
+    LeaveRequest.find(filter)
       .populate('employeeId', 'firstName lastName employeeId')
-      .populate('leaveTypeId', 'name code color');
-  } else {
-    // `color` is presentation only — the calendar paints each leave type with it.
-    query
+      .populate('leaveTypeId', 'name code color')
+      .lean()
+      .exec();
+  // `color` is presentation only — the calendar paints each leave type with it.
+  const publicOnly = (filter: Record<string, unknown>) =>
+    LeaveRequest.find(filter)
       .select(CALENDAR_PUBLIC_FIELDS)
       .populate('employeeId', 'firstName lastName')
-      .populate('leaveTypeId', 'name color');
+      .populate('leaveTypeId', 'name color')
+      .lean()
+      .exec();
+
+  let list;
+  if (canSeeAll(req, 'leaves')) {
+    list = await detailed(inRange);
+  } else if (isApprover(req, 'leaves')) {
+    // A manager sees the full request for their reports (and themselves) and
+    // the shared-calendar view of everybody else.
+    const scope = await scopeFilter(req, 'leaves');
+    const [mine, others] = await Promise.all([
+      detailed({ ...inRange, ...scope }),
+      publicOnly({ ...inRange, $nor: [scope] }),
+    ]);
+    list = [...mine, ...others];
+  } else {
+    list = await publicOnly(inRange);
   }
-  const list = await query.lean().exec();
   res.json({ success: true, data: list });
 }
 
@@ -673,7 +685,7 @@ export async function getLeaveRequest(req: Request, res: Response): Promise<void
     .populate('approvedBy', 'firstName lastName email')
     .exec();
   if (!doc) throw new NotFoundError('Leave request not found');
-  await assertOwnOrPermission(req, doc.employeeId, SEE_ALL_LEAVES);
+  await assertOwnOrCanDecide(req, doc.employeeId, 'leaves');
   res.json({ success: true, data: doc });
 }
 
@@ -720,6 +732,7 @@ export async function approveLeaveRequest(req: Request, res: Response): Promise<
   const doc = await LeaveRequest.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Leave request not found');
   await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, doc.employeeId, 'leaves');
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a ${doc.status} request`);
   }
@@ -780,6 +793,7 @@ export async function rejectLeaveRequest(req: Request, res: Response): Promise<v
   const doc = await LeaveRequest.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Leave request not found');
   await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, doc.employeeId, 'leaves');
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a ${doc.status} request`);
   }

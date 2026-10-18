@@ -7,17 +7,21 @@ import { audit } from '../services/audit.service.js';
 import { cycleHoldingClaim } from '../services/payroll-compute.service.js';
 import { cycleLabel } from '../lib/payroll-cycle.js';
 import { getUserId } from '../lib/async-context.js';
+import { assertNotSelfApproval, currentEmployeeId } from '../lib/access.js';
 import {
-  assertNotSelfApproval,
-  assertOwnOrPermission,
-  currentEmployeeId,
-  hasPermission,
-} from '../lib/access.js';
+  assertCanDecide,
+  assertOwnOrCanDecide,
+  isApprover,
+  scopeFilterFor,
+} from '../lib/approvals.js';
 
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
 
-/** Approvers see and act on everyone's claims; others only on their own. */
-const APPROVE = 'expenses.approve';
+/**
+ * HR (`expenses.approve_all`) sees and acts on everyone's claims; a manager
+ * (`expenses.approve`) on their direct reports' and their own; everyone else
+ * only on their own.
+ */
 const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
 
 async function getCurrentEmployee(): Promise<typeof Employee.prototype | null> {
@@ -151,15 +155,14 @@ export const reimburseClaimSchema = z.object({
 export async function listClaims(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
+  // HR sees every employee's claims; a manager their direct reports' and their own;
+  // everyone else only their own. (No employee record matches nothing.)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = { amount: { $gt: 0 } };
+  const filter: Record<string, any> = {
+    amount: { $gt: 0 },
+    ...(await scopeFilterFor(req, 'expenses', q.employeeId)),
+  };
   if (q.status) filter.status = q.status;
-  if (hasPermission(req.user, APPROVE)) {
-    if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
-  } else {
-    // `null` (no employee record) matches nothing — employeeId is required.
-    filter.employeeId = await currentEmployeeId(req);
-  }
   if (q.category) filter.category = new Types.ObjectId(q.category);
   if (q.from || q.to) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -222,13 +225,15 @@ export async function teamClaims(req: Request, res: Response): Promise<void> {
 
 export async function createClaim(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createClaimSchema>;
-  // Only an approver may file a claim on someone else's behalf; for anyone
-  // else a body `employeeId` is ignored and the claim is theirs.
+  // Only an approver may file a claim on someone else's behalf — and only for
+  // someone they could decide for (a direct report, or anyone for HR); for
+  // anyone else a body `employeeId` is ignored and the claim is theirs.
+  const me = await currentEmployeeId(req);
   let employeeId: Types.ObjectId;
-  if (body.employeeId && hasPermission(req.user, APPROVE)) {
+  if (body.employeeId && isApprover(req, 'expenses') && !me?.equals(body.employeeId)) {
+    await assertCanDecide(req, body.employeeId, 'expenses');
     employeeId = new Types.ObjectId(body.employeeId);
   } else {
-    const me = await currentEmployeeId(req);
     if (!me) throw new NotFoundError('Employee profile not found');
     employeeId = me;
   }
@@ -269,14 +274,14 @@ export async function getClaim(req: Request, res: Response): Promise<void> {
     .populate('approvedBy', 'firstName lastName email')
     .exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
-  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+  await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
   res.json({ success: true, data: doc });
 }
 
 export async function updateClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
-  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+  await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
   if (doc.status !== 'draft' && doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
   }
@@ -295,7 +300,7 @@ export async function updateClaim(req: Request, res: Response): Promise<void> {
 export async function deleteClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
-  await assertOwnOrPermission(req, doc.employeeId, APPROVE);
+  await assertOwnOrCanDecide(req, doc.employeeId, 'expenses');
   // Once decided (approved / rejected / reimbursed) a claim is part of the
   // money trail and can no longer be withdrawn.
   if (doc.status !== 'draft' && doc.status !== 'pending') {
@@ -316,6 +321,7 @@ export async function approveClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
   await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, doc.employeeId, 'expenses');
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot approve a ${doc.status} claim`);
   }
@@ -336,6 +342,7 @@ export async function rejectClaim(req: Request, res: Response): Promise<void> {
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
   await assertNotSelfApproval(req, doc.employeeId, SELF_APPROVAL_MESSAGE);
+  await assertCanDecide(req, doc.employeeId, 'expenses');
   if (doc.status !== 'pending') {
     throw new ValidationAppError(`Cannot reject a ${doc.status} claim`);
   }
@@ -359,6 +366,7 @@ export async function reimburseClaim(req: Request, res: Response): Promise<void>
   const body = req.body as z.infer<typeof reimburseClaimSchema>;
   const doc = await ExpenseClaim.findById(String(req.params.id)).exec();
   if (!doc) throw new NotFoundError('Expense claim not found');
+  await assertCanDecide(req, doc.employeeId, 'expenses');
   if (doc.status !== 'approved') {
     throw new ValidationAppError(`Can only reimburse approved claims (current: ${doc.status})`);
   }

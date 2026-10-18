@@ -46,7 +46,7 @@ export function currentEmployeeId(req: Request): Promise<Types.ObjectId | null> 
 }
 
 /** Hex id of an owner field: an ObjectId, a string id, or a populated document. */
-function idOf(value: unknown): string | null {
+export function idOf(value: unknown): string | null {
   if (value == null) return null;
   if (value instanceof Types.ObjectId) return value.toHexString();
   if (typeof value === 'object' && '_id' in value) {

@@ -1053,12 +1053,23 @@ describe('GET /attendance/regularizations', () => {
     expect((await list(hr, '?status=maybe')).status).toBe(400);
   });
 
-  it('is 403 for an employee and for a manager without attendance.approve', async () => {
+  it('is 403 for an employee, who lacks attendance.approve', async () => {
     const who = await person();
-    const manager = await person('manager');
 
     expect((await list(who)).status).toBe(403);
-    expect((await list(manager)).status).toBe(403);
+  });
+
+  it("gives a manager (attendance.approve) only their direct reports' requests", async () => {
+    const manager = await person('manager');
+    const report = await person('employee', { reportingManager: manager.emp._id });
+    const stranger = await person();
+    const reportRow = await requestDay(report);
+    await requestDay(stranger);
+
+    const res = await list(manager);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((row: { _id: string }) => String(row._id))).toEqual([reportRow]);
   });
 });
 

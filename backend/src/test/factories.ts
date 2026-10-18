@@ -44,13 +44,20 @@ export async function createUser(opts: {
   return { user, token: user.generateAccessToken() };
 }
 
-/** Create the employee record linked to `user` (employeeId auto-generates). */
-export async function createEmployeeFor(user: IUser): Promise<IEmployee> {
+/**
+ * Create the employee record linked to `user` (employeeId auto-generates).
+ * `overrides` are applied last — e.g. `{ reportingManager: manager._id }`.
+ */
+export async function createEmployeeFor(
+  user: IUser,
+  overrides: Partial<Record<keyof IEmployee, unknown>> = {},
+): Promise<IEmployee> {
   return Employee.create({
     userId: user._id,
     firstName: user.firstName,
     lastName: user.lastName,
     email: user.email,
     joiningDate: new Date('2024-01-15'),
+    ...overrides,
   });
 }
