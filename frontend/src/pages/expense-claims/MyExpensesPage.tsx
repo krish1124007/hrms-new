@@ -43,7 +43,8 @@ const STATUS_VARIANT: Record<
 const schema = z.object({
   category: z.string().min(1, 'Select a category'),
   amount: z.coerce.number().min(0, 'Amount must be 0 or more'),
-  currency: z.string().default('INR'),
+  // Claims are reimbursed in rupees only.
+  currency: z.literal('INR').default('INR'),
   date: z.string().min(1),
   description: z.string().optional(),
   paymentMethod: z.union([z.enum(['cash', 'bank', 'card', 'upi', 'cheque', 'other']), z.literal('')]).optional().transform(v => v === '' ? undefined : v),
@@ -248,7 +249,7 @@ export default function MyExpensesPage(): ReactElement {
               </div>
               <div>
                 <Label htmlFor="ec-cur">Currency</Label>
-                <Input id="ec-cur" {...register('currency')} />
+                <Input id="ec-cur" value="INR (₹)" readOnly disabled />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">

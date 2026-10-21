@@ -8,6 +8,7 @@ import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/hooks/use-auth';
 import { usePermissions } from '@/hooks/use-permissions';
 import { getRoleBadge } from '@/lib/permissions';
+import { APP_NAME } from '@/config/brand';
 
 const COLLAPSED_KEY = 'opencore.sidebar.collapsed';
 const EXPANDED_KEY = 'opencore.sidebar.expanded';
@@ -145,12 +146,12 @@ export function Sidebar({
           <Link to="/dashboard" className="flex items-center gap-2 overflow-hidden">
             <img
               src="/logo.png"
-              alt="DD HRMS"
+              alt={APP_NAME}
               className="size-9 shrink-0 rounded-lg object-cover"
             />
             {!collapsed && (
               <span className="whitespace-nowrap text-sm font-semibold tracking-tight">
-                DD HRMS
+                {APP_NAME}
               </span>
             )}
           </Link>

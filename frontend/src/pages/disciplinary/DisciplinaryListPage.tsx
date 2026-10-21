@@ -173,7 +173,8 @@ export default function DisciplinaryListPage(): ReactElement {
         }
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Disciplinary' }]}
         actions={
-          canManage ? (
+          // Viewing every case is disciplinary.view; opening one is disciplinary.manage.
+          has('disciplinary.manage') ? (
             <Button size="sm" asChild>
               <Link to="/disciplinary/new">
                 <Plus className="size-4" /> New Case

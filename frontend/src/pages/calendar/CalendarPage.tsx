@@ -336,14 +336,16 @@ export default function CalendarPage(): ReactElement {
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12 text-center">
               <CalendarDays className="mb-2 size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No events</p>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-2"
-                onClick={() => setEditing('new')}
-              >
-                <Plus className="size-3" /> Add event
-              </Button>
+              {canManage && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => setEditing('new')}
+                >
+                  <Plus className="size-3" /> Add event
+                </Button>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -387,6 +389,7 @@ export default function CalendarPage(): ReactElement {
         <EventDialog
           editing={editing}
           selectedDate={selectedDate}
+          readOnly={!canManage}
           onClose={() => setEditing(null)}
           onCreate={(values) => create.mutate(values)}
           onUpdate={(id, values) => update.mutate({ id, input: values })}
@@ -404,6 +407,7 @@ export default function CalendarPage(): ReactElement {
 function EventDialog({
   editing,
   selectedDate,
+  readOnly,
   onClose,
   onCreate,
   onUpdate,
@@ -413,6 +417,8 @@ function EventDialog({
 }: {
   editing: CalendarEvent | 'new';
   selectedDate: string;
+  /** View only — creating, editing and deleting events is `events.manage`. */
+  readOnly: boolean;
   onClose: () => void;
   onCreate: (input: CalendarEventInput) => void;
   onUpdate: (id: string, input: Partial<CalendarEventInput>) => void;
@@ -481,69 +487,71 @@ function EventDialog({
   return (
     <Dialog open={true} onClose={onClose} size="md">
       <DialogHeader>
-        <DialogTitle>{isNew ? 'New event' : 'Edit event'}</DialogTitle>
+        <DialogTitle>{readOnly ? 'Event' : isNew ? 'New event' : 'Edit event'}</DialogTitle>
       </DialogHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <DialogBody className="space-y-4">
-          <div>
-            <Label htmlFor="ev-title">Title *</Label>
-            <Input id="ev-title" placeholder="Team meeting" {...register('title')} />
-            {errors.title && (
-              <p className="mt-1 text-xs text-destructive">{errors.title.message}</p>
-            )}
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" {...register('isAllDay')} /> All-day event
-          </label>
-          <div className="grid grid-cols-2 gap-3">
+        <DialogBody>
+          <fieldset disabled={readOnly} className="space-y-4">
             <div>
-              <Label htmlFor="ev-start">Starts *</Label>
-              <Input
-                id="ev-start"
-                type={isAllDay ? 'date' : 'datetime-local'}
-                {...register('startDate')}
-              />
+              <Label htmlFor="ev-title">Title *</Label>
+              <Input id="ev-title" placeholder="Team meeting" {...register('title')} />
+              {errors.title && (
+                <p className="mt-1 text-xs text-destructive">{errors.title.message}</p>
+              )}
             </div>
-            <div>
-              <Label htmlFor="ev-end">Ends *</Label>
-              <Input
-                id="ev-end"
-                type={isAllDay ? 'date' : 'datetime-local'}
-                {...register('endDate')}
-              />
-            </div>
-          </div>
-          <div>
-            <Label htmlFor="ev-loc">Location</Label>
-            <Input id="ev-loc" placeholder="Meeting room / Zoom link" {...register('location')} />
-          </div>
-          <div>
-            <Label>Colour</Label>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {COLOR_OPTIONS.map((c) => (
-                <button
-                  key={c.value}
-                  type="button"
-                  onClick={() => setValue('color', c.value)}
-                  className={cn(
-                    'size-7 rounded-full border-2 transition-all',
-                    color === c.value
-                      ? 'border-foreground scale-110'
-                      : 'border-transparent hover:scale-105',
-                  )}
-                  style={{ background: c.value }}
-                  title={c.label}
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" {...register('isAllDay')} /> All-day event
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="ev-start">Starts *</Label>
+                <Input
+                  id="ev-start"
+                  type={isAllDay ? 'date' : 'datetime-local'}
+                  {...register('startDate')}
                 />
-              ))}
+              </div>
+              <div>
+                <Label htmlFor="ev-end">Ends *</Label>
+                <Input
+                  id="ev-end"
+                  type={isAllDay ? 'date' : 'datetime-local'}
+                  {...register('endDate')}
+                />
+              </div>
             </div>
-          </div>
-          <div>
-            <Label htmlFor="ev-desc">Description</Label>
-            <Textarea id="ev-desc" rows={3} {...register('description')} />
-          </div>
+            <div>
+              <Label htmlFor="ev-loc">Location</Label>
+              <Input id="ev-loc" placeholder="Meeting room / Zoom link" {...register('location')} />
+            </div>
+            <div>
+              <Label>Colour</Label>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {COLOR_OPTIONS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setValue('color', c.value)}
+                    className={cn(
+                      'size-7 rounded-full border-2 transition-all',
+                      color === c.value
+                        ? 'border-foreground scale-110'
+                        : 'border-transparent hover:scale-105',
+                    )}
+                    style={{ background: c.value }}
+                    title={c.label}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="ev-desc">Description</Label>
+              <Textarea id="ev-desc" rows={3} {...register('description')} />
+            </div>
+          </fieldset>
         </DialogBody>
         <DialogFooter>
-          {!isNew && (
+          {!readOnly && !isNew && (
             <Button
               type="button"
               variant="outline"
@@ -555,11 +563,13 @@ function EventDialog({
             </Button>
           )}
           <Button type="button" variant="outline" onClick={onClose}>
-            Cancel
+            {readOnly ? 'Close' : 'Cancel'}
           </Button>
-          <Button type="submit" loading={saving}>
-            {isNew ? 'Create' : 'Save'}
-          </Button>
+          {!readOnly && (
+            <Button type="submit" loading={saving}>
+              {isNew ? 'Create' : 'Save'}
+            </Button>
+          )}
         </DialogFooter>
       </form>
     </Dialog>

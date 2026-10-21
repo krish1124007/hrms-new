@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useLogin } from '@/hooks/use-auth';
+import { APP_NAME } from '@/config/brand';
 
 const schema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -45,12 +46,12 @@ export default function LoginPage(): ReactElement {
       <div className="mb-8 flex flex-col items-center text-center">
         <img
           src="/logo.png"
-          alt="DD HRMS"
+          alt={APP_NAME}
           className="mb-4 size-16 rounded-2xl shadow-lg ring-1 ring-border"
         />
         <h1 className="text-3xl font-bold tracking-tight">Welcome back</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Sign in to continue to <span className="font-medium text-foreground">DD HRMS</span>
+          Sign in to continue to <span className="font-medium text-foreground">{APP_NAME}</span>
         </p>
       </div>
 

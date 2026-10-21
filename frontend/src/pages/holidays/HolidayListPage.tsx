@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Plus, CalendarDays, ChevronLeft, ChevronRight, Copy, Pencil, Trash2 } from 'lucide-react';
+import { Plus, CalendarDays, ChevronLeft, ChevronRight, Copy, FileUp, Pencil, Trash2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -31,6 +31,7 @@ import type { Holiday } from '@/lib/systemcore.api';
 import { cn } from '@/lib/utils';
 import { usePermissions } from '@/hooks/use-permissions';
 import { businessDayKey } from '@/lib/business-day';
+import { HolidayImportDialog } from './HolidayImportDialog';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -96,6 +97,7 @@ export default function HolidayListPage(): ReactElement {
   };
 
   const [open, setOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Holiday | null>(null);
   const [view, setView] = useState<'list' | 'calendar'>('list');
 
@@ -225,6 +227,9 @@ export default function HolidayListPage(): ReactElement {
             <>
               <Button size="sm" variant="outline" onClick={copyToNextYear} loading={rollover.isPending}>
                 <Copy className="size-4" /> Copy recurring to {year + 1}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                <FileUp className="size-4" /> Import
               </Button>
               <Button size="sm" onClick={openCreate}>
                 <Plus className="size-4" /> New Holiday
@@ -369,6 +374,8 @@ export default function HolidayListPage(): ReactElement {
           </DialogFooter>
         </form>
       </Dialog>
+
+      {canManage && <HolidayImportDialog open={importOpen} onClose={() => setImportOpen(false)} />}
     </div>
   );
 }

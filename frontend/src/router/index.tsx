@@ -28,9 +28,6 @@ const DesignationListPage = lazy(() => import('@/pages/designations/DesignationL
 const ShiftListPage = lazy(() => import('@/pages/shifts/ShiftListPage'));
 const HolidayListPage = lazy(() => import('@/pages/holidays/HolidayListPage'));
 
-// PMCore
-const TimesheetPage = lazy(() => import('@/pages/projects/TimesheetPage'));
-
 // Leaves
 const LeaveTypesPage = lazy(() => import('@/pages/leaves/LeaveTypesPage'));
 const MyLeavesPage = lazy(() => import('@/pages/leaves/MyLeavesPage'));
@@ -171,9 +168,6 @@ export function AppRouter(): ReactElement {
             <Route path="/designations" element={guard(NAV_ACCESS.designations, <DesignationListPage />)} />
             <Route path="/shifts" element={guard(NAV_ACCESS.shifts, <ShiftListPage />)} />
             <Route path="/holidays" element={guard(NAV_ACCESS.holidays, <HolidayListPage />)} />
-
-            {/* Timesheets */}
-            <Route path="/timesheets" element={<TimesheetPage />} />
 
             {/* Leaves */}
             <Route path="/leaves" element={<MyLeavesPage />} />

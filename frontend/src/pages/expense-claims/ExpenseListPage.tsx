@@ -106,6 +106,16 @@ export default function ExpenseListPage(): ReactElement {
   const [reason, setReason] = useState('');
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [acceptedAmount, setAcceptedAmount] = useState<number | ''>('');
+  // What the employee claimed — the accepted amount may not exceed it.
+  const [claimedAmount, setClaimedAmount] = useState(0);
+  const acceptedError =
+    acceptedAmount === ''
+      ? null
+      : acceptedAmount < 0
+        ? 'The accepted amount cannot be negative'
+        : acceptedAmount > claimedAmount
+          ? `Cannot accept more than the ₹${claimedAmount.toLocaleString('en-IN')} claimed`
+          : null;
   const [reimbursingId, setReimbursingId] = useState<string | null>(null);
   const [refNo, setRefNo] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -258,6 +268,7 @@ export default function ExpenseListPage(): ReactElement {
                 onClick={() => {
                   setApprovingId(c._id);
                   setAcceptedAmount(c.amount);
+                  setClaimedAmount(c.amount);
                 }}
                 className="rounded-md p-1.5 text-success hover:bg-success/10"
                 title="Approve"
@@ -360,13 +371,24 @@ export default function ExpenseListPage(): ReactElement {
         </DialogHeader>
         <DialogBody className="space-y-4">
           <div>
-            <Label htmlFor="ec-accept">Accepted Amount</Label>
+            <Label htmlFor="ec-accept">Accepted amount (₹)</Label>
             <Input
               id="ec-accept"
               type="number"
+              min={0}
+              max={claimedAmount}
+              step="0.01"
               value={acceptedAmount}
               onChange={(e) => setAcceptedAmount(e.target.value === '' ? '' : Number(e.target.value))}
+              aria-invalid={!!acceptedError}
             />
+            {acceptedError ? (
+              <p className="mt-1 text-xs text-destructive">{acceptedError}</p>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Claimed ₹{claimedAmount.toLocaleString('en-IN')}. Lower it to approve part of the claim.
+              </p>
+            )}
           </div>
         </DialogBody>
         <DialogFooter>
@@ -384,6 +406,7 @@ export default function ExpenseListPage(): ReactElement {
               );
             }}
             loading={approve.isPending}
+            disabled={!!acceptedError}
           >
             Approve
           </Button>

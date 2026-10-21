@@ -33,6 +33,17 @@ describe('sidebar visibility', () => {
     expect(leavesFor({ ...noView, customPermissions: ['employees.view'] })).toContain('/id-cards');
   });
 
+  it('has no Projects or Timesheets entries, even for an admin', () => {
+    const admin: AuthUser = {
+      _id: 'a1',
+      email: 'a1@example.com',
+      role: { slug: 'admin', name: 'Admin', permissions: ['*'] },
+    };
+    const tos = leavesFor(admin);
+    expect(tos.length).toBeGreaterThan(10);
+    expect(tos.filter((to) => /^\/(projects|timesheets)\b/.test(to))).toEqual([]);
+  });
+
   it('shows the regularization queue to approvers only', () => {
     const manager: AuthUser = {
       _id: 'm2',

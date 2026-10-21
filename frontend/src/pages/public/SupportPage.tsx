@@ -1,20 +1,21 @@
 import { type ReactElement } from 'react';
 import { Mail, Phone, Globe, Clock, LifeBuoy, ChevronRight } from 'lucide-react';
+import { APP_NAME, COMPANY_NAME, SUPPORT_EMAIL } from '@/config/brand';
 
 /**
- * Public, no-auth support page for the D-HRMS mobile app.
+ * Public, no-auth support page for the mobile app and the web dashboard.
  *
  * This is linked as the "Support URL" in App Store Connect / Google Play, so it
  * MUST be reachable without logging in. Keep it self-contained (no dashboard
  * layout, no auth store) so app-store reviewers and end users can open it
  * directly.
  *
- * Update the CONTACT values below with your real support details.
+ * Names come from `config/brand.ts`; the e-mail from `VITE_SUPPORT_EMAIL`.
  */
 const CONTACT = {
-  appName: 'D-HRMS',
-  company: 'DDIPL',
-  email: 'info@dharmeshdeshani.com',
+  appName: APP_NAME,
+  company: COMPANY_NAME,
+  email: SUPPORT_EMAIL,
   phone: '+91 92130 17921',
   website: 'https://hrms.ddipl.org',
   hours: 'Monday – Saturday, 10:00 AM – 6:00 PM IST',
@@ -23,7 +24,7 @@ const CONTACT = {
 const FAQS: { q: string; a: string }[] = [
   {
     q: 'How do I log in?',
-    a: 'Use the employee credentials provided by your organization’s HR/admin team. If you don’t have an account, please contact your HR department — D-HRMS accounts are created only by your employer.',
+    a: `Use the employee credentials provided by your organization’s HR/admin team. If you don’t have an account, please contact your HR department — ${APP_NAME} accounts are created only by your employer.`,
   },
   {
     q: 'I forgot my password. What do I do?',
@@ -35,11 +36,11 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: 'My payslip / leave balance looks wrong.',
-    a: 'Payroll and leave data is managed by your HR team. Please raise the discrepancy with your HR/admin, who can correct it from the D-HRMS web dashboard.',
+    a: `Payroll and leave data is managed by your HR team. Please raise the discrepancy with your HR/admin, who can correct it from the ${APP_NAME} web dashboard.`,
   },
   {
     q: 'How do I delete my account or data?',
-    a: 'D-HRMS accounts are managed by your employer. To request account or data deletion, contact your HR department or email us at the address below.',
+    a: `${APP_NAME} accounts are managed by your employer. To request account or data deletion, contact your HR department or email us at the address below.`,
   },
 ];
 

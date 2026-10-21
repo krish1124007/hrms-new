@@ -154,9 +154,14 @@ export const hrPoliciesApi = {
     (await api.post(`/hr-policies/${id}/archive`)).data,
   restore: async (id: string): Promise<ItemResponse<HrPolicy>> =>
     (await api.post(`/hr-policies/${id}/restore`)).data,
+  /**
+   * Acknowledge the current version. Without `employee` it is the caller's own
+   * acknowledgement; `employee` (HR recording a sign-off on someone's behalf)
+   * is honoured only for `policies.manage` holders.
+   */
   acknowledge: async (
     id: string,
-    body: { employee: string; comment?: string },
+    body: { employee?: string; comment?: string },
   ): Promise<ItemResponse<HrPolicy>> =>
     (await api.post(`/hr-policies/${id}/acknowledge`, body)).data,
   acknowledgements: async (

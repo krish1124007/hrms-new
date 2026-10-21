@@ -1,5 +1,4 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
 import * as api from '../lib/notifications.api';
 
 const KEYS = {
@@ -8,10 +7,8 @@ const KEYS = {
 };
 
 /**
- * List the authenticated user's notifications. Auto-refreshes the unread
- * count every 30s (cheap single-field query). Real-time push via
- * Socket.io is expected to invalidate this cache directly — see
- * `useSocketNotifications`.
+ * List the authenticated user's notifications. The unread count polls
+ * every 30s (cheap single-field query).
  */
 export function useNotifications(unreadOnly = false) {
   return useQuery({
@@ -48,26 +45,4 @@ export function useMarkAllRead() {
       void qc.invalidateQueries({ queryKey: ['notifications'] });
     },
   });
-}
-
-/**
- * Bind to the chat-namespace socket to receive `notification:new` pushes
- * and invalidate the React-Query cache on arrival.
- *
- *   const socket = useSocket();  // your existing socket provider
- *   useSocketNotifications(socket);
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useSocketNotifications(socket: any): void {
-  const qc = useQueryClient();
-  useEffect(() => {
-    if (!socket) return undefined;
-    const onNew = (): void => {
-      void qc.invalidateQueries({ queryKey: ['notifications'] });
-    };
-    socket.on('notification:new', onNew);
-    return () => {
-      socket.off('notification:new', onNew);
-    };
-  }, [socket, qc]);
 }

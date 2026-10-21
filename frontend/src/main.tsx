@@ -14,7 +14,6 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { CookieConsentBanner, readConsent } from './components/common/CookieConsent';
 import { initSentry } from './lib/sentry';
-import './i18n'; // side-effect init — must run before any component renders
 import './index.css';
 
 // Install Sentry only if the user gave analytics consent (ePrivacy/GDPR).

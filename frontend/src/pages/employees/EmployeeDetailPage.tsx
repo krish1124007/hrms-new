@@ -59,8 +59,11 @@ function Field({ label, value }: { label: string; value?: string | number | null
 export default function EmployeeDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data, isLoading } = useEmployee(id);
   const { has } = usePermissions();
+  // Deleting and restoring are `employees.delete`; for those users the API
+  // also returns a soft-deleted record, so its Restore button can work.
+  const canDelete = has('employees.delete');
+  const { data, isLoading } = useEmployee(id, { includeDeleted: canDelete });
   const [resetOpen, setResetOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -99,9 +102,11 @@ export default function EmployeeDetailPage(): ReactElement {
         ]}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => navigate(`/employees/${e._id}/edit`)}>
-              <Edit className="size-4" /> Edit
-            </Button>
+            {canUpdate && !e.isDeleted && (
+              <Button variant="outline" size="sm" onClick={() => navigate(`/employees/${e._id}/edit`)}>
+                <Edit className="size-4" /> Edit
+              </Button>
+            )}
             {has('users.update') && e.userId && (
               <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
                 <KeyRound className="size-4" /> Reset password
@@ -117,12 +122,12 @@ export default function EmployeeDetailPage(): ReactElement {
                 {working ? 'Deactivate' : 'Change status'}
               </Button>
             )}
-            {canUpdate && e.isDeleted && (
+            {canDelete && e.isDeleted && (
               <Button size="sm" onClick={() => restore.mutate(e._id)} loading={restore.isPending}>
                 <ArchiveRestore className="size-4" /> Restore
               </Button>
             )}
-            {has('employees.delete') && !e.isDeleted && (
+            {canDelete && !e.isDeleted && (
               <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
                 <Trash2 className="size-4" /> Delete
               </Button>

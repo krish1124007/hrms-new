@@ -172,6 +172,11 @@ export const holidaysApi = {
   /** Copy every recurring holiday into `year` (the target), skipping ones already there. */
   rollover: async (year: number): Promise<{ success: boolean; data: { created: number; skipped: number } }> =>
     (await api.post('/holidays/rollover', { year })).data,
+  /** Bulk-add holidays (`date` is `YYYY-MM-DD`); ones already there (same day, same name) are skipped. */
+  importCalendar: async (
+    holidays: { name: string; date: string; type: Holiday['type'] }[],
+  ): Promise<{ success: boolean; data: { created: number; skipped: number } }> =>
+    (await api.post('/holidays/import-calendar', { holidays })).data,
 };
 
 /* ── Employee ── */
@@ -343,8 +348,11 @@ export const employeesApi = {
     (await api.get('/employees/stats')).data,
   birthdays: async (): Promise<{ success: boolean; data: Employee[] }> =>
     (await api.get('/employees/birthdays')).data,
-  get: async (id: string): Promise<ItemResponse<Employee>> =>
-    (await api.get(`/employees/${id}`)).data,
+  get: async (id: string, params?: { includeDeleted?: 1 }): Promise<ItemResponse<Employee>> =>
+    (await api.get(`/employees/${id}`, { params })).data,
+  /** `GET /employees/export` — every employee as a CSV file. */
+  exportCsv: async (): Promise<Blob> =>
+    (await api.get('/employees/export', { responseType: 'blob' })).data as Blob,
   create: async (input: EmployeeInput): Promise<ItemResponse<Employee>> =>
     (await api.post('/employees', input)).data,
   import: async (

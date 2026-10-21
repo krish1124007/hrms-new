@@ -32,7 +32,15 @@ import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 
+/**
+ * Mirrors the documents API: these roles may upload and delete any file;
+ * everyone else may delete only the files they uploaded themselves.
+ */
 const UPLOAD_ROLES = new Set(['admin', 'hr_manager', 'hr_executive']);
+
+function uploaderId(file: DocumentRecord): string {
+  return typeof file.uploadedBy === 'string' ? file.uploadedBy : file.uploadedBy._id;
+}
 
 interface FolderNode {
   name: string;
@@ -127,8 +135,13 @@ export default function DocumentsPage(): ReactElement {
   const qc = useQueryClient();
   const { user } = useAuth();
   const canUpload = !!user?.role?.slug && UPLOAD_ROLES.has(user.role.slug);
+  const canDelete = (file: DocumentRecord): boolean =>
+    canUpload || (!!user?._id && uploaderId(file) === user._id);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeFolder, setActiveFolder] = useState('/');
+  // A folder exists once a file is in it: "New folder" names one, then the
+  // picked files are uploaded into it. Cleared after the upload (or cancel).
+  const [pendingFolder, setPendingFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -173,26 +186,36 @@ export default function DocumentsPage(): ReactElement {
     },
   });
 
-  const onPickFiles = (): void => fileInputRef.current?.click();
+  const onPickFiles = (): void => {
+    setPendingFolder(null);
+    fileInputRef.current?.click();
+  };
 
   const onFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const list = e.target.files;
+    const folder = pendingFolder ?? activeFolder;
+    setPendingFolder(null);
     if (!list || list.length === 0) return;
-    for (const file of Array.from(list)) {
-      await upload.mutateAsync({ file, folder: activeFolder });
+    try {
+      for (const file of Array.from(list)) {
+        await upload.mutateAsync({ file, folder });
+      }
+      if (folder !== activeFolder) setActiveFolder(folder);
+    } catch {
+      // The mutation's onError already told the user.
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const submitNewFolder = (): void => {
-    const trimmed = newFolderName.trim();
+    const trimmed = newFolderName.trim().replace(/\//g, '-');
     if (!trimmed) return;
     const parent = activeFolder === '/' ? '' : activeFolder;
-    const newPath = `${parent}/${trimmed}`.replace(/\/+/g, '/');
-    setActiveFolder(newPath);
+    setPendingFolder(`${parent}/${trimmed}`.replace(/\/+/g, '/'));
     setNewFolderOpen(false);
     setNewFolderName('');
-    toast.success(`Switched to ${newPath} — upload a file to create it`);
+    fileInputRef.current?.click();
   };
 
   const files = filesData?.data ?? [];
@@ -297,9 +320,13 @@ export default function DocumentsPage(): ReactElement {
                 <FileCard
                   key={file._id}
                   file={file}
-                  onDelete={() => {
-                    if (confirm(`Delete "${file.name}"?`)) remove.mutate(file._id);
-                  }}
+                  onDelete={
+                    canDelete(file)
+                      ? () => {
+                          if (confirm(`Delete "${file.name}"?`)) remove.mutate(file._id);
+                        }
+                      : undefined
+                  }
                   removingId={remove.isPending ? remove.variables : undefined}
                 />
               ))}
@@ -314,8 +341,8 @@ export default function DocumentsPage(): ReactElement {
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            Create the folder by uploading a file into it. Folder paths persist only when they
-            contain at least one file.
+            Name the folder, then choose the files to put in it. A folder appears once it holds
+            at least one file.
           </p>
           <div>
             <Label htmlFor="nf-name">Folder name</Label>
@@ -336,7 +363,7 @@ export default function DocumentsPage(): ReactElement {
             Cancel
           </Button>
           <Button onClick={submitNewFolder} disabled={!newFolderName.trim()}>
-            Create &amp; switch
+            <Upload className="size-4" /> Choose files
           </Button>
         </DialogFooter>
       </Dialog>
@@ -350,7 +377,8 @@ function FileCard({
   removingId,
 }: {
   file: DocumentRecord;
-  onDelete: () => void;
+  /** Absent when the user may not delete this file. */
+  onDelete?: () => void;
   removingId?: string;
 }): ReactElement {
   const isRemoving = removingId === file._id;
@@ -381,14 +409,16 @@ function FileCard({
         >
           <Download className="size-4" />
         </a>
-        <button
-          onClick={onDelete}
-          disabled={isRemoving}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          title="Delete"
-        >
-          {isRemoving ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-        </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={isRemoving}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            title="Delete"
+          >
+            {isRemoving ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+          </button>
+        )}
       </div>
     </div>
   );

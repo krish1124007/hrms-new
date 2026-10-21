@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { Outlet } from 'react-router-dom';
 import { CalendarOff, ClipboardCheck, FileText, Users } from 'lucide-react';
+import { APP_NAME, COMPANY_NAME } from '@/config/brand';
 
 const HIGHLIGHTS: { icon: typeof Users; title: string; copy: string }[] = [
   {
@@ -48,10 +49,10 @@ export function AuthLayout(): ReactElement {
           <div className="flex items-center gap-3">
             <img
               src="/logo.png"
-              alt="DD HRMS"
+              alt={APP_NAME}
               className="size-10 rounded-xl ring-1 ring-white/20"
             />
-            <div className="text-base font-semibold tracking-tight">DD HRMS</div>
+            <div className="text-base font-semibold tracking-tight">{APP_NAME}</div>
           </div>
 
           {/* Headline + bullets */}
@@ -62,7 +63,7 @@ export function AuthLayout(): ReactElement {
               </h2>
               <p className="mt-3 max-w-md text-base text-primary-foreground/85">
                 Hiring to retirement, attendance to payroll — every HR workflow
-                for Dharmesh Deshani Group of Companies, in one platform.
+                for {COMPANY_NAME}, in one platform.
               </p>
             </div>
 
@@ -83,7 +84,7 @@ export function AuthLayout(): ReactElement {
 
           {/* Footnote */}
           <p className="text-xs text-primary-foreground/60">
-            © {new Date().getFullYear()} Dharmesh Deshani Group of Companies. All rights reserved.
+            © {new Date().getFullYear()} {COMPANY_NAME}. All rights reserved.
           </p>
         </div>
       </div>

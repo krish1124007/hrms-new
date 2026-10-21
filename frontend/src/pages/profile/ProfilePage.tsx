@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { KeyRound, Save, UserCircle } from 'lucide-react';
+import { Camera, KeyRound, Save, UserCircle } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Avatar } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { authApi } from '@/lib/auth.api';
+import { isNoEmployeeProfile, profileApi } from '@/lib/profile.api';
 import { tokenStorage } from '@/lib/axios';
 import { useAuthStore } from '@/stores/auth.store';
 import { getRoleBadge } from '@/lib/permissions';
@@ -20,6 +21,9 @@ interface ProfileFormValues {
   firstName: string;
   lastName: string;
 }
+
+/** Largest profile photo accepted, in bytes. */
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 interface PasswordFormValues {
   currentPassword: string;
@@ -33,6 +37,39 @@ export default function ProfilePage(): ReactElement {
   const setSession = useAuthStore((s) => s.setSession);
   const clear = useAuthStore((s) => s.clear);
   const roleBadge = getRoleBadge(user);
+  const qc = useQueryClient();
+
+  // The photo lives on the employee record (`PATCH /employees/me { avatar }`);
+  // a login without an employee profile has nowhere to keep one.
+  const meQ = useQuery({
+    queryKey: ['employees', 'me'],
+    queryFn: profileApi.me,
+    retry: false,
+    meta: { silent: true },
+  });
+  const noProfile = meQ.isError && isNoEmployeeProfile(meQ.error);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const uploadAvatar = useMutation({
+    mutationFn: (file: File) => profileApi.uploadAvatar(file),
+    onSuccess: (res) => {
+      qc.setQueryData(['employees', 'me'], res);
+      toast.success('Profile photo updated');
+    },
+  });
+  const onAvatarPicked = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Choose an image file (JPG or PNG)');
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      toast.error('The photo must be 5 MB or smaller');
+      return;
+    }
+    uploadAvatar.mutate(file);
+  };
 
   const profileForm = useForm<ProfileFormValues>({
     defaultValues: { firstName: user?.firstName ?? '', lastName: user?.lastName ?? '' },
@@ -104,10 +141,38 @@ export default function ProfilePage(): ReactElement {
       {/* Identity card */}
       <Card>
         <CardContent className="flex flex-col items-center gap-4 p-6 sm:flex-row sm:items-start">
-          <Avatar
-            name={`${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || user?.email || 'User'}
-            size="lg"
-          />
+          <div className="flex flex-col items-center gap-2">
+            <Avatar
+              name={`${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || user?.email || 'User'}
+              src={meQ.data?.data.avatar}
+              size="lg"
+            />
+            {meQ.data && (
+              <>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={onAvatarPicked}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => avatarInputRef.current?.click()}
+                  loading={uploadAvatar.isPending}
+                >
+                  <Camera className="size-4" /> Change photo
+                </Button>
+              </>
+            )}
+            {noProfile && (
+              <p className="max-w-[10rem] text-center text-xs text-muted-foreground">
+                Photos are kept on employee profiles; this login has none.
+              </p>
+            )}
+          </div>
           <div className="flex-1 text-center sm:text-left">
             <h2 className="text-2xl font-bold text-foreground">
               {user?.firstName} {user?.lastName}

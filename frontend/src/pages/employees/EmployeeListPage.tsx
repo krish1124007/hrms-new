@@ -10,9 +10,11 @@ import {
   Upload,
   Plus,
   Search,
-  MoreHorizontal,
   Calendar,
   Trash2,
+  Eye,
+  Pencil,
+  UserCog,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatCard } from '@/components/ui/stat-card';
@@ -23,6 +25,8 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import { DeleteEmployeeDialog } from '@/components/common/DeleteEmployeeDialog';
+import { RowActionsMenu, type RowAction } from '@/components/common/RowActionsMenu';
+import { EmployeeStatusDialog } from '@/components/employees/EmployeeStatusDialog';
 import {
   useEmployees,
   useEmployeeStats,
@@ -30,7 +34,8 @@ import {
   useDesignations,
 } from '@/hooks/use-systemcore';
 import { usePermissions } from '@/hooks/use-permissions';
-import type { Employee } from '@/lib/systemcore.api';
+import { employeesApi, type Employee } from '@/lib/systemcore.api';
+import { todayKey } from '@/lib/business-day';
 import { EmployeeImportModal } from './EmployeeImportModal';
 
 const STATUS_VARIANTS: Record<Employee['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
@@ -56,23 +61,63 @@ export default function EmployeeListPage(): ReactElement {
   const [designation, setDesignation] = useState('');
   const [statusTab, setStatusTab] = useState<'all' | Employee['status']>('all');
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [statusFor, setStatusFor] = useState<Employee | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  // Deleting an employee is irreversible from the UI, so it goes through a
+  // dialog that names the person rather than a bare click. The other
+  // management actions follow the API's permissions too.
+  const { has } = usePermissions();
+  const canDelete = has('employees.delete');
+  const canCreate = has('employees.create');
+  const canUpdate = has('employees.update');
+  const [pendingDelete, setPendingDelete] = useState<Employee | null>(null);
 
   const params: Record<string, unknown> = { page, limit: 20 };
   if (search) params.search = search;
   if (department) params.department = department;
   if (designation) params.designation = designation;
   if (statusTab !== 'all') params.status = statusTab;
+  // Soft-deleted employees are listed (and restorable) only for employees.delete.
+  if (canDelete && showDeleted) params.includeDeleted = 1;
 
   const { data, isLoading, isFetching, error, refetch } = useEmployees(params);
   const { data: statsData } = useEmployeeStats();
   const { data: deptData } = useDepartments({ limit: 100 });
   const { data: desigData } = useDesignations({ limit: 100, department: department || undefined });
 
-  // Deleting an employee is irreversible from the UI, so it goes through a
-  // dialog that names the person rather than a bare click.
-  const { has } = usePermissions();
-  const canDelete = has('employees.delete');
-  const [pendingDelete, setPendingDelete] = useState<Employee | null>(null);
+  const handleExport = async (): Promise<void> => {
+    setExporting(true);
+    try {
+      const blob = await employeesApi.exportCsv();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `employees-${todayKey()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Could not export employees');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const rowActions = (row: Employee): RowAction[] => {
+    const actions: RowAction[] = [
+      { label: 'View', icon: Eye, onSelect: () => navigate(`/employees/${row._id}`) },
+    ];
+    if (canUpdate && !row.isDeleted) {
+      actions.push(
+        { label: 'Edit', icon: Pencil, onSelect: () => navigate(`/employees/${row._id}/edit`) },
+        { label: 'Change status', icon: UserCog, onSelect: () => setStatusFor(row) },
+      );
+    }
+    return actions;
+  };
 
   const stats = statsData?.data;
 
@@ -126,9 +171,12 @@ export default function EmployeeListPage(): ReactElement {
     {
       key: 'status',
       header: 'Status',
-      cell: (row) => (
-        <Badge variant={STATUS_VARIANTS[row.status] ?? 'secondary'}>{row.status}</Badge>
-      ),
+      cell: (row) =>
+        row.isDeleted ? (
+          <Badge variant="destructive">deleted</Badge>
+        ) : (
+          <Badge variant={STATUS_VARIANTS[row.status] ?? 'secondary'}>{row.status}</Badge>
+        ),
     },
     {
       key: 'joiningDate',
@@ -152,7 +200,7 @@ export default function EmployeeListPage(): ReactElement {
           >
             <Calendar className="size-4" />
           </button>
-          {canDelete && (
+          {canDelete && !row.isDeleted && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -164,9 +212,10 @@ export default function EmployeeListPage(): ReactElement {
               <Trash2 className="size-4" />
             </button>
           )}
-          <button className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
-            <MoreHorizontal className="size-4" />
-          </button>
+          <RowActionsMenu
+            label={`More actions for ${row.firstName} ${row.lastName}`}
+            actions={rowActions(row)}
+          />
         </div>
       ),
     },
@@ -180,15 +229,19 @@ export default function EmployeeListPage(): ReactElement {
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Employees' }]}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => setShowImportModal(true)}>
-              <Upload className="size-4" /> Import
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => toast.info('Export functionality is coming soon')}>
+            {canCreate && (
+              <Button variant="outline" size="sm" onClick={() => setShowImportModal(true)}>
+                <Upload className="size-4" /> Import
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void handleExport()} loading={exporting}>
               <Download className="size-4" /> Export
             </Button>
-            <Button size="sm" onClick={() => navigate('/employees/new')}>
-              <Plus className="size-4" /> Add Employee
-            </Button>
+            {canCreate && (
+              <Button size="sm" onClick={() => navigate('/employees/new')}>
+                <Plus className="size-4" /> Add Employee
+              </Button>
+            )}
           </>
         }
       />
@@ -220,6 +273,19 @@ export default function EmployeeListPage(): ReactElement {
               {t.label}
             </button>
           ))}
+          {canDelete && (
+            <label className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showDeleted}
+                onChange={(e) => {
+                  setShowDeleted(e.target.checked);
+                  setPage(1);
+                }}
+              />
+              Include deleted
+            </label>
+          )}
         </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           <div className="relative">
@@ -276,7 +342,7 @@ export default function EmployeeListPage(): ReactElement {
         rowKey={(r) => r._id}
         onRowClick={(r) => navigate(`/employees/${r._id}`)}
         emptyTitle="No employees found"
-        emptyDescription="Add your first employee to get started"
+        emptyDescription={canCreate ? 'Add your first employee to get started' : undefined}
       />
 
       {data?.pagination && (
@@ -291,6 +357,8 @@ export default function EmployeeListPage(): ReactElement {
         employee={pendingDelete}
         onClose={() => setPendingDelete(null)}
       />
+
+      <EmployeeStatusDialog employee={statusFor} onClose={() => setStatusFor(null)} />
 
       <EmployeeImportModal
         open={showImportModal}

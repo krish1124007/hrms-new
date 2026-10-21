@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Loader2,
@@ -43,7 +44,9 @@ import {
   useRestorePolicy,
   useUploadPolicyAttachment,
 } from '@/hooks/use-hr-policies';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { RichText } from '@/components/common/RichText';
+import { employeesApi } from '@/lib/systemcore.api';
+import { isNoEmployeeProfile, profileApi } from '@/lib/profile.api';
 import { POLICY_CATEGORIES, type PolicyStatus } from '@/lib/hr-policies.api';
 import { formatDate, formatRelative } from '@/lib/format';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -58,7 +61,11 @@ export default function PolicyDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data, isLoading } = usePolicy(id);
-  const { data: ackData } = usePolicyAcknowledgements(id);
+  const { has } = usePermissions();
+  // Everything that changes the policy, or reads other people's
+  // acknowledgements, is `policies.manage` on the API.
+  const canManage = has('policies.manage');
+  const { data: ackData } = usePolicyAcknowledgements(id, canManage);
   const publish = usePublishPolicy();
   const archive = useArchivePolicy();
   const restore = useRestorePolicy();
@@ -66,10 +73,6 @@ export default function PolicyDetailPage(): ReactElement {
   const acknowledge = useAcknowledgePolicy();
   const uploadAttachment = useUploadPolicyAttachment();
   const deleteAttachment = useDeletePolicyAttachment();
-  const { data: empData } = useEmployees({ limit: 500 });
-  const employees = empData?.data ?? [];
-  const { has } = usePermissions();
-  const canManage = has('policies.manage');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const apiOrigin = (import.meta.env.VITE_API_URL as string | undefined)?.replace(
@@ -86,6 +89,24 @@ export default function PolicyDetailPage(): ReactElement {
   const [ackOpen, setAckOpen] = useState(false);
   const [ackEmp, setAckEmp] = useState('');
   const [ackComment, setAckComment] = useState('');
+
+  // HR's "record on behalf of" picker — current staff only, loaded on demand.
+  const { data: empData } = useQuery({
+    queryKey: ['employees', 'policy-ack-picker'],
+    queryFn: () => employeesApi.list({ status: 'active', limit: 100 }),
+    enabled: canManage && ackOpen,
+  });
+  const employees = empData?.data ?? [];
+
+  // The signed-in user's employee record, to find their own acknowledgement.
+  const meQ = useQuery({
+    queryKey: ['employees', 'me'],
+    queryFn: profileApi.me,
+    retry: false,
+    meta: { silent: true },
+  });
+  const myEmployeeId = meQ.data?.data._id;
+  const noProfile = meQ.isError && isNoEmployeeProfile(meQ.error);
 
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -107,6 +128,10 @@ export default function PolicyDetailPage(): ReactElement {
       </div>
     );
   }
+
+  const myAck = myEmployeeId
+    ? p.acknowledgements?.find((a) => a.employee?._id === myEmployeeId)
+    : undefined;
 
   const categoryLabel =
     POLICY_CATEGORIES.find((c) => c.value === p.category)?.label ?? p.category;
@@ -175,37 +200,41 @@ export default function PolicyDetailPage(): ReactElement {
             <Button variant="outline" size="sm" onClick={() => navigate('/hr-policies')}>
               <ArrowLeft className="size-4" /> Back
             </Button>
-            {p.status === 'draft' && (
+            {canManage && p.status === 'draft' && (
               <Button size="sm" onClick={() => setPubOpen(true)}>
                 <Send className="size-4" /> Publish
               </Button>
             )}
-            {p.status === 'published' && (
+            {canManage && p.status === 'published' && (
               <Button size="sm" onClick={() => setAckOpen(true)}>
                 <CheckCircle2 className="size-4" /> Record acknowledgement
               </Button>
             )}
-            {(p.status === 'draft' || p.status === 'published') && (
+            {canManage && (p.status === 'draft' || p.status === 'published') && (
               <Button variant="outline" size="sm" onClick={() => archive.mutate(p._id)}>
                 <Archive className="size-4" /> Archive
               </Button>
             )}
-            {p.status === 'archived' && (
+            {canManage && p.status === 'archived' && (
               <Button size="sm" onClick={() => restore.mutate(p._id)}>
                 <RotateCcw className="size-4" /> Restore
               </Button>
             )}
-            <Button variant="outline" size="sm" asChild>
-              <Link to={`/hr-policies/${p._id}/edit`}>
-                <Pencil className="size-4" /> Edit
-              </Link>
-            </Button>
+            {canManage && (
+              <Button variant="outline" size="sm" asChild>
+                <Link to={`/hr-policies/${p._id}/edit`}>
+                  <Pencil className="size-4" /> Edit
+                </Link>
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
               <History className="size-4" /> History
             </Button>
-            <Button variant="outline" size="sm" onClick={handleDelete}>
-              <Trash2 className="size-4" /> Delete
-            </Button>
+            {canManage && (
+              <Button variant="outline" size="sm" onClick={handleDelete}>
+                <Trash2 className="size-4" /> Delete
+              </Button>
+            )}
           </div>
         }
       />
@@ -254,9 +283,11 @@ export default function PolicyDetailPage(): ReactElement {
             <Detail label="Updated" value={formatDate(p.updatedAt)} />
           </div>
 
-          <div className="prose prose-sm max-w-none whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-4 font-sans text-sm leading-relaxed">
-            {p.content}
-          </div>
+          <RichText
+            source={p.content}
+            format="markdown"
+            className="rounded-md border border-border bg-muted/20 p-4 text-sm leading-relaxed"
+          />
 
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between">
@@ -334,62 +365,106 @@ export default function PolicyDetailPage(): ReactElement {
           </div>
         </Card>
 
-        <Card className="p-6">
-          <h3 className="mb-4 flex items-center gap-2 text-base font-semibold">
-            <Users className="size-4 text-muted-foreground" /> Acknowledgements
-          </h3>
-          {p.status !== 'published' ? (
-            <p className="text-sm text-muted-foreground">
-              Acknowledgements become available after the policy is published.
-            </p>
-          ) : ackSummary ? (
-            <div className="space-y-4">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Acknowledged</span>
-                  <span>
-                    {ackSummary.acknowledged} / {ackSummary.total}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full bg-success transition-all"
-                    style={{
-                      width: `${
-                        ackSummary.total > 0
-                          ? (ackSummary.acknowledged / ackSummary.total) * 100
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
+        <div className="space-y-6">
+          <Card className="p-6">
+            <h3 className="mb-4 flex items-center gap-2 text-base font-semibold">
+              <CheckCircle2 className="size-4 text-muted-foreground" /> Your acknowledgement
+            </h3>
+            {p.status !== 'published' ? (
+              <p className="text-sm text-muted-foreground">
+                This policy is not published, so there is nothing to acknowledge yet.
+              </p>
+            ) : noProfile ? (
+              <p className="text-sm text-muted-foreground">
+                Your login is not linked to an employee profile, so you cannot acknowledge policies.
+              </p>
+            ) : meQ.isLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : myAck && myAck.versionNumber >= p.currentVersion ? (
+              <p className="text-sm text-success">
+                You acknowledged v{myAck.versionNumber} on {formatDate(myAck.acknowledgedAt)}.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  {myAck
+                    ? `You acknowledged v${myAck.versionNumber}; the policy has changed since. Please read v${p.currentVersion} and acknowledge it.`
+                    : p.mandatory
+                      ? 'This policy is mandatory. Read it, then confirm below.'
+                      : 'Read the policy, then confirm below.'}
+                </p>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => acknowledge.mutate({ id: p._id })}
+                  loading={acknowledge.isPending}
+                  disabled={!myEmployeeId}
+                >
+                  <CheckCircle2 className="size-4" /> I have read and acknowledge this policy
+                </Button>
               </div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-xs text-muted-foreground">Acknowledged</p>
-                  <p className="font-semibold">{ackSummary.acknowledged}</p>
+            )}
+          </Card>
+
+          {canManage && (
+            <Card className="p-6">
+              <h3 className="mb-4 flex items-center gap-2 text-base font-semibold">
+                <Users className="size-4 text-muted-foreground" /> Acknowledgements
+              </h3>
+              {p.status !== 'published' ? (
+                <p className="text-sm text-muted-foreground">
+                  Acknowledgements become available after the policy is published.
+                </p>
+              ) : ackSummary ? (
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Acknowledged</span>
+                      <span>
+                        {ackSummary.acknowledged} / {ackSummary.total}
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full bg-success transition-all"
+                        style={{
+                          width: `${
+                            ackSummary.total > 0
+                              ? (ackSummary.acknowledged / ackSummary.total) * 100
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Acknowledged</p>
+                      <p className="font-semibold">{ackSummary.acknowledged}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Pending</p>
+                      <p className="font-semibold">{ackSummary.pending}</p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setAckOpen(true)}
+                    disabled={p.status !== 'published'}
+                  >
+                    <CheckCircle2 className="size-4" /> Record acknowledgement
+                  </Button>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Pending</p>
-                  <p className="font-semibold">{ackSummary.pending}</p>
-                </div>
-              </div>
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={() => setAckOpen(true)}
-                disabled={p.status !== 'published'}
-              >
-                <CheckCircle2 className="size-4" /> Record acknowledgement
-              </Button>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Loading acknowledgement summary...</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading acknowledgement summary...</p>
+              )}
+            </Card>
           )}
-        </Card>
+        </div>
       </div>
 
-      {p.acknowledgements?.length > 0 && (
+      {canManage && p.acknowledgements?.length > 0 && (
         <Card className="p-6">
           <h3 className="mb-4 text-base font-semibold">Acknowledgement log</h3>
           <div className="overflow-hidden rounded-md border border-border">

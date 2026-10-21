@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { BadgeCheck, Building2, ShieldX, User } from 'lucide-react';
+import { COMPANY_NAME } from '@/config/brand';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1';
 
@@ -66,7 +67,7 @@ export default function VerifyIDPage(): ReactElement {
               <p className="text-base font-bold">
                 {data.valid ? 'Verified employee' : 'No longer employed'}
               </p>
-              <p className="text-[11px] uppercase tracking-widest opacity-90">DD HRMS</p>
+              <p className="text-[11px] uppercase tracking-widest opacity-90">{COMPANY_NAME}</p>
             </div>
 
             <div className="flex flex-col items-center px-6 py-6">

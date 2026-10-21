@@ -6,7 +6,6 @@ import { Header } from '@/components/layout/Header';
 import { PageTransition } from '@/components/common/PageTransition';
 import { ShortcutHelp } from '@/components/common/ShortcutHelp';
 import { useShortcut } from '@/hooks/use-shortcut';
-import { useDirection } from '@/hooks/use-direction';
 import { usePermissions } from '@/hooks/use-permissions';
 import { NAV_ACCESS } from '@/config/navigation';
 import { useNavigate } from 'react-router-dom';
@@ -16,7 +15,6 @@ export function DashboardLayout(): ReactElement {
   const location = useLocation();
   const navigate = useNavigate();
   const { hasAny } = usePermissions();
-  useDirection();
   const enabledModules: string[] | undefined = undefined;
 
   // Gmail-style two-key navigation shortcuts. These are the universe of

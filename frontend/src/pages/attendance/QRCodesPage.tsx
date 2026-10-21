@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { QrImage } from '@/components/common/QrImage';
 import { useQRCodes, useCreateQRCode, useDeleteQRCode } from '@/hooks/use-attendance';
 import { attendanceApi, type QRCodeRecord } from '@/lib/attendance.api';
 
@@ -18,10 +19,11 @@ function qrPayload(type: 'static' | 'dynamic', code: string): string {
   return `DHRMS:${type}:${code}`;
 }
 
-/** URL for a rendered QR image of the given payload. */
-function qrImageUrl(data: string, size = 400): string {
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}`;
-}
+/**
+ * How often the displayed dynamic code is replaced. The server keeps each code
+ * valid a little longer (45 s), so a scan just before a refresh still works.
+ */
+const DYNAMIC_ROTATE_MS = 30_000;
 
 export default function QRCodesPage(): ReactElement {
   const { data, isLoading } = useQRCodes({ limit: 100 });
@@ -42,11 +44,11 @@ export default function QRCodesPage(): ReactElement {
       const res = await attendanceApi.rotateDynamicQR();
       if (!cancelled) {
         setDynamicCode({ code: res.data.code, expiresAt: res.data.expiresAt });
-        setSecondsLeft(res.data.ttlSeconds);
+        setSecondsLeft(DYNAMIC_ROTATE_MS / 1000);
       }
     };
     void rotate();
-    const interval = setInterval(() => void rotate(), 30_000);
+    const interval = setInterval(() => void rotate(), DYNAMIC_ROTATE_MS);
     const tick = setInterval(() => setSecondsLeft((s) => (s > 0 ? s - 1 : 0)), 1000);
     return () => {
       cancelled = true;
@@ -108,7 +110,7 @@ export default function QRCodesPage(): ReactElement {
         </button>
         <h1 className="mb-4 text-3xl font-bold">Scan to Check In</h1>
         <div className="rounded-2xl border-4 border-primary bg-white p-8">
-          <img alt="dynamic qr" src={qrImageUrl(qrPayload('dynamic', dynamicCode.code))} />
+          <QrImage alt="Dynamic check-in QR code" value={qrPayload('dynamic', dynamicCode.code)} />
         </div>
         <p className="mt-6 text-2xl font-mono">Refreshing in {secondsLeft}s</p>
       </div>
@@ -135,7 +137,7 @@ export default function QRCodesPage(): ReactElement {
         <h1 className="mb-2 text-3xl font-bold">Scan to Check In</h1>
         <p className="mb-6 text-sm text-neutral-500">Post this at the entrance — it does not expire.</p>
         <div className="rounded-2xl border-4 border-black bg-white p-8">
-          <img alt="static qr" src={qrImageUrl(qrPayload('static', staticView.code))} />
+          <QrImage alt="Static check-in QR code" value={qrPayload('static', staticView.code)} />
         </div>
         <p className="mt-6 font-mono text-xs text-neutral-400">{staticView.code}</p>
       </div>
@@ -176,8 +178,8 @@ export default function QRCodesPage(): ReactElement {
             entrance.
           </p>
           <p>
-            <strong className="text-foreground">Dynamic QR:</strong> Display on a screen — code rotates every 45
-            seconds for security.
+            <strong className="text-foreground">Dynamic QR:</strong> Display on a screen — the code rotates every{' '}
+            {DYNAMIC_ROTATE_MS / 1000} seconds for security.
           </p>
         </CardContent>
       </Card>

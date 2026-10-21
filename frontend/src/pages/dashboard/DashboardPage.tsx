@@ -2,9 +2,9 @@ import { type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
+  BarChart3,
   CalendarOff,
   ClipboardList,
-  FileText,
   Plus,
   Receipt,
   UserCheck,
@@ -28,6 +28,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/hooks/use-auth';
+import { usePermissions } from '@/hooks/use-permissions';
 import { OnboardingChecklist } from '@/components/common/OnboardingChecklist';
 import { dashboardApi } from '@/lib/dashboard.api';
 
@@ -46,6 +47,7 @@ import { dashboardApi } from '@/lib/dashboard.api';
 
 export default function DashboardPage(): ReactElement {
   const { user } = useAuth();
+  const { has } = usePermissions();
   const today = new Date().toLocaleDateString(undefined, {
     weekday: 'long',
     day: 'numeric',
@@ -87,16 +89,19 @@ export default function DashboardPage(): ReactElement {
         description={today}
         actions={
           <>
-            <Link to="/employees">
-              <Button variant="outline" size="sm">
-                <FileText className="size-4" /> Reports
+            {/* The analytics overview is the reports page for this dashboard. */}
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/dashboard/overview">
+                <BarChart3 className="size-4" /> Analytics
+              </Link>
+            </Button>
+            {has('employees.create') && (
+              <Button size="sm" asChild>
+                <Link to="/employees/new">
+                  <Plus className="size-4" /> Add Employee
+                </Link>
               </Button>
-            </Link>
-            <Link to="/employees/new">
-              <Button size="sm">
-                <Plus className="size-4" /> Add Employee
-              </Button>
-            </Link>
+            )}
           </>
         }
       />

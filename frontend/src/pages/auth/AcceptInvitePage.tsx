@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordStrengthMeter } from '@/components/common/PasswordStrengthMeter';
 import { useAcceptInvite } from '@/hooks/use-auth';
+import { APP_NAME } from '@/config/brand';
 
 const schema = z
   .object({
@@ -87,7 +88,7 @@ export default function AcceptInvitePage(): ReactElement {
     <div className="mx-auto w-full max-w-sm">
       <h1 className="mb-2 text-3xl font-bold tracking-tight">Activate your account</h1>
       <p className="mb-8 text-sm text-muted-foreground">
-        Choose a password to finish setting up your DD HRMS account.
+        Choose a password to finish setting up your {APP_NAME} account.
       </p>
 
       {error && (

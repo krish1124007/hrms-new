@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Plus, Trash2, MapPin } from 'lucide-react';
+import { Plus, Trash2, MapPin, Pencil, Users } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,39 +17,66 @@ import {
   useAttendanceSites,
   useCreateSite,
   useDeleteSite,
+  useUpdateSite,
 } from '@/hooks/use-attendance';
 import type { AttendanceSite } from '@/lib/attendance.api';
+import { EmployeeChecklist } from '@/components/employees/EmployeeChecklist';
+
+/** `assignedEmployees` comes back as ids (or populated docs from the detail route). */
+function assignedIds(site: AttendanceSite): string[] {
+  return (site.assignedEmployees ?? []).map((e: string | { _id: string }) => (typeof e === 'string' ? e : e._id));
+}
 
 export default function AttendanceSitesPage(): ReactElement {
   const { data, isLoading } = useAttendanceSites({ limit: 100 });
   const createSite = useCreateSite();
   const deleteSite = useDeleteSite();
+  const updateSite = useUpdateSite();
 
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<AttendanceSite | null>(null);
+  const [isActive, setIsActive] = useState(true);
+  const [assigning, setAssigning] = useState<AttendanceSite | null>(null);
+  const [assignIds, setAssignIds] = useState<string[]>([]);
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [lat, setLat] = useState('');
   const [lng, setLng] = useState('');
   const [radius, setRadius] = useState('100');
 
+  const fillForm = (site: AttendanceSite | null): void => {
+    setEditing(site);
+    setName(site?.name ?? '');
+    setAddress(site?.address ?? '');
+    setLat(site ? String(site.location.lat) : '');
+    setLng(site ? String(site.location.lng) : '');
+    setRadius(site ? String(site.radius) : '100');
+    setIsActive(site?.isActive ?? true);
+    setOpen(true);
+  };
+
   const submit = (): void => {
-    createSite.mutate(
-      {
-        name,
-        address: address || undefined,
-        location: { lat: Number(lat), lng: Number(lng) },
-        radius: Number(radius),
-      },
-      {
-        onSuccess: () => {
-          setOpen(false);
-          setName('');
-          setAddress('');
-          setLat('');
-          setLng('');
-          setRadius('100');
-        },
-      },
+    const input = {
+      name,
+      address: address || undefined,
+      location: { lat: Number(lat), lng: Number(lng) },
+      radius: Number(radius),
+    };
+    const done = { onSuccess: () => setOpen(false) };
+    if (editing) updateSite.mutate({ id: editing._id, input: { ...input, isActive } }, done);
+    else createSite.mutate(input, done);
+  };
+
+  const openAssign = (site: AttendanceSite): void => {
+    setAssigning(site);
+    setAssignIds(assignedIds(site));
+  };
+
+  const saveAssign = (): void => {
+    if (!assigning) return;
+    updateSite.mutate(
+      { id: assigning._id, input: { assignedEmployees: assignIds } },
+      { onSuccess: () => setAssigning(null) },
     );
   };
 
@@ -80,6 +107,39 @@ export default function AttendanceSitesPage(): ReactElement {
       cell: (r) => <Badge variant={r.isActive ? 'success' : 'secondary'}>{r.isActive ? 'Active' : 'Inactive'}</Badge>,
     },
     {
+      key: 'employees',
+      header: 'Employees',
+      cell: (r) => {
+        const n = assignedIds(r).length;
+        return n === 0 ? <span className="text-muted-foreground">None</span> : `${n} assigned`;
+      },
+    },
+    {
+      key: 'manage',
+      header: '',
+      width: '80px',
+      cell: (r) => (
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={() => fillForm(r)}
+            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Edit site"
+            aria-label={`Edit ${r.name}`}
+          >
+            <Pencil className="size-4" />
+          </button>
+          <button
+            onClick={() => openAssign(r)}
+            className="rounded p-1.5 text-primary hover:bg-primary/10"
+            title="Assign employees"
+            aria-label={`Assign employees to ${r.name}`}
+          >
+            <Users className="size-4" />
+          </button>
+        </div>
+      ),
+    },
+    {
       key: 'actions',
       header: '',
       width: '60px',
@@ -105,7 +165,7 @@ export default function AttendanceSitesPage(): ReactElement {
           { label: 'Sites' },
         ]}
         actions={
-          <Button onClick={() => setOpen(true)}>
+          <Button onClick={() => fillForm(null)}>
             <Plus className="mr-2 size-4" />
             New Site
           </Button>
@@ -123,7 +183,7 @@ export default function AttendanceSitesPage(): ReactElement {
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
         <DialogHeader>
-          <DialogTitle>New attendance site</DialogTitle>
+          <DialogTitle>{editing ? 'Edit attendance site' : 'New attendance site'}</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div>
@@ -157,6 +217,12 @@ export default function AttendanceSitesPage(): ReactElement {
               onChange={(e) => setRadius(e.target.value)}
             />
           </div>
+          {editing && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+              Active — check-ins can use this site
+            </label>
+          )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
@@ -164,10 +230,30 @@ export default function AttendanceSitesPage(): ReactElement {
           </Button>
           <Button
             onClick={submit}
-            loading={createSite.isPending}
+            loading={createSite.isPending || (!!editing && updateSite.isPending)}
             disabled={!name || !lat || !lng}
           >
-            Create
+            {editing ? 'Save' : 'Create'}
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <Dialog open={!!assigning} onClose={() => setAssigning(null)} size="md">
+        <DialogHeader>
+          <DialogTitle>Employees at {assigning?.name}</DialogTitle>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Tick the employees who work from this site; untick anyone who has moved.
+          </p>
+          {assigning && <EmployeeChecklist value={assignIds} onChange={setAssignIds} />}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setAssigning(null)}>
+            Cancel
+          </Button>
+          <Button onClick={saveAssign} loading={updateSite.isPending}>
+            Save
           </Button>
         </DialogFooter>
       </Dialog>

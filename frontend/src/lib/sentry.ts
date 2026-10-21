@@ -40,17 +40,4 @@ export function initSentry(): void {
   };
 }
 
-/** Set the current user on every event (call after login / logout). */
-export function setSentryUser(user: { id: string; email?: string; tenantId?: string } | null): void {
-  if (!user) {
-    Sentry.setUser(null);
-    return;
-  }
-  Sentry.setUser({
-    id: user.id,
-    email: user.email,
-    segment: user.tenantId, // tenant-based cohorting
-  });
-}
-
 export { Sentry };

@@ -6,7 +6,6 @@ import {
   ArrowUpRight,
   BarChart3,
   CalendarOff,
-  CheckCircle2,
   Loader2,
   MapPin,
   Target,
@@ -33,6 +32,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { usePermissions } from '@/hooks/use-permissions';
 import { getAnalytics, type AnalyticsData } from '@/lib/analytics.api';
 
 const DEPT_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
@@ -60,7 +60,7 @@ export default function OverviewPage(): ReactElement {
       <div className="flex flex-col gap-6">
         <PageHeader
           title="Analytics Overview"
-          description="Live business insights, trends, and forecasts across every module"
+          description="Headcount, attendance and leave trends across the company"
         />
         <Card>
           <CardContent className="flex h-64 items-center justify-center">
@@ -75,6 +75,10 @@ export default function OverviewPage(): ReactElement {
 }
 
 function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
+  // Field figures (agents, visits, orders, targets) only mean something to
+  // people who run field sales; for everyone else they are always empty.
+  const { has } = usePermissions();
+  const showField = has('field-sales.view');
   const headcountWithColor = data.headcountByDepartment.map((d, i) => ({
     ...d,
     color: DEPT_COLORS[i % DEPT_COLORS.length],
@@ -93,7 +97,7 @@ function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Analytics Overview"
-        description="Live business insights, trends, and forecasts across every module"
+        description="Headcount, attendance and leave trends across the company"
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -224,7 +228,7 @@ function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card className={showField ? 'lg:col-span-2' : 'lg:col-span-3'}>
           <CardHeader>
             <CardTitle>Leave Distribution</CardTitle>
             <p className="text-xs text-muted-foreground">This month by type</p>
@@ -268,89 +272,93 @@ function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
           </CardContent>
         </Card>
 
+        {showField && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Field Operations</CardTitle>
+                <p className="text-xs text-muted-foreground">Live today</p>
+              </div>
+              <MapPin className="size-5 text-primary" />
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FieldStat label="Active Agents" value={data.fieldStats.activeAgents} color="text-emerald-500" />
+              <FieldStat label="Visits Today" value={data.fieldStats.visitsToday} color="text-blue-500" />
+              <FieldStat label="Orders Today" value={data.fieldStats.ordersToday} color="text-purple-500" />
+              <FieldStat
+                label="Collection Today"
+                value={formatINR(data.fieldStats.collectionToday, true)}
+                color="text-amber-500"
+              />
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {showField && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle>Field Operations</CardTitle>
-              <p className="text-xs text-muted-foreground">Live today</p>
+              <CardTitle>Top Performers</CardTitle>
+              <p className="text-xs text-muted-foreground">% of monthly target achieved</p>
             </div>
-            <MapPin className="size-5 text-primary" />
+            <Trophy className="size-5 text-amber-500" />
           </CardHeader>
-          <CardContent className="space-y-4">
-            <FieldStat label="Active Agents" value={data.fieldStats.activeAgents} color="text-emerald-500" />
-            <FieldStat label="Visits Today" value={data.fieldStats.visitsToday} color="text-blue-500" />
-            <FieldStat label="Orders Today" value={data.fieldStats.ordersToday} color="text-purple-500" />
-            <FieldStat
-              label="Collection Today"
-              value={formatINR(data.fieldStats.collectionToday, true)}
-              color="text-amber-500"
-            />
+          <CardContent>
+            {data.topPerformers.length === 0 ? (
+              <EmptyState message="No sales targets recorded for this month yet." />
+            ) : (
+              <ul className="space-y-3">
+                {data.topPerformers.map((p, i) => {
+                  const pct = p.target > 0 ? Math.round((p.achieved / p.target) * 100) : 0;
+                  return (
+                    <li key={`${p.name}-${i}`} className="flex items-center gap-3">
+                      <div
+                        className={cn(
+                          'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                          i === 0
+                            ? 'bg-amber-500/20 text-amber-500'
+                            : i === 1
+                              ? 'bg-slate-400/20 text-slate-400'
+                              : i === 2
+                                ? 'bg-orange-700/20 text-orange-700'
+                                : 'bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {i + 1}
+                      </div>
+                      <Avatar name={p.name} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{p.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{p.role}</p>
+                      </div>
+                      <div className="w-32">
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className={cn(
+                              'h-full rounded-full',
+                              pct >= 120 ? 'bg-emerald-500' : pct >= 100 ? 'bg-blue-500' : 'bg-amber-500',
+                            )}
+                            style={{ width: `${Math.min(pct, 150) / 1.5}%` }}
+                          />
+                        </div>
+                      </div>
+                      <span
+                        className={cn(
+                          'min-w-[52px] text-right text-sm font-semibold',
+                          pct >= 120 ? 'text-emerald-500' : pct >= 100 ? 'text-blue-500' : 'text-amber-500',
+                        )}
+                      >
+                        {pct}%
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </CardContent>
         </Card>
-      </div>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle>Top Performers</CardTitle>
-            <p className="text-xs text-muted-foreground">% of monthly target achieved</p>
-          </div>
-          <Trophy className="size-5 text-amber-500" />
-        </CardHeader>
-        <CardContent>
-          {data.topPerformers.length === 0 ? (
-            <EmptyState message="No sales targets recorded for this month yet." />
-          ) : (
-            <ul className="space-y-3">
-              {data.topPerformers.map((p, i) => {
-                const pct = p.target > 0 ? Math.round((p.achieved / p.target) * 100) : 0;
-                return (
-                  <li key={`${p.name}-${i}`} className="flex items-center gap-3">
-                    <div
-                      className={cn(
-                        'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                        i === 0
-                          ? 'bg-amber-500/20 text-amber-500'
-                          : i === 1
-                            ? 'bg-slate-400/20 text-slate-400'
-                            : i === 2
-                              ? 'bg-orange-700/20 text-orange-700'
-                              : 'bg-muted text-muted-foreground',
-                      )}
-                    >
-                      {i + 1}
-                    </div>
-                    <Avatar name={p.name} size="sm" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{p.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{p.role}</p>
-                    </div>
-                    <div className="w-32">
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className={cn(
-                            'h-full rounded-full',
-                            pct >= 120 ? 'bg-emerald-500' : pct >= 100 ? 'bg-blue-500' : 'bg-amber-500',
-                          )}
-                          style={{ width: `${Math.min(pct, 150) / 1.5}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span
-                      className={cn(
-                        'min-w-[52px] text-right text-sm font-semibold',
-                        pct >= 120 ? 'text-emerald-500' : pct >= 100 ? 'text-blue-500' : 'text-amber-500',
-                      )}
-                    >
-                      {pct}%
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -358,13 +366,7 @@ function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
           <p className="text-xs text-muted-foreground">Key operational metrics at a glance</p>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-            <HealthIndicator
-              icon={CheckCircle2}
-              label="Task Completion"
-              value={`${data.healthIndicators.taskCompletion.toFixed(0)}%`}
-              status={data.healthIndicators.taskCompletion >= 70 ? 'good' : 'warn'}
-            />
+          <div className="grid grid-cols-2 gap-4">
             <HealthIndicator
               icon={CalendarOff}
               label="Leave Approval Lag"

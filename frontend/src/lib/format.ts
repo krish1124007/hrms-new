@@ -1,5 +1,3 @@
-import i18n from '../i18n';
-
 /**
  * Locale-aware formatters. All use the browser's `Intl` so they honour
  * the active i18n language, plus the tenant's configured currency /
@@ -11,8 +9,9 @@ import i18n from '../i18n';
  */
 
 function currentLocale(): string {
-  // i18next stores the resolved language, not the raw `navigator.language`
-  return i18n.resolvedLanguage ?? i18n.language ?? 'en';
+  // English-only UI with Indian digit grouping — never the browser's locale
+  // (an Arabic-locale browser would otherwise get Arabic-Indic digits).
+  return 'en-IN';
 }
 
 /* ─────────── Numbers ─────────── */

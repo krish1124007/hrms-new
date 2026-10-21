@@ -18,7 +18,6 @@ import path from 'node:path';
  *   - `react-vendor`   — React, ReactDOM, React Router, @tanstack/*
  *   - `ui-vendor`      — Radix UI + shadcn primitives
  *   - `charts-vendor`  — recharts (big + rarely changes)
- *   - `i18n-vendor`    — i18next + react-i18next
  *   - `motion-vendor`  — framer-motion
  *   - everything else  — default route-based chunks (already lazy via router)
  */
@@ -59,12 +58,11 @@ export default defineConfig((): UserConfig => {
           output: {
           manualChunks: (id) => {
             if (!id.includes('node_modules')) return undefined;
-            if (id.match(/\breact(-dom|-router.*|-i18next)?\b/) || id.includes('@tanstack')) {
+            if (id.match(/\breact(-dom|-router.*)?\b/) || id.includes('@tanstack')) {
               return 'react-vendor';
             }
             if (id.includes('@radix-ui') || id.includes('lucide-react')) return 'ui-vendor';
             if (id.includes('recharts') || id.includes('d3-')) return 'charts-vendor';
-            if (id.includes('i18next')) return 'i18n-vendor';
             if (id.includes('framer-motion') || id.includes('motion-')) return 'motion-vendor';
             if (id.includes('date-fns') || id.includes('luxon') || id.includes('dayjs')) {
               return 'date-vendor';
