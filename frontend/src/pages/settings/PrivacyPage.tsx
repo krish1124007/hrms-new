@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getComplianceStatus } from '@/lib/compliance.api';
 import { readConsent } from '@/components/common/CookieConsent';
+import { formatDateTime } from '@/lib/format';
 
 /**
  * Settings → Privacy & data: this device's cookie preferences and the
@@ -69,7 +70,7 @@ export default function PrivacyPage(): ReactElement {
                     <li key={h._id} className="flex items-center justify-between py-2">
                       <span>{prettyEvent(h.metadata?.event ?? h.action)}</span>
                       <span className="text-xs text-muted-foreground">
-                        {new Date(h.createdAt).toLocaleString()}
+                        {formatDateTime(h.createdAt)}
                       </span>
                     </li>
                   ))}

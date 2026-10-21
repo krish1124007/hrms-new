@@ -14,6 +14,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { CookieConsentBanner, readConsent } from './components/common/CookieConsent';
 import { initSentry } from './lib/sentry';
+import { apiErrorMessage } from './lib/api-error';
 import './i18n'; // side-effect init — must run before any component renders
 import './index.css';
 
@@ -28,30 +29,15 @@ window.addEventListener('cookie-consent-changed', () => {
   window.location.reload();
 });
 
-/**
- * Extract a user-facing message from an arbitrary error.
- * Handles Axios + our standard `{ error: { message } }` envelope.
- */
-function errorMessage(err: unknown): string {
-  if (err instanceof AxiosError) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body = err.response?.data as any;
-    if (body?.error?.message) return body.error.message as string;
-    if (err.code === 'ERR_NETWORK') return 'Network error — check your connection';
-    if (err.response?.status === 401) return 'Session expired — please sign in again';
-    if (err.response?.status === 429) {
-      return body?.error?.message ?? 'Too many requests — please slow down';
-    }
-    return err.message;
-  }
-  return (err as Error)?.message ?? 'Something went wrong';
-}
+/** A user-facing message for any error — shared with tables' error states. */
+const errorMessage = (err: unknown): string => apiErrorMessage(err);
 
 /**
  * Query errors: only toast on server (5xx) or unrecognised — 4xx is the
- * component's job to render inline. Mutations always toast: user just
- * clicked something and expects feedback. Opt-out per-call via
- * `meta: { silent: true }`.
+ * component's job to render inline (a list passes the query's `error` to
+ * `DataTable`, a self-service page shows "no employee profile"), never as an
+ * empty state. Mutations always toast: user just clicked something and
+ * expects feedback. Opt-out per-call via `meta: { silent: true }`.
  */
 const queryClient = new QueryClient({
   defaultOptions: {

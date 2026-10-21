@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import {
   Dialog,
   DialogBody,
@@ -24,10 +24,13 @@ import {
   useOpenLeaveYear,
   useResetLeaveBalances,
 } from '@/hooks/use-leaves';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { usePermissions } from '@/hooks/use-permissions';
 import type { LeaveBalance } from '@/lib/leaves.api';
 import { todayKey } from '@/lib/business-day';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+
+const PAGE_SIZE = 50;
 
 const schema = z.object({
   leaveTypeId: z.string().min(1),
@@ -38,15 +41,21 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function LeaveBalancePage(): ReactElement {
-  const [year, setYear] = useState(new Date().getFullYear());
-  const { data, isLoading } = useLeaveBalances({ year, limit: 200 });
+  // The business (IST) year, not the browser's.
+  const [year, setYear] = useState(() => Number(todayKey().slice(0, 4)));
+  const [page, setPage] = useState(1);
+  const { data, isLoading, error, refetch } = useLeaveBalances({ year, page, limit: PAGE_SIZE });
   const { data: types } = useLeaveTypes({ isActive: true, limit: 100 });
-  const { data: employees } = useEmployees({ limit: 500 });
+  // Only people who still work here — never ex-employees.
+  const { data: employees = [] } = useActiveEmployees();
   const allocate = useAllocateLeaveBalances();
   const resetBalances = useResetLeaveBalances();
   const openYear = useOpenLeaveYear();
   const { has } = usePermissions();
   const canOpenYear = has('leaves.update');
+  // Allocate / reset are `leaves.update` on the API too.
+  const canManage = has('leaves.update');
+  const [resetOpen, setResetOpen] = useState(false);
   // The API opens at most next year (in the business timezone).
   const latestOpenable = Number(todayKey().slice(0, 4)) + 1;
   const yearOpenable = Number.isInteger(year) && year >= 2000 && year <= latestOpenable;
@@ -56,14 +65,8 @@ export default function LeaveBalancePage(): ReactElement {
     openYear.mutate(year, { onSuccess: () => setOpenYearOpen(false) });
   };
 
-  const handleResetClick = (): void => {
-    if (
-      confirm(
-        `Are you sure you want to reset all leave balances to 0 for the year ${year}? This cannot be undone.`
-      )
-    ) {
-      resetBalances.mutate({ year });
-    }
+  const confirmReset = (): void => {
+    resetBalances.mutate({ year }, { onSuccess: () => setResetOpen(false) });
   };
 
   const [open, setOpen] = useState(false);
@@ -88,10 +91,7 @@ export default function LeaveBalancePage(): ReactElement {
   };
 
   const onSubmit = (v: FormValues): void => {
-    const ids =
-      v.applyTo === 'all'
-        ? (employees?.data ?? []).map((e) => e._id)
-        : selectedEmps;
+    const ids = v.applyTo === 'all' ? employees.map((e) => e._id) : selectedEmps;
     if (ids.length === 0) return;
     allocate.mutate(
       {
@@ -162,10 +162,12 @@ export default function LeaveBalancePage(): ReactElement {
                 <CalendarPlus className="size-4" /> Open {year}
               </Button>
             )}
-            <Button variant="destructive" onClick={handleResetClick} loading={resetBalances.isPending}>
-              Reset Balances
-            </Button>
-            <Button onClick={openDialog}>Allocate Leaves</Button>
+            {canManage && (
+              <Button variant="destructive" onClick={() => setResetOpen(true)} loading={resetBalances.isPending}>
+                Reset Balances
+              </Button>
+            )}
+            {canManage && <Button onClick={openDialog}>Allocate Leaves</Button>}
           </div>
         }
       />
@@ -176,18 +178,44 @@ export default function LeaveBalancePage(): ReactElement {
           id="bal-year"
           type="number"
           value={year}
-          onChange={(e) => setYear(Number(e.target.value))}
+          onChange={(e) => {
+            setYear(Number(e.target.value));
+            setPage(1);
+          }}
           className="w-32"
         />
+        {data?.pagination && (
+          <span className="text-xs text-muted-foreground">{data.pagination.total} balances</span>
+        )}
       </div>
 
       <DataTable
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(b) => b._id}
         emptyTitle="No balances allocated"
         emptyDescription="Click 'Allocate Leaves' to set up annual balances"
+      />
+      <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
+
+      <ConfirmDialog
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        title={`Reset ${year} leave balances`}
+        description={
+          <>
+            Every employee's <strong>used</strong> and <strong>carried-forward</strong> days for {year} go
+            back to 0 — for every leave type. Allocations and manual adjustments stay. Leave already
+            taken in {year} stops counting against anyone's balance. This cannot be undone.
+          </>
+        }
+        typeToConfirm={`RESET ${year}`}
+        confirmLabel={`Reset ${year} balances`}
+        loading={resetBalances.isPending}
+        onConfirm={confirmReset}
       />
 
       <Dialog open={openYearOpen} onClose={() => setOpenYearOpen(false)} size="md">
@@ -251,13 +279,13 @@ export default function LeaveBalancePage(): ReactElement {
             <div>
               <Label htmlFor="al-apply">Apply to</Label>
               <Select id="al-apply" {...register('applyTo')}>
-                <option value="all">All employees</option>
+                <option value="all">All current employees ({employees.length})</option>
                 <option value="selected">Selected employees</option>
               </Select>
             </div>
             {applyTo === 'selected' && (
               <div className="max-h-48 overflow-y-auto rounded-md border border-border p-2">
-                {(employees?.data ?? []).map((e) => (
+                {employees.map((e) => (
                   <label key={e._id} className="flex items-center gap-2 py-1 text-sm">
                     <input
                       type="checkbox"

@@ -36,7 +36,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function ExpenseCategoryPage(): ReactElement {
-  const { data, isLoading } = useExpenseCategories({ limit: 100 });
+  const { data, isLoading, error, refetch } = useExpenseCategories({ limit: 100 });
   const create = useCreateExpenseCategory();
   const update = useUpdateExpenseCategory();
   const remove = useDeleteExpenseCategory();
@@ -142,6 +142,8 @@ export default function ExpenseCategoryPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(c) => c._id}
         emptyTitle="No categories"
         emptyDescription="Add categories like Travel, Meals, Supplies"

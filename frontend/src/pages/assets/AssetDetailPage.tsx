@@ -34,7 +34,7 @@ import {
   useDeleteAsset,
   useUnassignAsset,
 } from '@/hooks/use-assets';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { ASSET_CATEGORIES, ASSET_CONDITIONS, type AssetCondition, type AssetStatus } from '@/lib/assets.api';
 import { formatCurrency, formatDate } from '@/lib/format';
 
@@ -54,8 +54,8 @@ export default function AssetDetailPage(): ReactElement {
   const assign = useAssignAsset();
   const unassign = useUnassignAsset();
 
-  const { data: empData } = useEmployees({ limit: 500 });
-  const employees = empData?.data ?? [];
+  // Assign only to people who still work here.
+  const { data: employees = [] } = useActiveEmployees();
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignEmpId, setAssignEmpId] = useState('');

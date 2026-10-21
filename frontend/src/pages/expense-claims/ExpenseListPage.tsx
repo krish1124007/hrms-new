@@ -5,7 +5,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import {
   Dialog,
   DialogBody,
@@ -28,6 +28,9 @@ import {
   type ExpenseClaim,
   type ExpenseClaimStatus,
 } from '@/lib/expense-claims.api';
+import { formatDate, todayIST } from '@/lib/format';
+
+const PAGE_SIZE = 25;
 
 function buildCSV(rows: ExpenseClaim[]): string {
   const headers = [
@@ -53,7 +56,7 @@ function buildCSV(rows: ExpenseClaim[]): string {
     return [
       emp ? `${emp.firstName} ${emp.lastName}` : '',
       cat?.name ?? '',
-      c.date ? new Date(c.date).toLocaleDateString('en-IN') : '',
+      c.date ? formatDate(c.date) : '',
       c.amount,
       c.currency,
       c.description ?? '',
@@ -97,7 +100,13 @@ const STATUS_VARIANT: Record<
 
 export default function ExpenseListPage(): ReactElement {
   const [status, setStatus] = useState<string>('');
-  const { data, isLoading } = useExpenseClaims({ limit: 50, status: status || undefined });
+  const [page, setPage] = useState(1);
+  // Paged on the server — older claims are a page away, never silently cut off.
+  const { data, isLoading, error, refetch } = useExpenseClaims({
+    page,
+    limit: PAGE_SIZE,
+    status: status || undefined,
+  });
   const approve = useApproveExpenseClaim();
   const reject = useRejectExpenseClaim();
   const reimburse = useReimburseExpenseClaim();
@@ -135,7 +144,7 @@ export default function ExpenseListPage(): ReactElement {
         return;
       }
       const csv = buildCSV(allRows);
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = todayIST();
       const suffix = status ? `-${status}` : '';
       downloadCSV(csv, `expense-claims${suffix}-${stamp}.csv`);
       toast.success(
@@ -194,7 +203,7 @@ export default function ExpenseListPage(): ReactElement {
     {
       key: 'date',
       header: 'Date',
-      cell: (c) => new Date(c.date).toLocaleDateString('en-IN', { dateStyle: 'medium' }),
+      cell: (c) => formatDate(c.date),
     },
     {
       key: 'amount',
@@ -312,7 +321,14 @@ export default function ExpenseListPage(): ReactElement {
       />
 
       <div className="flex items-center gap-3">
-        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-48">
+        <Select
+          value={status}
+          onChange={(e) => {
+            setStatus(e.target.value);
+            setPage(1);
+          }}
+          className="w-48"
+        >
           <option value="">All statuses</option>
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
@@ -326,10 +342,13 @@ export default function ExpenseListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(c) => c._id}
         emptyTitle="No expense claims"
         emptyDescription="Submitted claims will appear here"
       />
+      <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
 
       <Dialog open={!!rejectingId} onClose={() => setRejectingId(null)} size="sm">
         <DialogHeader>

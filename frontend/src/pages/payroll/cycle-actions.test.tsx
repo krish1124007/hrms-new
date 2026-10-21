@@ -184,18 +184,24 @@ describe('cycle detail: which actions each status allows', () => {
   it('Lock on a processed cycle asks first, then locks', async () => {
     api.lockCycle.mockResolvedValue({ success: true, data: cycle('locked') });
     await renderDetail(cycle('processed'));
+    const user = userEvent.setup();
 
-    await userEvent.setup().click(button('Lock'));
+    await user.click(button('Lock'));
+    // Nothing happens until the dialog naming the period is confirmed.
+    expect(api.lockCycle).not.toHaveBeenCalled();
+    expect(await screen.findByRole('heading', { name: 'Lock September 2026?' })).toBeInTheDocument();
+    await user.click(button('Lock September 2026'));
 
-    expect(window.confirm).toHaveBeenCalled();
     await waitFor(() => expect(api.lockCycle).toHaveBeenCalledWith('c1'));
   });
 
-  it('Lock does nothing when the confirmation is declined', async () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
+  it('Lock does nothing when the confirmation is cancelled', async () => {
     await renderDetail(cycle('processed'));
+    const user = userEvent.setup();
 
-    await userEvent.setup().click(button('Lock'));
+    await user.click(button('Lock'));
+    await screen.findByRole('heading', { name: 'Lock September 2026?' });
+    await user.click(button('Cancel'));
 
     expect(api.lockCycle).not.toHaveBeenCalled();
   });

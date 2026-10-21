@@ -37,7 +37,7 @@ export default function AssetListPage(): ReactElement {
   const [status, setStatus] = useState<'' | AssetStatus>('');
   const [importOpen, setImportOpen] = useState(false);
 
-  const { data, isLoading } = useAssets({
+  const { data, isLoading, error, refetch } = useAssets({
     page,
     limit: 20,
     ...(search ? { search } : {}),
@@ -205,6 +205,8 @@ export default function AssetListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(a) => a._id}
         emptyTitle="No assets yet"
         emptyDescription="Add your first asset to start tracking equipment"
