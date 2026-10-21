@@ -621,6 +621,31 @@ describe('hr policy acknowledgement', () => {
     );
   });
 
+  it("who acknowledged is HR's: others see only their own acknowledgement", async () => {
+    const policy = await HrPolicy.create({ policyCode: 'POL-0009', title: 'IT policy', status: 'published' });
+    for (const who of [A, B]) {
+      // eslint-disable-next-line no-await-in-loop
+      const ack = await request(app).post(`/api/v1/hr-policies/${policy._id}/acknowledge`).set(auth(who.token)).send({});
+      expect(ack.status).toBe(200);
+      const own = (ack.body.data.acknowledgements as Array<{ employee: { _id: string } }>).map((a) => a.employee._id);
+      expect(own).toEqual([String(who.employee._id)]);
+    }
+    const ackedBy = (body: { acknowledgements: Array<{ employee: { _id: string } | string }> }) =>
+      body.acknowledgements.map((a) => (typeof a.employee === 'object' ? a.employee._id : a.employee)).sort();
+
+    const asA = await request(app).get(`/api/v1/hr-policies/${policy._id}`).set(auth(A.token));
+    expect(asA.status).toBe(200);
+    expect(ackedBy(asA.body.data)).toEqual([String(A.employee._id)]);
+    const listA = await request(app).get(`/api/v1/hr-policies/${policy._id}/acknowledgements`).set(auth(A.token));
+    expect(ackedBy(listA.body.data)).toEqual([String(A.employee._id)]);
+
+    const hr = await actorWithRole('hr_manager');
+    const asHr = await request(app).get(`/api/v1/hr-policies/${policy._id}`).set(auth(hr.token));
+    expect(ackedBy(asHr.body.data)).toEqual([String(A.employee._id), String(B.employee._id)].sort());
+    const listHr = await request(app).get(`/api/v1/hr-policies/${policy._id}/acknowledgements`).set(auth(hr.token));
+    expect(ackedBy(listHr.body.data)).toHaveLength(2);
+  });
+
   it('404 when a policies.manage holder names an employee that does not exist', async () => {
     const hr = await actorWithRole('hr_manager');
     const policy = await HrPolicy.create({

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { User, activateIfInvited } from '../models/user.model.js';
 import { Role } from '../models/role.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { appBaseUrl } from '../lib/app-url.js';
@@ -53,9 +54,9 @@ export async function listUsers(req: Request, res: Response): Promise<void> {
   if (q.status) filter.status = q.status;
   if (q.search) {
     filter.$or = [
-      { email: { $regex: q.search, $options: 'i' } },
-      { firstName: { $regex: q.search, $options: 'i' } },
-      { lastName: { $regex: q.search, $options: 'i' } },
+      { email: containsInsensitive(q.search) },
+      { firstName: containsInsensitive(q.search) },
+      { lastName: containsInsensitive(q.search) },
     ];
   }
   const result = await User.paginate(filter, {

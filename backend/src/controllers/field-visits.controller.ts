@@ -120,7 +120,11 @@ export const checkInSchema = z.object({
   notes: notes.optional(),
 });
 
-/** Web `{ checkOut: {...}, notes, outcome }`; mobile flat `{ location, photo, outcome, followUpDate, ... }`. */
+/**
+ * Web `{ checkOut: {...}, notes, outcome }`; mobile flat `{ location, photo,
+ * outcome, followUpDate, ... }`. `notes` here are stored as `checkOut.notes`
+ * (the visit's own `notes` stay the check-in notes).
+ */
 export const checkOutSchema = z.object({
   checkOut: checkpointSchema.optional(),
   location: latLng.optional(),
@@ -291,8 +295,9 @@ export async function deleteVisit(req: Request, res: Response): Promise<void> {
 
 /**
  * Start a visit at a client. Stores how far the check-in fix was from the
- * client's pin and flags it (`locationMismatch`) beyond FIELD_VISIT_RADIUS_M —
- * a flag for the manager, never a refusal.
+ * client's pin and flags it (`locationMismatch`) beyond FIELD_VISIT_RADIUS_M;
+ * a check-in without a fix at a client that has a pin is flagged
+ * `locationMissing` — flags for the manager, never a refusal.
  */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkInSchema>;
@@ -310,6 +315,8 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
   const distanceFromClientM =
     location && clientPoint ? Math.round(distanceMeters(location, clientPoint)) : undefined;
   const locationMismatch = distanceFromClientM !== undefined && distanceFromClientM > env.FIELD_VISIT_RADIUS_M;
+  // Nothing to compare: without a fix a check-in could be made from anywhere.
+  const locationMissing = !location && clientPoint !== null;
 
   const open = await Visit.findOne({ employeeId: empId, status: 'in_progress' }).select('_id').lean().exec();
   if (open) throw alreadyOpen(open._id);
@@ -320,6 +327,7 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     status: 'in_progress' as const,
     distanceFromClientM,
     locationMismatch,
+    locationMissing,
     ...(body.notes ? { notes: body.notes } : {}),
   };
 
@@ -375,12 +383,19 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
   const location = body.checkOut?.location ?? body.location;
   const photo = body.checkOut?.photo ?? body.photo;
   const addr = body.checkOut?.address ?? body.address;
+  // Check-out notes are kept apart from the check-in ones (`notes`) — the
+  // mobile app sends notes at both steps and one must not erase the other.
   const set: Record<string, unknown> = {
-    checkOut: { time: now, ...(location ? { location } : {}), ...(photo ? { photo } : {}), ...(addr ? { address: addr } : {}) },
+    checkOut: {
+      time: now,
+      ...(location ? { location } : {}),
+      ...(photo ? { photo } : {}),
+      ...(addr ? { address: addr } : {}),
+      ...(body.notes ? { notes: body.notes } : {}),
+    },
     duration: Math.max(0, Math.round((now.getTime() - visit.checkIn.time.getTime()) / 60_000)),
     status: 'completed',
   };
-  if (body.notes) set.notes = body.notes;
   if (body.outcome) set.outcome = body.outcome;
   const followUp = body.nextFollowUpDate ?? body.followUpDate;
   if (followUp) set.nextFollowUpDate = followUp;

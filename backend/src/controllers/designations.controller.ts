@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Designation } from '../models/designation.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 
 export const createDesignationSchema = z.object({
@@ -27,7 +28,7 @@ export async function listDesignations(req: Request, res: Response): Promise<voi
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
   if (q.department) filter.department = q.department;
-  if (q.search) filter.name = { $regex: q.search, $options: 'i' };
+  if (q.search) filter.name = containsInsensitive(q.search);
 
   const result = await Designation.paginate(filter, {
     page: q.page,

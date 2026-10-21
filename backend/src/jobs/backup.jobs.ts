@@ -38,9 +38,12 @@ import { run } from '../lib/shell.js';
 import {
   countsNameFor,
   ensureBackupDir,
+  isLastBusinessDayOfMonth,
   locateBackupFiles,
+  nextMonthlyBackupRun,
   restoreTargetProblem,
 } from '../lib/backups.js';
+import { BUSINESS_TZ } from '../lib/business-day.js';
 
 const QUEUE_NAME = 'backup';
 const SYSTEM_DATABASES = new Set(['admin', 'local', 'config']);
@@ -186,22 +189,17 @@ async function runRestore(job: Job<BackupRestoreJob>): Promise<void> {
 /* ─────────── Scheduled monthly backup ─────────── */
 
 /**
- * Repeatable job that fires every day from the 28th–31st at 23:50.
- * The handler then guards: only proceeds on the actual last day of the
- * month. Cron `L` (last-day-of-month) isn't supported by cron-parser,
- * hence the candidate-window-plus-guard pattern.
+ * Repeatable job that fires every day from the 28th–31st at 23:50 in the
+ * business timezone (IST — never the server's, which runs UTC). The handler
+ * then guards: only proceeds on the actual last day of the IST month. Cron
+ * `L` (last-day-of-month) isn't supported by cron-parser, hence the
+ * candidate-window-plus-guard pattern.
  */
 const SCHEDULED_JOB_NAME = 'backup-scheduled-monthly';
 const SCHEDULE_PATTERN = '50 23 28-31 * *';
 
-function isLastDayOfMonth(d: Date = new Date()): boolean {
-  const tomorrow = new Date(d);
-  tomorrow.setDate(d.getDate() + 1);
-  return tomorrow.getMonth() !== d.getMonth();
-}
-
 async function runScheduledMonthly(): Promise<void> {
-  if (!isLastDayOfMonth()) {
+  if (!isLastBusinessDayOfMonth()) {
     logger.info('backup-scheduled-monthly: not the last day of the month, skipping');
     return;
   }
@@ -218,10 +216,15 @@ async function runScheduledMonthly(): Promise<void> {
   await runBackup({ data: { backupId: String(backup._id) } } as Job<BackupCreateJob>);
 }
 
-/** Returns whether the monthly schedule is registered with BullMQ. */
+/**
+ * Whether the monthly schedule is registered with BullMQ, and — when it is —
+ * when it really runs next (`nextRun`, epoch ms: the month-end run, not the
+ * queue's next 28th–31st wake-up).
+ */
 export async function getMonthlyBackupSchedule(): Promise<{
   enabled: boolean;
   pattern: string;
+  timezone: string;
   description: string;
   nextRun?: number;
 }> {
@@ -230,8 +233,9 @@ export async function getMonthlyBackupSchedule(): Promise<{
   return {
     enabled: !!job,
     pattern: SCHEDULE_PATTERN,
-    description: 'Last day of every month at 23:50',
-    nextRun: job?.next,
+    timezone: BUSINESS_TZ,
+    description: 'Last day of every month at 23:50 IST',
+    nextRun: job ? nextMonthlyBackupRun().getTime() : undefined,
   };
 }
 
@@ -250,9 +254,9 @@ export async function setMonthlyBackupSchedule(enabled: boolean): Promise<void> 
     await backupQueue.add(
       SCHEDULED_JOB_NAME,
       {},
-      { repeat: { pattern: SCHEDULE_PATTERN } },
+      { repeat: { pattern: SCHEDULE_PATTERN, tz: BUSINESS_TZ } },
     );
-    logger.info({ pattern: SCHEDULE_PATTERN }, 'monthly backup schedule enabled');
+    logger.info({ pattern: SCHEDULE_PATTERN, tz: BUSINESS_TZ }, 'monthly backup schedule enabled');
   } else {
     logger.info('monthly backup schedule disabled');
   }

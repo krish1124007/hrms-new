@@ -22,6 +22,7 @@ import { Designation } from '../models/designation.model.js';
 import { Shift } from '../models/shift.model.js';
 import { User } from '../models/user.model.js';
 import { signFileUrl } from '../lib/file-urls.js';
+import { DocumentModel } from '../models/document.model.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -30,6 +31,15 @@ let app: Express;
 beforeEach(() => {
   app = createApp();
 });
+
+/** A document `userId` uploaded, stored at `url` (`/uploads/<key>`). */
+function uploadedBy(userId: unknown, url: string, mimeType = 'image/png') {
+  return DocumentModel.create({
+    name: url.split('/').pop(),
+    file: { url, key: url.replace(/^\/uploads\//, ''), size: 1024, mimeType },
+    uploadedBy: userId,
+  });
+}
 
 /** An employee with no login of their own (saves a password hash). */
 function colleague(overrides: Record<string, unknown> = {}): Promise<IEmployee> {
@@ -105,6 +115,8 @@ describe('PATCH /employees/me', () => {
       address: { current: { city: 'Surat' }, permanent: { city: 'Rajkot' } },
       emergencyContact: { name: 'Mom', relation: 'Mother', phone: '999' },
     });
+    // The photo is one the caller uploaded (POST /documents/upload).
+    await uploadedBy(user._id, '/uploads/avatars/me.png');
 
     const res = await request(app)
       .patch('/api/v1/employees/me')
@@ -133,6 +145,42 @@ describe('PATCH /employees/me', () => {
     expect(saved.address.current).toMatchObject({ city: 'Ahmedabad', zip: '380001' });
     expect(saved.address.permanent).toMatchObject({ city: 'Rajkot' });
     expect(saved.emergencyContact).toMatchObject({ name: 'Mom', relation: 'Mother', phone: '888' });
+  });
+
+  it('avatar: only an image the caller uploaded — 400 for an external URL, someone else’s file or a non-image', async () => {
+    const { user, token } = await createUser({ roleSlug: 'employee' });
+    const me = await createEmployeeFor(user);
+    const { user: other } = await createUser({ roleSlug: 'employee' });
+    await uploadedBy(other._id, '/uploads/documents/theirs.png');
+    await uploadedBy(user._id, '/uploads/documents/payslip.pdf', 'application/pdf');
+    await uploadedBy(user._id, '/uploads/documents/mine.jpg', 'image/jpeg');
+
+    const patch = (avatar: string) =>
+      request(app).patch('/api/v1/employees/me').set(auth(token)).send({ avatar });
+
+    for (const bad of [
+      'https://tracker.example.com/pixel.png',
+      signFileUrl('/uploads/documents/theirs.png'),
+      signFileUrl('/uploads/documents/payslip.pdf'),
+      signFileUrl('/uploads/documents/never-uploaded.png'),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await patch(bad);
+      expect(res.status).toBe(400);
+    }
+    expect((await Employee.findById(me._id).lean().orFail()).profileImage).toBeUndefined();
+
+    const ok = await patch(signFileUrl('/uploads/documents/mine.jpg'));
+    expect(ok.status).toBe(200);
+    expect((await Employee.findById(me._id).lean().orFail()).profileImage).toBe('/uploads/documents/mine.jpg');
+
+    // Re-sending the current photo, and clearing it, are always fine.
+    expect((await patch(signFileUrl('/uploads/documents/mine.jpg'))).status).toBe(200);
+    // A photo set before this rule (an external URL) may be sent back unchanged.
+    await Employee.updateOne({ _id: me._id }, { $set: { profileImage: 'https://cdn.test/old.png' } });
+    expect((await patch('https://cdn.test/old.png')).status).toBe(200);
+    expect((await patch('')).status).toBe(200);
+    expect((await Employee.findById(me._id).lean().orFail()).profileImage).toBeUndefined();
   });
 
   it('400 for any field outside the contact fields — salary, department, status…', async () => {
@@ -188,9 +236,10 @@ describe('employee directory', () => {
       employeeId: active.employeeId,
       firstName: 'Asha',
       email: active.email,
-      phone: '555',
       department: { _id: String(sales._id), name: 'Sales' },
     });
+    // No phone numbers in the directory: an employee's `phone` is their personal mobile.
+    expect(asha).not.toHaveProperty('phone');
     expect(asha).not.toHaveProperty('salary');
     expect(asha).not.toHaveProperty('bankDetails');
     expect(JSON.stringify(res.body)).not.toContain('77777');
@@ -320,5 +369,75 @@ describe('soft-deleted employees (?includeDeleted=1)', () => {
 
     const plain = await request(app).get('/api/v1/employees').set(auth(hrManager));
     expect(plain.body.data.map((row: { _id: string }) => row._id)).toEqual([String(kept._id)]);
+  });
+});
+
+describe('employee records: managers see their team, never pay', () => {
+  async function team() {
+    const { user, token } = await createUser({ roleSlug: 'manager' });
+    const manager = await createEmployeeFor(user);
+    const pay = {
+      salary: { basic: 55555, hra: 1000 },
+      bankDetails: { bankName: 'Test Bank', accountNumber: '123456789012', ifscCode: 'TEST0000001', panNumber: 'ABCDE1234F' },
+    };
+    const report = await colleague({ firstName: 'Rita', reportingManager: manager._id, ...pay });
+    const stranger = await colleague({ firstName: 'Sunil', ...pay });
+    return { token, manager, report, stranger };
+  }
+
+  it('a manager lists and opens only themselves and their direct reports, without salary, bank or documents', async () => {
+    const { token, manager, report, stranger } = await team();
+
+    const list = await request(app).get('/api/v1/employees').set(auth(token));
+    expect(list.status).toBe(200);
+    const ids = (list.body.data as Array<{ _id: string }>).map((row) => row._id).sort();
+    expect(ids).toEqual([String(manager._id), String(report._id)].sort());
+    for (const row of list.body.data) {
+      expect(row).not.toHaveProperty('salary');
+      expect(row).not.toHaveProperty('bankDetails');
+      expect(row).not.toHaveProperty('documents');
+      expect(row).not.toHaveProperty('statutory');
+    }
+    expect(JSON.stringify(list.body)).not.toContain('55555');
+
+    const mine = await request(app).get(`/api/v1/employees/${report._id}`).set(auth(token));
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.firstName).toBe('Rita');
+    expect(mine.body.data).not.toHaveProperty('salary');
+    expect(mine.body.data).not.toHaveProperty('bankDetails');
+    expect(JSON.stringify(mine.body)).not.toContain('ABCDE1234F');
+
+    const theirs = await request(app).get(`/api/v1/employees/${stranger._id}`).set(auth(token));
+    expect(theirs.status).toBe(403);
+    expect(theirs.body.error.code).toBe('NOT_YOUR_REPORT');
+
+    const csv = await request(app).get('/api/v1/employees/export').set(auth(token));
+    expect(csv.status).toBe(200);
+    expect(csv.text).toContain('Rita');
+    expect(csv.text).not.toContain('Sunil');
+  });
+
+  it('HR (employees.update) still sees everybody, pay included', async () => {
+    const { stranger } = await team();
+    const { token: hr } = await createUser({ roleSlug: 'hr_executive' });
+
+    const res = await request(app).get(`/api/v1/employees/${stranger._id}`).set(auth(hr));
+    expect(res.status).toBe(200);
+    expect(res.body.data.salary.basic).toBe(55555);
+    expect(res.body.data.bankDetails.panNumber).toBe('ABCDE1234F');
+
+    const list = await request(app).get('/api/v1/employees').set(auth(hr));
+    expect(list.body.pagination.total).toBe(3);
+  });
+
+  it('?search= is matched literally — regex characters neither 500 nor match everything', async () => {
+    await colleague({ firstName: 'Plain' });
+    const { token: hr } = await createUser({ roleSlug: 'hr_executive' });
+    for (const search of ['(', '.*', '[a-', '(a+)+$']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await request(app).get('/api/v1/employees').query({ search }).set(auth(hr));
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([]);
+    }
   });
 });

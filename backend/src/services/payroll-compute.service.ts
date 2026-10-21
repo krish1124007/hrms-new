@@ -10,8 +10,9 @@
  *                 basic / HRA / DA / allowance — each × days paid / days in
  *                 the month
  *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS;
- *                 PF is on the structure components flagged `statutoryBase`
- *                 (else named Basic / DA), else the salary basic + DA
+ *                 PF is on the structure components that are PF wages — each
+ *                 by its own `statutoryBase` flag (basic / da yes, none no),
+ *                 else by its name (Basic / DA) — else the salary basic + DA
  *   loans/claims  the EMIs due in the month and the approved claims not yet
  *                 reimbursed — except what another record holds (counted
  *                 and not settled yet; see "Items held by a payroll record")
@@ -417,20 +418,31 @@ function structureLines(structure: StructureAmount[] | null, type: Exclude<Compo
     .filter((l) => l.amount > 0);
 }
 
-/** Fallback for unflagged structures: components named like a basic or a dearness allowance. */
+/** Name rule for a component without a PF flag: named like a basic or a dearness allowance. */
 const PF_WAGE_COMPONENT = /basic|dearness|^da$/i;
 
+/** Whether one earning component is a PF wage — decided by its own flag, else its own name. */
+function isPfWageComponent(component: { name: string; statutoryBase?: ISalaryComponent['statutoryBase'] }): boolean {
+  switch (component.statutoryBase) {
+    case 'basic':
+    case 'da':
+      return true;
+    case 'none':
+      return false;
+    default:
+      return PF_WAGE_COMPONENT.test(component.name.trim());
+  }
+}
+
 /**
- * The structure's earning components that are PF wages: those flagged
- * `statutoryBase` ('basic' / 'da') when any earning is flagged — the flags
- * are then the whole truth — else those whose name is a basic or DA
- * (`PF_WAGE_COMPONENT`).
+ * The structure's earning components that are PF wages, each decided on its
+ * own (`isPfWageComponent`): flagged `basic` / `da` → yes, flagged `none` →
+ * no, not flagged → by its name. Flagging one component never changes how
+ * another is read.
  */
 function pfWageComponentIds(structure: StructureAmount[] | null): Set<string> {
   const earnings = (structure ?? []).filter((a) => a.component.type === 'earning');
-  const flagged = earnings.filter((a) => a.component.statutoryBase);
-  const chosen = flagged.length > 0 ? flagged : earnings.filter((a) => PF_WAGE_COMPONENT.test(a.component.name.trim()));
-  return new Set(chosen.map((a) => String(a.component._id)));
+  return new Set(earnings.filter((a) => isPfWageComponent(a.component)).map((a) => String(a.component._id)));
 }
 
 /**

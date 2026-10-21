@@ -94,6 +94,44 @@ describe('attendance records', () => {
     expect(owners(all.body.data)).toEqual(idsOf(M, A, B));
   });
 
+  it('search is literal (regex characters are escaped); a malformed employeeId is 400, not 500', async () => {
+    await Promise.all([presentOn(M), presentOn(A), presentOn(B)]);
+    const hr = await actor('hr_executive');
+    for (const search of ['(', '[a-', '.*', '(a+)+$']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await request(app).get('/api/v1/attendance/records').query({ search }).set(auth(hr.token));
+      expect(res.status, search).toBe(200);
+      expect(res.body.data, search).toEqual([]);
+    }
+    const bad = await request(app)
+      .get('/api/v1/attendance/records')
+      .query({ employeeId: 'not-an-id' })
+      .set(auth(hr.token));
+    expect(bad.status).toBe(400);
+    const badForManager = await request(app)
+      .get('/api/v1/attendance/records')
+      .query({ employeeId: '123' })
+      .set(auth(M.token));
+    expect(badForManager.status).toBe(400);
+  });
+
+  it('dashboard: a manager’s totals and late comers cover themselves and their reports only; HR sees everybody', async () => {
+    const today = startOfBusinessDay(new Date());
+    await Attendance.create({ employeeId: M.employee._id, date: today, status: 'present' });
+    await Attendance.create({ employeeId: A.employee._id, date: today, status: 'late' });
+    await Attendance.create({ employeeId: B.employee._id, date: today, status: 'late' });
+
+    const mine = await request(app).get('/api/v1/attendance/dashboard').set(auth(M.token));
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.totals).toMatchObject({ totalEmployees: 2, present: 2, late: 1 });
+    expect(owners(mine.body.data.lateComers)).toEqual(idsOf(A));
+
+    const hr = await actor('hr_executive');
+    const all = await request(app).get('/api/v1/attendance/dashboard').set(auth(hr.token));
+    expect(all.body.data.totals).toMatchObject({ totalEmployees: 4, present: 3, late: 2 });
+    expect(owners(all.body.data.lateComers)).toEqual(idsOf(A, B));
+  });
+
   it('monthly: a manager may open a report\'s month, not a stranger\'s', async () => {
     await Promise.all([presentOn(A), presentOn(B)]);
     const month = { year: 2026, month: 3 };
@@ -139,6 +177,8 @@ describe('attendance records', () => {
 
   it('the live-location list shows a manager their reports only', async () => {
     const today = startOfBusinessDay(new Date());
+    // Only field staff are tracked (and shown): make A and B field staff.
+    await Employee.updateMany({ _id: { $in: [A.employee._id, B.employee._id] } }, { $set: { isFieldStaff: true } });
     for (const who of [A, B]) {
       // eslint-disable-next-line no-await-in-loop
       await Attendance.create({
@@ -162,6 +202,11 @@ describe('attendance records', () => {
     const hr = await actor('hr_executive');
     const all = await request(app).get('/api/v1/attendance/tracking/live').set(auth(hr.token));
     expect(owners(all.body.data)).toEqual(idsOf(A, B));
+
+    // B is office staff again: their stored fix is no longer shown.
+    await Employee.updateOne({ _id: B.employee._id }, { $set: { isFieldStaff: false } });
+    const fieldOnly = await request(app).get('/api/v1/attendance/tracking/live').set(auth(hr.token));
+    expect(owners(fieldOnly.body.data)).toEqual(idsOf(A));
   });
 });
 
@@ -318,5 +363,30 @@ describe('notices carry acknowledgedByMe', () => {
     expect(ack.status).toBe(200);
     expect(await flag(A)).toBe(true);
     expect(await flag(B)).toBe(false);
+  });
+
+  it('a notice targeted at departments is shown only to their employees (and notices.manage holders)', async () => {
+    const sales = new Types.ObjectId();
+    const ops = new Types.ObjectId();
+    await Employee.updateOne({ _id: A.employee._id }, { $set: { department: sales } });
+    await Employee.updateOne({ _id: B.employee._id }, { $set: { department: ops } });
+    const everyone = await Notice.create({ title: 'Holiday', content: 'Diwali', postedBy: M.userId });
+    const salesOnly = await Notice.create({ title: 'Sales targets', content: 'Q4', postedBy: M.userId, departments: [sales] });
+
+    const titles = async (who: Actor): Promise<string[]> => {
+      const res = await request(app).get('/api/v1/notices').set(auth(who.token));
+      expect(res.status).toBe(200);
+      return res.body.data.map((n: { title: string }) => n.title).sort();
+    };
+    expect(await titles(A)).toEqual(['Holiday', 'Sales targets']);
+    expect(await titles(B)).toEqual(['Holiday']);
+
+    expect((await request(app).get(`/api/v1/notices/${salesOnly._id}`).set(auth(B.token))).status).toBe(404);
+    expect((await request(app).post(`/api/v1/notices/${salesOnly._id}/acknowledge`).set(auth(B.token))).status).toBe(404);
+    expect((await request(app).get(`/api/v1/notices/${salesOnly._id}`).set(auth(A.token))).status).toBe(200);
+    expect((await request(app).get(`/api/v1/notices/${everyone._id}`).set(auth(B.token))).status).toBe(200);
+
+    const hr = await actor('hr_executive'); // notices.manage
+    expect(await titles(hr)).toEqual(['Holiday', 'Sales targets']);
   });
 });

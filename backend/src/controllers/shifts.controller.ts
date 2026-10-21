@@ -4,6 +4,7 @@ import { Shift, type IShift } from '../models/shift.model.js';
 import { Employee } from '../models/employee.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { ConflictError, NotFoundError, ForbiddenError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { DEFAULT_WORK_DAYS, isWeekOff } from '../lib/week-off.js';
@@ -42,7 +43,7 @@ export async function listShifts(req: Request, res: Response): Promise<void> {
   const q = req.query as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
-  if (q.search) filter.name = { $regex: q.search, $options: 'i' };
+  if (q.search) filter.name = containsInsensitive(q.search);
   const result = await Shift.paginate(filter, {
     page: q.page,
     limit: q.limit,

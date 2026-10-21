@@ -30,7 +30,7 @@ import {
   idOf,
   isOwnRecord,
 } from './access.js';
-import { AppError, ForbiddenError } from './errors.js';
+import { AppError, ForbiddenError, ValidationAppError } from './errors.js';
 
 export type ApprovalModule = 'leaves' | 'expenses' | 'overtime' | 'attendance';
 
@@ -155,6 +155,10 @@ export async function scopeFilterFor(
   field = 'employeeId',
 ): Promise<Record<string, unknown>> {
   if (!requestedEmployeeId) return scopeFilter(req, module, field);
+  // A malformed id is the client's mistake (400), not a server error.
+  if (typeof requestedEmployeeId !== 'string' || !/^[0-9a-f]{24}$/i.test(requestedEmployeeId)) {
+    throw new ValidationAppError('Invalid employee id', [{ field: 'employeeId', message: 'Must be a 24-character hex id' }]);
+  }
   const requested = new Types.ObjectId(requestedEmployeeId);
   if (canSeeAll(req, module)) return { [field]: requested };
   if (!hasPermission(req.user, `${module}.approve`)) return scopeFilter(req, module, field);

@@ -86,6 +86,9 @@ export default function EmployeeDetailPage(): ReactElement {
   }
 
   const canUpdate = has('employees.update');
+  // Pay, bank details and documents come from the API only for HR and payroll
+  // (a manager sees their team's work details, nothing more).
+  const seesPay = canUpdate || has('payroll.process');
   const working = e.status === 'active' || e.status === 'onNotice';
   const exitKey = e.exitDate ? businessDayKey(e.exitDate) : null;
   const scheduledExit = !!(e.exitStatus && exitKey && exitKey > todayKey());
@@ -209,8 +212,8 @@ export default function EmployeeDetailPage(): ReactElement {
           <TabsTrigger value="personal">Personal</TabsTrigger>
           <TabsTrigger value="employment">Employment</TabsTrigger>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
-          <TabsTrigger value="bank">Bank & Salary</TabsTrigger>
+          {seesPay && <TabsTrigger value="documents">Documents</TabsTrigger>}
+          {seesPay && <TabsTrigger value="bank">Bank & Salary</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="personal">
@@ -311,38 +314,42 @@ export default function EmployeeDetailPage(): ReactElement {
           </Card>
         </TabsContent>
 
-        <TabsContent value="documents">
-          <DocumentsTab employeeId={e._id} documents={e.documents ?? []} />
-        </TabsContent>
+        {seesPay && (
+          <TabsContent value="documents">
+            <DocumentsTab employeeId={e._id} documents={e.documents ?? []} />
+          </TabsContent>
+        )}
 
-        <TabsContent value="bank">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Bank Details</CardTitle>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4">
-                <Field label="Bank" value={e.bankDetails?.bankName} />
-                <Field label="A/C Number" value={e.bankDetails?.accountNumber} />
-                <Field label="IFSC" value={e.bankDetails?.ifscCode} />
-                <Field label="PAN" value={e.bankDetails?.panNumber} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Salary Breakdown</CardTitle>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4">
-                <Field label="Basic" value={e.salary?.basic ?? 0} />
-                <Field label="HRA" value={e.salary?.hra ?? 0} />
-                <Field label="DA" value={e.salary?.da ?? 0} />
-                <Field label="Special" value={e.salary?.specialAllowance ?? 0} />
-                <Field label="Gross (₹)" value={e.salary?.grossSalary ?? 0} />
-                <Field label="Monthly TDS (₹)" value={e.salary?.tdsMonthly ?? 0} />
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
+        {seesPay && (
+          <TabsContent value="bank">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Bank Details</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 gap-4">
+                  <Field label="Bank" value={e.bankDetails?.bankName} />
+                  <Field label="A/C Number" value={e.bankDetails?.accountNumber} />
+                  <Field label="IFSC" value={e.bankDetails?.ifscCode} />
+                  <Field label="PAN" value={e.bankDetails?.panNumber} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Salary Breakdown</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 gap-4">
+                  <Field label="Basic" value={e.salary?.basic ?? 0} />
+                  <Field label="HRA" value={e.salary?.hra ?? 0} />
+                  <Field label="DA" value={e.salary?.da ?? 0} />
+                  <Field label="Special" value={e.salary?.specialAllowance ?? 0} />
+                  <Field label="Gross (₹)" value={e.salary?.grossSalary ?? 0} />
+                  <Field label="Monthly TDS (₹)" value={e.salary?.tdsMonthly ?? 0} />
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
 
     </div>

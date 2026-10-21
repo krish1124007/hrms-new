@@ -9,7 +9,9 @@ import { Department } from '../models/department.model.js';
 import { Designation } from '../models/designation.model.js';
 import { DocumentModel } from '../models/document.model.js';
 import { AppError, ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { containsInsensitive, escapeRegex } from '../lib/regex.js';
 import { currentEmployeeId, hasPermission } from '../lib/access.js';
+import { directReportIds } from '../lib/approvals.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
@@ -165,22 +167,50 @@ function includeDeletedFor(req: Request, flag: unknown): boolean {
   return (flag === '1' || flag === 'true') && hasPermission(req.user, 'employees.delete');
 }
 
+/*
+ * Who sees which employee record, and how much of it.
+ *
+ *   • HR (`employees.update`) and payroll (`payroll.process`) — everybody,
+ *     including pay: salary, bank details (account, IFSC, PAN), the statutory
+ *     block and documents.
+ *   • any other `employees.view` holder (a manager) — themselves and their
+ *     direct reports only, and never those pay fields. Colleagues' work
+ *     contact details are in the directory (`GET /employees/directory`).
+ */
+
+/** Never shown without `employees.update` / `payroll.process`. */
+const PAY_FIELDS = ['salary', 'bankDetails', 'statutory', 'documents'] as const;
+const WITHOUT_PAY_FIELDS: Record<string, 0> = Object.fromEntries(PAY_FIELDS.map((f) => [f, 0]));
+
+/** True for HR / payroll: every employee, pay fields included. */
+function seesEveryEmployee(req: Request): boolean {
+  return hasPermission(req.user, 'employees.update') || hasPermission(req.user, 'payroll.process');
+}
+
+/** The projection for the caller: everything for HR / payroll, else without the pay fields. */
+function employeeProjection(req: Request): Record<string, 0> {
+  return seesEveryEmployee(req) ? {} : WITHOUT_PAY_FIELDS;
+}
+
+/** The employee filter for the caller: `{}` for HR / payroll, else themselves + their direct reports. */
+async function employeeScope(req: Request): Promise<Record<string, unknown>> {
+  if (seesEveryEmployee(req)) return {};
+  const [me, reports] = await Promise.all([currentEmployeeId(req), directReportIds(req)]);
+  return { _id: { $in: me ? [me, ...reports] : reports } };
+}
+
 export async function listEmployees(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
   const withDeleted = includeDeletedFor(req, q.includeDeleted);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
+  const filter: Record<string, any> = await employeeScope(req);
   if (q.status) filter.status = q.status;
   if (q.department) filter.department = q.department;
   if (q.designation) filter.designation = q.designation;
   if (q.search) {
-    filter.$or = [
-      { firstName: { $regex: q.search, $options: 'i' } },
-      { lastName: { $regex: q.search, $options: 'i' } },
-      { email: { $regex: q.search, $options: 'i' } },
-      { employeeId: { $regex: q.search, $options: 'i' } },
-    ];
+    const rx = containsInsensitive(q.search);
+    filter.$or = [{ firstName: rx }, { lastName: rx }, { email: rx }, { employeeId: rx }];
   }
   // `Employee.paginate`, with the soft-delete option passed through.
   const page = q.page as number;
@@ -188,6 +218,7 @@ export async function listEmployees(req: Request, res: Response): Promise<void> 
   const [data, total] = await Promise.all([
     Employee.find(filter)
       .setOptions({ withDeleted })
+      .select(employeeProjection(req))
       .sort(q.sort ?? '-createdAt')
       .skip((page - 1) * limit)
       .limit(limit)
@@ -395,8 +426,16 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
 }
 
 export async function getEmployee(req: Request, res: Response): Promise<void> {
-  const employee = await Employee.findById(String(req.params.id))
+  const id = String(req.params.id);
+  if (!seesEveryEmployee(req)) {
+    const scope = (await employeeScope(req))._id as { $in: Types.ObjectId[] };
+    if (!scope.$in.some((own) => own.toHexString() === id)) {
+      throw new AppError("You can only view your own and your direct reports' records", 403, 'NOT_YOUR_REPORT');
+    }
+  }
+  const employee = await Employee.findById(id)
     .setOptions({ withDeleted: includeDeletedFor(req, req.query.includeDeleted) })
+    .select(employeeProjection(req))
     .populate('department', 'name code')
     .populate('designation', 'name level')
     .populate('shift', 'name color startTime endTime')
@@ -511,21 +550,34 @@ export const updateSelfSchema = z
       .object({ name: selfText.optional(), relation: selfText.optional(), phone: selfPhone.optional() })
       .strict()
       .optional(),
-    // A full URL, or a storage path from the upload pipeline (`/uploads/…`).
-    avatar: z
-      .union([
-        z.literal(''),
-        z
-          .string()
-          .trim()
-          .max(2048)
-          .refine((v) => /^https?:\/\//.test(v) || v.startsWith('/'), {
-            message: 'avatar must be a URL or a path starting with /',
-          }),
-      ])
-      .optional(),
+    // An image the caller uploaded (`POST /documents/upload`): its link as the
+    // upload returned it (turned back into `/uploads/<key>` on the way in).
+    // Checked against the caller's own uploads in the handler.
+    avatar: z.union([z.literal(''), z.string().trim().max(2048)]).optional(),
   })
   .strict();
+
+/**
+ * 400 unless `avatar` is an image the caller uploaded themselves: the stored
+ * `/uploads/<key>` reference of one of their own (non-deleted) documents with
+ * an `image/*` type. An external URL or anybody else's file is refused, so
+ * nobody can point their photo at a tracking pixel or at a colleague's
+ * private document. Re-sending the photo already set is always fine.
+ */
+async function assertOwnUploadedImage(req: Request, avatar: string, current: string | undefined): Promise<void> {
+  if (current && avatar === current) return;
+  const refuse = (): never => {
+    throw new ValidationAppError('avatar must be an image you uploaded', [
+      { field: 'avatar', message: 'Upload the photo first (POST /documents/upload) and send the link it returned' },
+    ]);
+  };
+  if (!avatar.startsWith('/uploads/') || !req.user?._id) refuse();
+  const upload = await DocumentModel.findOne({ 'file.url': avatar, uploadedBy: req.user!._id })
+    .select('file.mimeType')
+    .lean()
+    .exec();
+  if (!upload || !String(upload.file?.mimeType ?? '').toLowerCase().startsWith('image/')) refuse();
+}
 
 /** Plain copy of a stored sub-document (or `{}`), for a field-by-field merge. */
 function plainObject(value: unknown): Record<string, unknown> {
@@ -544,6 +596,7 @@ export async function updateMyProfile(req: Request, res: Response): Promise<void
   const id = await currentEmployeeId(req);
   const employee = id ? await Employee.findById(id).exec() : null;
   if (!employee) throw noEmployeeProfile();
+  if (body.avatar) await assertOwnUploadedImage(req, body.avatar, employee.profileImage);
 
   if (body.phone !== undefined) employee.set('phone', body.phone || undefined);
   if (body.personalEmail !== undefined) employee.set('personalEmail', body.personalEmail || undefined);
@@ -580,7 +633,9 @@ export async function updateMyProfile(req: Request, res: Response): Promise<void
 /** Still employed: serving notice counts, any exit does not. */
 const EMPLOYED = { status: { $in: ['active', 'onNotice'] } };
 
-const DIRECTORY_FIELDS = 'employeeId firstName lastName profileImage email phone department designation';
+// No phone numbers: the `phone` on an employee record is their personal
+// mobile, and the directory is open to every logged-in user.
+const DIRECTORY_FIELDS = 'employeeId firstName lastName profileImage email department designation';
 
 const DIRECTORY_POPULATE = [
   { path: 'department', select: 'name' },
@@ -596,7 +651,7 @@ export const directoryQuerySchema = z.object({
   department: z.string().regex(OBJECT_ID, 'Invalid department id').optional(),
 });
 
-/** One directory row — work contact details only. */
+/** One directory row — name, Employee ID, work e-mail, department, designation, photo. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function directoryRow(emp: any): Record<string, unknown> {
   return {
@@ -606,7 +661,6 @@ function directoryRow(emp: any): Record<string, unknown> {
     lastName: emp.lastName,
     avatar: emp.profileImage ?? null,
     email: emp.email,
-    phone: emp.phone ?? null,
     department: refOf(emp.department, ['name']),
     designation: refOf(emp.designation, ['name']),
   };
@@ -958,8 +1012,10 @@ export async function deleteEmployeeDocument(req: Request, res: Response): Promi
   res.json({ success: true, data: employee.documents });
 }
 
-export async function exportEmployees(_req: Request, res: Response): Promise<void> {
-  const employees = await Employee.find({})
+/** CSV of work details (no pay fields) — of everybody for HR / payroll, else of the caller and their reports. */
+export async function exportEmployees(req: Request, res: Response): Promise<void> {
+  const employees = await Employee.find(await employeeScope(req))
+    .select('employeeId firstName lastName email phone department designation status joiningDate')
     .populate('department', 'name')
     .populate('designation', 'name')
     .lean()
@@ -1004,8 +1060,6 @@ export interface ImportRowResult {
   status: 'created' | 'updated' | 'skipped' | 'error';
   message: string;
 }
-
-const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** A date cell of an import row, or undefined when blank / null / not a date. */
 function importedDate(value: unknown): Date | undefined {

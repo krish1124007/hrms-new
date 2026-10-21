@@ -15,6 +15,8 @@ export interface IVisitCheckpoint {
   location?: { lat: number; lng: number; accuracy?: number };
   photo?: string;
   address?: string;
+  /** Check-out only: the rep's notes when closing the visit (the visit's `notes` are the check-in ones). */
+  notes?: string;
 }
 
 export interface IVisit extends Document {
@@ -27,6 +29,8 @@ export interface IVisit extends Document {
   distanceFromClientM?: number;
   /** Check-in farther than FIELD_VISIT_RADIUS_M from the client — flagged, never refused. */
   locationMismatch?: boolean;
+  /** Checked in without a location fix at a client that has a pin — flagged, never refused. */
+  locationMissing?: boolean;
   duration?: number; // minutes
   notes?: string;
   outcome?: VisitOutcome;
@@ -52,6 +56,7 @@ const checkpointSchema = new Schema<IVisitCheckpoint>(
     },
     photo: String,
     address: String,
+    notes: String,
   },
   { _id: false },
 );
@@ -68,6 +73,7 @@ const visitSchema = new Schema<IVisit>({
   checkOut: checkpointSchema,
   distanceFromClientM: Number,
   locationMismatch: { type: Boolean, default: false },
+  locationMissing: { type: Boolean, default: false },
   duration: { type: Number, min: 0 },
   notes: String,
   outcome: {
