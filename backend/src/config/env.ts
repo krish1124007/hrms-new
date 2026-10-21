@@ -114,6 +114,17 @@ const envSchema = z.object({
     .min(32, 'ENCRYPTION_KEY must be at least 32 characters')
     .default('dev_only_encryption_key_change_me_please_32_chars'),
 
+  /**
+   * Path to a Firebase service-account JSON (Firebase console → Project
+   * settings → Service accounts). Set: every in-app notification is also
+   * pushed through FCM to the user's registered phones. Unset or blank: push
+   * is a silent no-op.
+   */
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().optional(),
+  ),
+
   AGORA_APP_ID: z.string().optional(),
   AGORA_APP_CERTIFICATE: z.string().optional(),
 });
