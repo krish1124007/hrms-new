@@ -25,7 +25,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useAttendanceList, useCorrectAttendanceRecord } from '@/hooks/use-attendance';
-import { useDepartments, useEmployees } from '@/hooks/use-systemcore';
+import { useDepartments } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
+import { EmployeeFilterOptions } from '@/components/common/EmployeeFilterOptions';
+import { formatDate, formatTime, todayIST, toISTDateKey } from '@/lib/format';
+import { addDaysToKey, dayKeyOf, partsOfKey, startOfWeekKey } from '@/lib/business-day';
 import type {
   Attendance,
   AttendanceArea,
@@ -46,10 +50,6 @@ const STATUS_VARIANT: Record<
   weekend: 'outline',
 };
 
-/** Date helpers — keep them dumb (string in, string out) so they work with <input type="date"> */
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 /** Human-readable label for a captured check-in/out location. */
 function locationText(loc?: LocationPoint): string {
@@ -108,24 +108,23 @@ function LocationLine({ prefix, loc }: { prefix: string; loc?: LocationPoint }):
   );
 }
 
-const today = new Date();
-const startOfThisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-const startOfThisWeek = (() => {
-  const d = new Date(today);
-  // Treat Monday as the start of the week.
-  const day = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - day);
-  return d;
-})();
-const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
-
-const QUICK_RANGES: Array<{ label: string; from: string; to: string }> = [
-  { label: 'Today', from: ymd(today), to: ymd(today) },
-  { label: 'This week', from: ymd(startOfThisWeek), to: ymd(today) },
-  { label: 'This month', from: ymd(startOfThisMonth), to: ymd(today) },
-  { label: 'Last month', from: ymd(startOfLastMonth), to: ymd(endOfLastMonth) },
-];
+/**
+ * Quick date ranges as `<input type="date">` values, on the IST calendar —
+ * worked out when the page renders (not when the bundle loaded) and right
+ * between 00:00 and 05:30 IST too. Weeks start on Monday.
+ */
+function quickRanges(today: string): Array<{ label: string; from: string; to: string }> {
+  const { year, month } = partsOfKey(today);
+  const startOfThisMonth = dayKeyOf(year, month, 1);
+  const endOfLastMonth = addDaysToKey(startOfThisMonth, -1);
+  const { year: ly, month: lm } = partsOfKey(endOfLastMonth);
+  return [
+    { label: 'Today', from: today, to: today },
+    { label: 'This week', from: startOfWeekKey(today), to: today },
+    { label: 'This month', from: startOfThisMonth, to: today },
+    { label: 'Last month', from: dayKeyOf(ly, lm, 1), to: endOfLastMonth },
+  ];
+}
 
 function exportCSV(rows: Attendance[]): void {
   const headers = [
@@ -144,12 +143,12 @@ function exportCSV(rows: Attendance[]): void {
     const emp = typeof r.employeeId === 'object' ? r.employeeId : null;
     const empName = emp ? `${emp.firstName} ${emp.lastName}` : '';
     const empCode = emp?.employeeId ?? '';
-    const ci = r.checkIn?.time ? new Date(r.checkIn.time).toLocaleTimeString() : '';
-    const co = r.checkOut?.time ? new Date(r.checkOut.time).toLocaleTimeString() : '';
+    const ci = r.checkIn?.time ? formatTime(r.checkIn.time) : '';
+    const co = r.checkOut?.time ? formatTime(r.checkOut.time) : '';
     return [
       empCode,
       empName,
-      new Date(r.date).toLocaleDateString(),
+      formatDate(r.date),
       ci,
       co,
       locationText(r.checkIn?.location),
@@ -166,7 +165,7 @@ function exportCSV(rows: Attendance[]): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `attendance-${ymd(new Date())}.csv`;
+  a.download = `attendance-${todayIST()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -186,20 +185,21 @@ export default function AttendanceListPage(): ReactElement {
   // on page 4 of an empty result set after switching employees.
   const resetPage = (): void => setPage(1);
 
-  const { data: empData } = useEmployees({ limit: 500 });
+  // A filter over history: ex-employees stay selectable, in their own group.
+  const { data: allEmployees = [] } = useActiveEmployees({ includeFormer: true });
   const { data: deptData } = useDepartments({ limit: 100 });
 
   const filteredEmployees = useMemo(() => {
-    const all = empData?.data ?? [];
+    const all = allEmployees;
     const q = employeeSearch.trim().toLowerCase();
     if (!q) return all;
     return all.filter((e) => {
       const haystack = `${e.firstName} ${e.lastName} ${e.employeeId} ${e.email ?? ''}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [empData, employeeSearch]);
+  }, [allEmployees, employeeSearch]);
 
-  const { data, isLoading } = useAttendanceList({
+  const { data, isLoading, error, refetch } = useAttendanceList({
     page,
     limit,
     employeeId: employeeId || undefined,
@@ -226,9 +226,8 @@ export default function AttendanceListPage(): ReactElement {
 
   /** Pre-fill with what is on the record; default the missing side to a shift-like time. */
   const openFix = (r: Attendance): void => {
-    const day = new Date(r.date);
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const dayPrefix = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+    // The record's IST day — a label stored at IST midnight is not the day before.
+    const dayPrefix = toISTDateKey(r.date);
     setFixIn(r.checkIn?.time ? toLocalInput(r.checkIn.time) : `${dayPrefix}T10:00`);
     setFixOut(r.checkOut?.time ? toLocalInput(r.checkOut.time) : `${dayPrefix}T18:30`);
     setFixReason('');
@@ -311,32 +310,19 @@ export default function AttendanceListPage(): ReactElement {
     {
       key: 'date',
       header: 'Date',
-      cell: (r) =>
-        new Date(r.date).toLocaleDateString('en-IN', {
-          dateStyle: 'medium',
-        }),
+      cell: (r) => formatDate(r.date),
     },
     {
       key: 'checkIn',
       header: 'Check-in',
       cell: (r) =>
-        r.checkIn?.time
-          ? new Date(r.checkIn.time).toLocaleTimeString('en-IN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : '—',
+        r.checkIn?.time ? formatTime(r.checkIn.time) : '—',
     },
     {
       key: 'checkOut',
       header: 'Check-out',
       cell: (r) =>
-        r.checkOut?.time
-          ? new Date(r.checkOut.time).toLocaleTimeString('en-IN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : '—',
+        r.checkOut?.time ? formatTime(r.checkOut.time) : '—',
     },
     {
       key: 'location',
@@ -425,7 +411,7 @@ export default function AttendanceListPage(): ReactElement {
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Quick range
           </span>
-          {QUICK_RANGES.map((qr) => {
+          {quickRanges(todayIST()).map((qr) => {
             const isActive = from === qr.from && to === qr.to;
             return (
               <button
@@ -475,12 +461,7 @@ export default function AttendanceListPage(): ReactElement {
               }}
             >
               <option value="">All employees</option>
-              {filteredEmployees.map((e) => (
-                <option key={e._id} value={e._id}>
-                  {e.firstName} {e.lastName}
-                  {e.employeeId ? ` · ${e.employeeId}` : ''}
-                </option>
-              ))}
+              <EmployeeFilterOptions employees={filteredEmployees} />
             </Select>
           </div>
 
@@ -559,6 +540,8 @@ export default function AttendanceListPage(): ReactElement {
         columns={columns}
         data={rows}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No records found"
         emptyDescription={
@@ -588,7 +571,7 @@ export default function AttendanceListPage(): ReactElement {
                 : 'this employee'}
             </strong>{' '}
             on{' '}
-            {fixRow ? new Date(fixRow.date).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : ''}
+            {fixRow ? formatDate(fixRow.date) : ''}
             . Hours, overtime and half-day status are recalculated from the times you enter.
           </p>
           <div>

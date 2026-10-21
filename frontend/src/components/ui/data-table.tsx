@@ -1,6 +1,7 @@
 import type { ReactNode, ReactElement } from 'react';
 import { AlertTriangle, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { apiErrorMessage, apiErrorStatus } from '@/lib/api-error';
 import { Button } from './button';
 import { Skeleton } from './skeleton';
 import { EmptyState } from './empty-state';
@@ -61,8 +62,10 @@ export function DataTable<T>({
       <div className="rounded-lg border border-border bg-card p-8">
         <EmptyState
           icon={AlertTriangle}
-          title="Couldn't load this list"
-          description="Something went wrong while fetching the data. Check your connection and try again."
+          title={
+            apiErrorStatus(error) === 403 ? "You don't have access to this list" : "Couldn't load this list"
+          }
+          description={apiErrorMessage(error, 'Something went wrong while fetching the data. Try again.')}
           action={
             onRetry ? (
               <Button variant="outline" size="sm" onClick={onRetry}>

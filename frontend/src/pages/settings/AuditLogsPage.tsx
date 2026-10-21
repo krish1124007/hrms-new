@@ -24,6 +24,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { formatDateTime } from '@/lib/format';
+import { apiErrorMessage } from '@/lib/api-error';
 import {
   listAuditLogs,
   listAuditEntities,
@@ -83,7 +85,7 @@ export default function AuditLogsPage(): ReactElement {
     [page, action, entity, search, from, to],
   );
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['audit-logs', params],
     queryFn: () => listAuditLogs(params),
     placeholderData: (prev) => prev,
@@ -202,6 +204,11 @@ export default function AuditLogsPage(): ReactElement {
             <div className="flex h-64 items-center justify-center">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
+          ) : error ? (
+            <div className="flex h-64 flex-col items-center justify-center gap-1 text-sm">
+              <p className="font-medium text-foreground">Couldn't load audit logs</p>
+              <p className="text-muted-foreground">{apiErrorMessage(error)}</p>
+            </div>
           ) : !data?.data.length ? (
             <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
               <FileClock className="size-8" />
@@ -234,7 +241,7 @@ export default function AuditLogsPage(): ReactElement {
                         className="border-b last:border-0 hover:bg-accent/30"
                       >
                         <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
-                          {new Date(log.createdAt).toLocaleString()}
+                          {formatDateTime(log.createdAt, { second: '2-digit' })}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
@@ -336,7 +343,7 @@ function AuditLogDetailDialog({
       {log && (
         <DialogBody className="space-y-4">
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <Field label="When" value={new Date(log.createdAt).toLocaleString()} />
+            <Field label="When" value={formatDateTime(log.createdAt, { second: '2-digit' })} />
             <Field label="Action" value={log.action} />
             <Field label="Entity" value={log.entity} />
             <Field label="Entity ID" value={log.entityId ?? '—'} mono />

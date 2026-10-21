@@ -45,7 +45,7 @@ export default function PolicyListPage(): ReactElement {
   const [status, setStatus] = useState<'' | PolicyStatus>('');
   const [mandatory, setMandatory] = useState<'' | 'true' | 'false'>('');
 
-  const { data, isLoading } = usePolicies({
+  const { data, isLoading, error, refetch } = usePolicies({
     page,
     limit: 20,
     ...(search ? { search } : {}),
@@ -207,6 +207,8 @@ export default function PolicyListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(p) => p._id}
         emptyTitle="No policies yet"
         emptyDescription="Create your first policy to start building the company handbook"

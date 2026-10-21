@@ -45,7 +45,6 @@ import {
   reportingManagerUserId,
 } from '../services/notification.service.js';
 import { LocationTrack } from '../models/location-track.model.js';
-import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
 
 // ============================================================================
 // CONFIG
@@ -1642,82 +1641,9 @@ export async function attendanceReport(req: Request, res: Response): Promise<voi
 // LIVE TRACKING
 // ============================================================================
 
-export const trackingBatchSchema = z.object({
-  points: z.array(z.object({
-    timestamp: z.coerce.date().optional(),
-    lat: z.coerce.number(),
-    lng: z.coerce.number(),
-    accuracy: z.coerce.number().optional(),
-    speed: z.coerce.number().optional(),
-    altitude: z.coerce.number().optional(),
-    heading: z.coerce.number().optional(),
-    activity: z.enum(['still', 'walking', 'running', 'in_vehicle']).optional(),
-    battery: z.coerce.number().optional(),
-    isCharging: z.boolean().optional(),
-    networkType: z.string().optional(),
-    isOffline: z.boolean().optional(),
-  })).min(1).max(500),
-});
-
-export async function ingestLocationBatch(req: Request, res: Response): Promise<void> {
-  const body = req.body as z.infer<typeof trackingBatchSchema>;
-  const emp = await getCurrentEmployee();
-  if (!emp) throw new ValidationAppError('Employee profile not found');
-
-  // Admin master switch — when live tracking is turned off in the panel we
-  // accept the request but store nothing, so a stale mobile client can't
-  // keep writing location history.
-  const cfg = await AttendanceConfig.findOne({}).exec();
-  if (!cfg?.liveTracking?.enabled) {
-    res.status(200).json({ success: true, ignored: true, message: 'Live tracking disabled' });
-    return;
-  }
-
-  const today = startOfDay(new Date());
-  const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
-  if (!att || !att.checkIn?.time || att.checkOut?.time) {
-    res.status(200).json({ success: true, ignored: true, message: 'Not clocked in' });
-    return;
-  }
-
-  const docs = body.points.map((p) => ({
-    employeeId: emp.id,
-    timestamp: p.timestamp ?? new Date(),
-    location: {
-      type: 'Point' as const,
-      coordinates: [p.lng, p.lat] as [number, number],
-    },
-    accuracy: p.accuracy,
-    speed: p.speed,
-    altitude: p.altitude,
-    heading: p.heading,
-    activity: p.activity,
-    battery: p.battery,
-    isCharging: p.isCharging,
-    networkType: p.networkType,
-    isOffline: p.isOffline,
-    syncedAt: new Date(),
-  }));
-
-  await LocationTrack.insertMany(docs);
-
-  const ns = getFieldTrackingNamespace();
-  if (ns) {
-    const latest = body.points[body.points.length - 1];
-    // Broadast globally to all admins in this namespace
-    ns.emit('location:update', {
-      employeeId: emp.id,
-      lat: latest.lat,
-      lng: latest.lng,
-      timestamp: latest.timestamp ?? new Date(),
-      activity: latest.activity,
-      battery: latest.battery,
-      speed: latest.speed,
-    });
-  }
-
-  res.status(201).json({ success: true, data: { ingested: docs.length } });
-}
+// The location upload (`POST /attendance/tracking/batch`) is the field ingest:
+// `controllers/field-tracking.controller.ts` → `services/location-track.service.ts`
+// (one schema, one consented + clocked-in gate, one store and broadcast).
 
 export async function getLiveTracking(req: Request, res: Response): Promise<void> {
   // Same day label as every other attendance query — with the old

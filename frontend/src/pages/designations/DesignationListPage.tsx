@@ -35,7 +35,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function DesignationListPage(): ReactElement {
-  const { data, isLoading } = useDesignations({ limit: 100 });
+  const { data, isLoading, error, refetch } = useDesignations({ limit: 100 });
   const { data: deptData } = useDepartments({ limit: 100 });
   const create = useCreateDesignation();
   const update = useUpdateDesignation();
@@ -126,6 +126,8 @@ export default function DesignationListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(d) => d._id}
         emptyTitle="No designations yet"
         emptyDescription="Add roles like 'Software Engineer', 'Manager', etc."

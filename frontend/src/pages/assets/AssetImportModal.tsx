@@ -90,10 +90,11 @@ export function AssetImportModal({ open, onClose }: AssetImportModalProps): Reac
   };
 
   const handleDownloadTemplate = () => {
+    // Fictional sample rows only — never real people's names or e-mails.
     const templateData = [
       {
-        'Employee Name': 'Khyati Trivedi',
-        'Employee Mail ID': 'khyatitrivediddopc@gmail.com',
+        'Employee Name': 'Asha Example',
+        'Employee Mail ID': 'asha.example@example.com',
         'Asset Name': 'DES_DEL_OW_02',
         'Asset Code': '02',
         Category: 'Desktop',
@@ -101,21 +102,21 @@ export function AssetImportModal({ open, onClose }: AssetImportModalProps): Reac
         Condition: 'Good',
       },
       {
-        'Employee Name': 'Harsha Ganwani',
-        'Employee Mail ID': 'harshaganwani76@gmail.com',
-        'Asset Name': 'DES_SAM_OW_03',
-        'Asset Code': '03',
-        Category: 'Desktop',
-        Status: 'Assigned',
-        Condition: 'Good',
-      },
-      {
-        'Employee Name': 'Parikshit Thakkar',
-        'Employee Mail ID': 'parikshit.thakkar.ddopc@gmail.com',
+        'Employee Name': 'Ravi Sample',
+        'Employee Mail ID': 'ravi.sample@example.com',
         'Asset Name': 'LAP_ACC_OW_04',
         'Asset Code': '04',
         Category: 'Laptop',
         Status: 'Assigned',
+        Condition: 'Good',
+      },
+      {
+        'Employee Name': '',
+        'Employee Mail ID': '',
+        'Asset Name': 'PRN_HP_OW_05',
+        'Asset Code': '05',
+        Category: 'Printer',
+        Status: 'Available',
         Condition: 'Good',
       },
     ];

@@ -85,6 +85,8 @@ export default function DisciplinaryListPage(): ReactElement {
 
   const data = canManage ? adminQuery.data : { data: myQuery.data?.data ?? [], pagination: undefined };
   const isLoading = canManage ? adminQuery.isLoading : myQuery.isLoading;
+  const listError = canManage ? adminQuery.error : myQuery.error;
+  const refetchList = canManage ? adminQuery.refetch : myQuery.refetch;
   const s = stats?.data;
 
   const openCount = (s?.byStatus.open ?? 0) + (s?.byStatus.acknowledged ?? 0) + (s?.byStatus.in_progress ?? 0);
@@ -258,6 +260,8 @@ export default function DisciplinaryListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={listError}
+        onRetry={() => void refetchList()}
         rowKey={(a) => a._id}
         emptyTitle={canManage ? 'No disciplinary cases' : 'No disciplinary record'}
         emptyDescription={

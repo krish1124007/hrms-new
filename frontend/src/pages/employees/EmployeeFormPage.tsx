@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,18 +15,20 @@ import {
   useDesignations,
   useShifts,
   useEmployee,
-  useEmployees,
   useCreateEmployee,
   useUpdateEmployee,
 } from '@/hooks/use-systemcore';
 import { useSalaryStructures } from '@/hooks/use-payroll';
 import { usePermissions } from '@/hooks/use-permissions';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { cn } from '@/lib/utils';
+import { toISTDateKey } from '@/lib/format';
+import { toast } from 'sonner';
 
 const schema = z.object({
   firstName: z.string().min(1, 'Required'),
   lastName: z.string().min(1, 'Required'),
-  email: z.string().email(),
+  email: z.string().email('Enter a valid e-mail address'),
   phone: z.string().optional(),
   // Optional on edit; on create, if filled it must be ≥8 chars. We can't
   // express "required only on create" cleanly here — handled at submit time.
@@ -92,7 +94,72 @@ const STEPS = [
   { id: 3, label: 'Salary & Bank' },
 ];
 
-const STORAGE_KEY = 'opencore.employee.draft';
+/**
+ * The unsaved "Add employee" form survives a reload of the tab — but only in
+ * this tab (`sessionStorage`), and never the secrets: no password, bank
+ * details, PAN or salary figures are ever written to browser storage.
+ */
+const DRAFT_KEY = 'opencore.employee.draft';
+/** Never persisted in a draft. */
+const SENSITIVE_DRAFT_FIELDS = [
+  'password',
+  'bankName',
+  'accountNumber',
+  'ifscCode',
+  'panNumber',
+  'basic',
+  'hra',
+  'da',
+  'specialAllowance',
+  'tdsMonthly',
+  'salaryStructureId',
+] as const;
+
+function draftOf(values: Record<string, unknown>): Record<string, unknown> {
+  const draft = { ...values };
+  for (const field of SENSITIVE_DRAFT_FIELDS) delete draft[field];
+  return draft;
+}
+
+function readDraft(): Record<string, unknown> | null {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    return raw ? draftOf(JSON.parse(raw) as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft(): void {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+    // Older builds kept the whole form — passwords and bank details included —
+    // in localStorage; make sure that copy is gone.
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** A day label (`2026-10-15T00:00:00Z` or IST midnight) as an `<input type="date">` value. */
+function dateInput(d: string | undefined | null): string | undefined {
+  return d ? toISTDateKey(d) : undefined;
+}
+
+const FORM_DEFAULTS: Partial<FormValues> = {
+  employmentType: 'full-time',
+  basic: 0,
+  hra: 0,
+  da: 0,
+  specialAllowance: 0,
+  tdsMonthly: 0,
+  isFieldStaff: false,
+  salaryStructureId: '',
+};
+
+function FieldError({ message }: { message?: string }): ReactElement | null {
+  return message ? <p className="mt-1 text-xs text-destructive">{message}</p> : null;
+}
 
 /** A reference as an id, whether the API sent the id or the populated document. */
 function refId(ref: string | { _id: string } | null | undefined): string {
@@ -109,7 +176,16 @@ export default function EmployeeFormPage(): ReactElement {
   const { data: existing } = useEmployee(id);
   const { data: deptData } = useDepartments({ limit: 100 });
   const { data: shiftData } = useShifts({ limit: 100 });
-  const { data: empListData } = useEmployees({ limit: 500 });
+  // A manager is somebody who still works here — plus, on edit, the current
+  // manager even if they have left, so an unrelated edit never clears them.
+  const { data: currentEmployees = [] } = useActiveEmployees();
+  const currentManager = existing?.data?.reportingManager;
+  const managerOptions = [
+    ...currentEmployees.filter((e) => e._id !== id),
+    ...(currentManager && !currentEmployees.some((e) => e._id === currentManager._id)
+      ? [{ ...currentManager, former: true }]
+      : []),
+  ];
   // Listing structures needs payroll.process; without it the field is not shown (or sent).
   const { has } = usePermissions();
   const canPickStructure = has('payroll.process');
@@ -131,16 +207,7 @@ export default function EmployeeFormPage(): ReactElement {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema) as unknown as Resolver<FormValues>,
-    defaultValues: {
-      employmentType: 'full-time',
-      basic: 0,
-      hra: 0,
-      da: 0,
-      specialAllowance: 0,
-      tdsMonthly: 0,
-      isFieldStaff: false,
-      salaryStructureId: '',
-    },
+    defaultValues: FORM_DEFAULTS,
   });
 
   const department = watch('department');
@@ -158,7 +225,7 @@ export default function EmployeeFormPage(): ReactElement {
         lastName: e.lastName,
         email: e.email,
         phone: e.phone,
-        dateOfBirth: e.dateOfBirth?.slice(0, 10),
+        dateOfBirth: dateInput(e.dateOfBirth),
         gender: e.gender,
         maritalStatus: e.maritalStatus,
         bloodGroup: e.bloodGroup,
@@ -168,9 +235,9 @@ export default function EmployeeFormPage(): ReactElement {
         requireLocation: e.requireLocation ?? false,
         isFieldStaff: e.isFieldStaff ?? false,
         reportingManager: e.reportingManager?._id,
-        joiningDate: e.joiningDate?.slice(0, 10),
-        confirmationDate: e.confirmationDate?.slice(0, 10),
-        probationEndDate: e.probationEndDate?.slice(0, 10),
+        joiningDate: dateInput(e.joiningDate),
+        confirmationDate: dateInput(e.confirmationDate),
+        probationEndDate: dateInput(e.probationEndDate),
         noticePeriod: e.noticePeriod,
         employmentType: e.employmentType,
         workLocation: e.workLocation,
@@ -208,27 +275,44 @@ export default function EmployeeFormPage(): ReactElement {
     if (structuresData && currentStructureId) setValue('salaryStructureId', currentStructureId);
   }, [structuresData, currentStructureId, setValue]);
 
-  // Auto-save draft (create only)
+  // Auto-save draft (create only) — without the sensitive fields.
+  const submitted = useRef(false);
   useEffect(() => {
     if (isEdit) return;
     const sub = watch((vals) => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(vals));
+      if (submitted.current) return;
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draftOf(vals as Record<string, unknown>)));
+      } catch {
+        /* storage unavailable or full — the draft is a convenience */
+      }
     });
     return () => sub.unsubscribe();
   }, [watch, isEdit]);
 
   // Restore draft (create only)
+  const [draftRestored, setDraftRestored] = useState(false);
   useEffect(() => {
     if (isEdit) return;
-    const draft = localStorage.getItem(STORAGE_KEY);
+    // Drop any full-form draft an older build left in localStorage.
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      /* storage unavailable */
+    }
+    const draft = readDraft();
     if (draft) {
-      try {
-        reset(JSON.parse(draft));
-      } catch {
-        /* ignore */
-      }
+      reset({ ...FORM_DEFAULTS, ...(draft as Partial<FormValues>) });
+      setDraftRestored(true);
     }
   }, [isEdit, reset]);
+
+  const discardDraft = (): void => {
+    clearDraft();
+    reset();
+    setDraftRestored(false);
+    setStep(1);
+  };
 
   const totals = (() => {
     const v = watch();
@@ -325,7 +409,8 @@ export default function EmployeeFormPage(): ReactElement {
         { ...payload, createUserAccount: true, password },
         {
           onSuccess: () => {
-            localStorage.removeItem(STORAGE_KEY);
+            submitted.current = true;
+            clearDraft();
             navigate('/employees');
           },
         },
@@ -353,6 +438,8 @@ export default function EmployeeFormPage(): ReactElement {
     if (ok) {
       setStep((s) => Math.min(STEPS.length, s + 1));
     } else {
+      // Never a silent no-op: say why "Next" did not move on.
+      toast.error('Fix the highlighted fields to continue');
       setTimeout(() => {
         const firstError = document.querySelector('[aria-invalid="true"], .text-destructive');
         firstError?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -409,6 +496,17 @@ export default function EmployeeFormPage(): ReactElement {
         ))}
       </div>
 
+      {draftRestored && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-4 py-2 text-sm">
+          <span className="text-muted-foreground">
+            Restored your unsaved form. Passwords, bank and salary details are never saved — enter them again.
+          </span>
+          <Button type="button" variant="ghost" size="sm" onClick={discardDraft}>
+            Discard draft
+          </Button>
+        </div>
+      )}
+
       <form
         onSubmit={handleSubmit(onSubmit)}
         // Multi-step forms: Enter inside any field would otherwise submit the
@@ -440,11 +538,13 @@ export default function EmployeeFormPage(): ReactElement {
                 </div>
                 <div>
                   <Label htmlFor="lastName">Last name *</Label>
-                  <Input id="lastName" {...register('lastName')} />
+                  <Input id="lastName" aria-invalid={!!errors.lastName} {...register('lastName')} />
+                  <FieldError message={errors.lastName?.message} />
                 </div>
                 <div>
                   <Label htmlFor="email">Email *</Label>
-                  <Input id="email" type="email" {...register('email')} />
+                  <Input id="email" type="email" aria-invalid={!!errors.email} {...register('email')} />
+                  <FieldError message={errors.email?.message} />
                 </div>
                 <div>
                   <Label htmlFor="phone">Phone</Label>
@@ -670,9 +770,10 @@ export default function EmployeeFormPage(): ReactElement {
                   <Label htmlFor="reportingManager">Reporting Manager</Label>
                   <Select id="reportingManager" {...register('reportingManager')}>
                     <option value="">Select…</option>
-                    {empListData?.data.map((e) => (
+                    {managerOptions.map((e) => (
                       <option key={e._id} value={e._id}>
                         {e.firstName} {e.lastName}
+                        {'former' in e ? ' (no longer active)' : ''}
                       </option>
                     ))}
                   </Select>
@@ -688,6 +789,7 @@ export default function EmployeeFormPage(): ReactElement {
                 <div>
                   <Label htmlFor="noticePeriod">Notice Period (Days)</Label>
                   <Input id="noticePeriod" type="number" {...register('noticePeriod')} />
+                  <FieldError message={errors.noticePeriod?.message} />
                 </div>
               </div>
             )}

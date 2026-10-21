@@ -19,11 +19,13 @@ import {
   useDeleteAllowedIP,
 } from '@/hooks/use-attendance';
 import type { AllowedIP } from '@/lib/attendance.api';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 export default function AllowedIPsPage(): ReactElement {
-  const { data, isLoading } = useAllowedIPs({ limit: 100 });
+  const { data, isLoading, error, refetch } = useAllowedIPs({ limit: 100 });
   const create = useCreateAllowedIP();
   const remove = useDeleteAllowedIP();
+  const [deleting, setDeleting] = useState<AllowedIP | null>(null);
 
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
@@ -76,8 +78,10 @@ export default function AllowedIPsPage(): ReactElement {
       width: '60px',
       cell: (r) => (
         <button
-          onClick={() => remove.mutate(r._id)}
+          onClick={() => setDeleting(r)}
           className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+          title="Delete IP"
+          aria-label={`Delete allowed IP ${r.label}`}
         >
           <Trash2 className="size-4" />
         </button>
@@ -107,9 +111,23 @@ export default function AllowedIPsPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No IPs configured"
         emptyDescription="Add allowed IPs to enable IP-restricted check-in"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete allowed IP"
+        description={`Delete "${deleting?.label ?? ''}"? Check-ins from this network are no longer accepted by IP.`}
+        confirmLabel="Delete IP"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
       />
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">

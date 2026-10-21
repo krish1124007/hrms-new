@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import {
   Dialog,
   DialogBody,
@@ -25,6 +25,9 @@ import {
 } from '@/hooks/use-leaves';
 import { usePermissions } from '@/hooks/use-permissions';
 import type { LeaveRequest, LeaveStatus } from '@/lib/leaves.api';
+import { formatDate } from '@/lib/format';
+
+const PAGE_SIZE = 25;
 
 const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' | 'secondary'> = {
   approved: 'success',
@@ -35,7 +38,13 @@ const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' 
 
 export default function LeaveListPage(): ReactElement {
   const [status, setStatus] = useState<string>('');
-  const { data, isLoading } = useLeaveRequests({ limit: 50, status: status || undefined });
+  const [page, setPage] = useState(1);
+  // Paged on the server — older requests are a page away, never silently cut off.
+  const { data, isLoading, error, refetch } = useLeaveRequests({
+    page,
+    limit: PAGE_SIZE,
+    status: status || undefined,
+  });
   const approve = useApproveLeave();
   const reject = useRejectLeave();
   const deleteLeave = useDeleteLeaveRequest();
@@ -104,7 +113,7 @@ export default function LeaveListPage(): ReactElement {
       key: 'period',
       header: 'Period',
       cell: (r) =>
-        `${new Date(r.startDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })} → ${new Date(r.endDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`,
+        `${formatDate(r.startDate)} → ${formatDate(r.endDate)}`,
     },
     { key: 'days', header: 'Days', cell: (r) => r.days },
     {
@@ -197,7 +206,14 @@ export default function LeaveListPage(): ReactElement {
       />
 
       <div className="flex items-center gap-3">
-        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-48">
+        <Select
+          value={status}
+          onChange={(e) => {
+            setStatus(e.target.value);
+            setPage(1);
+          }}
+          className="w-48"
+        >
           <option value="">All statuses</option>
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
@@ -210,10 +226,13 @@ export default function LeaveListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No leave requests"
         emptyDescription="Requests submitted by employees will appear here"
       />
+      <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
 
       <Dialog open={!!cancellingId} onClose={() => setCancellingId(null)} size="sm">
         <DialogHeader>

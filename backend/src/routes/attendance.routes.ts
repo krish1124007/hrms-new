@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as ctrl from '../controllers/attendance.controller.js';
 import * as res from '../controllers/attendance-resources.controller.js';
+import * as tracking from '../controllers/field-tracking.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
@@ -224,10 +225,12 @@ router.delete(
 );
 
 // ---------- LIVE TRACKING ----------
+// The same ingest as POST /field/tracking/batch (kept for the shipped mobile
+// app): only while live tracking is on and the caller is clocked in.
 router.post(
   '/tracking/batch',
-  validate(ctrl.trackingBatchSchema),
-  asyncHandler(ctrl.ingestLocationBatch),
+  validate(tracking.batchSchema),
+  asyncHandler(tracking.ingestBatch),
 );
 router.get(
   '/tracking/live',

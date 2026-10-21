@@ -16,6 +16,13 @@ export type StatutoryType =
   | 'professional_tax'
   | 'tds';
 
+/**
+ * The statutory wage an earning component is part of: `basic` or `da` (dearness
+ * allowance) components make up the PF wage (payroll-compute `pfWageOf`).
+ * `null` — not flagged; then the component's name decides (Basic / Dearness / DA).
+ */
+export type StatutoryBase = 'basic' | 'da';
+
 export interface ISalaryComponent extends Document {
   name: string;
   code: string;
@@ -25,6 +32,7 @@ export interface ISalaryComponent extends Document {
   isTaxable: boolean;
   isStatutory: boolean;
   statutoryType?: StatutoryType;
+  statutoryBase: StatutoryBase | null;
   order: number;
   isActive: boolean;
   createdAt: Date;
@@ -51,6 +59,7 @@ const salaryComponentSchema = new Schema<ISalaryComponent>({
     type: String,
     enum: ['pf_employee', 'pf_employer', 'esic_employee', 'esic_employer', 'professional_tax', 'tds'],
   },
+  statutoryBase: { type: String, enum: ['basic', 'da', null], default: null },
   order: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
 });
