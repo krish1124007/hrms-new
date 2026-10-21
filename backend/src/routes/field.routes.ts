@@ -14,6 +14,7 @@ import * as orders from '../controllers/field-orders.controller.js';
 import * as payments from '../controllers/field-payments.controller.js';
 import * as tracking from '../controllers/field-tracking.controller.js';
 import * as uploads from '../controllers/field-uploads.controller.js';
+import * as products from '../controllers/field-products.controller.js';
 import { fieldDashboard } from '../controllers/field-dashboard.controller.js';
 
 const router = Router();
@@ -42,6 +43,41 @@ router.post(
 
 /* ── Dashboard ── */
 router.get('/dashboard', requirePermission('field-sales.view'), asyncHandler(fieldDashboard));
+
+/* ── Product catalogue ── */
+router.get(
+  '/products/categories',
+  requirePermission('field-sales.view'),
+  asyncHandler(products.listCategories),
+);
+router.get(
+  '/products',
+  requirePermission('field-sales.view'),
+  validate(products.listQuerySchema, 'query'),
+  asyncHandler(products.listProducts),
+);
+router.post(
+  '/products',
+  requirePermission('field-sales.manage'),
+  validate(products.createProductSchema),
+  asyncHandler(products.createProduct),
+);
+router.get(
+  '/products/:id',
+  requirePermission('field-sales.view'),
+  asyncHandler(products.getProduct),
+);
+router.patch(
+  '/products/:id',
+  requirePermission('field-sales.manage'),
+  validate(products.updateProductSchema),
+  asyncHandler(products.updateProduct),
+);
+router.delete(
+  '/products/:id',
+  requirePermission('field-sales.manage'),
+  asyncHandler(products.deleteProduct),
+);
 
 /* ── Clients ── */
 router.get(
@@ -327,6 +363,11 @@ router.post(
   idempotent(),
   validate(payments.createPaymentSchema),
   asyncHandler(payments.createPayment),
+);
+router.get(
+  '/payments/:id/receipt',
+  requirePermission('field-sales.view'),
+  asyncHandler(payments.paymentReceipt),
 );
 router.get(
   '/payments/:id',

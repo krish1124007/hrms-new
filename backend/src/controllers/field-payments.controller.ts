@@ -7,6 +7,7 @@ import { Visit } from '../models/visit.model.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { paidTowardsOrder, recomputeAfterMutation } from '../services/field-ledger.service.js';
+import { renderPaymentReceipt } from '../services/field-receipt-pdf.service.js';
 import { createWithNumber, nextYearlyNumber } from '../lib/sequence.js';
 import {
   assertFieldRead,
@@ -177,6 +178,52 @@ export async function getPayment(req: Request, res: Response): Promise<void> {
   if (!doc) throw new NotFoundError('Payment not found');
   await assertFieldRead(req, doc.employeeId);
   res.json({ success: true, data: doc });
+}
+
+/**
+ * GET /field/payments/:id/receipt — the receipt as a PDF (rendered on demand).
+ * Same visibility as reading the payment.
+ */
+export async function paymentReceipt(req: Request, res: Response): Promise<void> {
+  const doc = await PaymentCollection.findById(String(req.params.id))
+    .populate<{ clientId: { name: string; company?: string; phone?: string; address?: Record<string, string> } }>(
+      'clientId',
+      'name company phone address',
+    )
+    .populate<{ employeeId: { _id: unknown; firstName?: string; lastName?: string; employeeId?: string } }>(
+      'employeeId',
+      'firstName lastName employeeId',
+    )
+    .populate<{ orderId: { orderNumber?: string } | null }>('orderId', 'orderNumber')
+    .exec();
+  if (!doc) throw new NotFoundError('Payment not found');
+  await assertFieldRead(req, doc.employeeId);
+
+  const collector = doc.employeeId;
+  const pdf = await renderPaymentReceipt({
+    receiptNumber: doc.receiptNumber,
+    amount: doc.amount,
+    method: doc.method,
+    reference: doc.reference,
+    status: doc.status,
+    collectedAt: doc.collectedAt,
+    notes: doc.notes,
+    client: {
+      name: doc.clientId?.name ?? '—',
+      company: doc.clientId?.company,
+      phone: doc.clientId?.phone,
+      address: doc.clientId?.address,
+    },
+    collectedBy: {
+      name: [collector?.firstName, collector?.lastName].filter(Boolean).join(' ') || '—',
+      code: collector?.employeeId,
+    },
+    orderNumber: doc.orderId?.orderNumber,
+  });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${doc.receiptNumber}.pdf"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(pdf);
 }
 
 export async function createPayment(req: Request, res: Response): Promise<void> {

@@ -18,6 +18,7 @@ import { PaymentCollection } from '../models/payment-collection.model.js';
 import { SalesTarget } from '../models/sales-target.model.js';
 import { FieldTask } from '../models/field-task.model.js';
 import { Notification } from '../models/notification.model.js';
+import { Product } from '../models/product.model.js';
 import { AuditLog } from '../models/audit-log.model.js';
 import { nextSequence } from '../lib/sequence.js';
 
@@ -63,12 +64,20 @@ beforeEach(async () => {
 const MUMBAI = { lat: 19.076, lng: 72.8777 };
 const newClient = (extra: Record<string, unknown> = {}) => Client.create({ name: 'Acme Traders', ...extra });
 
+let skuSeq = 0;
+/** A GST-free catalogue product priced `price`. */
+async function productAt(price: number): Promise<string> {
+  skuSeq += 1;
+  const p = await Product.create({ name: `Widget ${skuSeq}`, sku: `W-${skuSeq}`, category: 'General', price, gstRate: 0 });
+  return String(p._id);
+}
+
 /** Books a pending order worth `amount` for `actor` through the API. */
 async function bookOrder(actor: Actor, clientId: unknown, amount: number) {
   const res = await request(app)
     .post('/api/v1/field/orders')
     .set(auth(actor.token))
-    .send({ clientId: String(clientId), items: [{ name: 'Widget', quantity: 1, unitPrice: amount }] });
+    .send({ clientId: String(clientId), items: [{ productId: await productAt(amount), quantity: 1 }] });
   expect(res.status).toBe(201);
   return res.body.data as { _id: string; orderNumber: string; totalAmount: number; status: string };
 }
@@ -366,14 +375,14 @@ describe('order status machine', () => {
     const repriced = await request(app)
       .patch(`/api/v1/field/orders/${order._id}`)
       .set(auth(A.token))
-      .send({ items: [{ name: 'Widget', quantity: 3, unitPrice: 100, total: 1 }], totalAmount: 1, subtotal: 1 });
+      .send({ items: [{ productId: await productAt(100), quantity: 3, unitPrice: 1, total: 1 }], totalAmount: 1, subtotal: 1 });
     expect(repriced.status).toBe(200);
     expect(repriced.body.data.totalAmount).toBe(300);
     await setStatus(M, order._id, 'confirmed');
     const locked = await request(app)
       .patch(`/api/v1/field/orders/${order._id}`)
       .set(auth(A.token))
-      .send({ items: [{ name: 'Widget', quantity: 1, unitPrice: 1 }] });
+      .send({ items: [{ productId: await productAt(1), quantity: 1 }] });
     expect(locked.status).toBe(409);
     expect(locked.body.error.code).toBe('ORDER_LOCKED');
   });
@@ -383,7 +392,7 @@ describe('order status machine', () => {
     const res = await request(app)
       .post('/api/v1/field/orders')
       .set(auth(A.token))
-      .send({ clientId: String(client._id), status: 'confirmed', items: [{ name: 'W', quantity: 1, unitPrice: 9 }] });
+      .send({ clientId: String(client._id), status: 'confirmed', items: [{ productId: await productAt(9), quantity: 1 }] });
     expect(res.status).toBe(201);
     expect(res.body.data.status).toBe('pending');
   });
@@ -705,12 +714,13 @@ describe('idempotent money writes', () => {
 
   it('orders are idempotent too', async () => {
     const client = await newClient();
+    const productId = await productAt(5);
     const send = () =>
       request(app)
         .post('/api/v1/field/orders')
         .set(auth(A.token))
         .set('Idempotency-Key', 'order-key-0001')
-        .send({ clientId: String(client._id), items: [{ name: 'W', quantity: 1, unitPrice: 5 }] });
+        .send({ clientId: String(client._id), items: [{ productId, quantity: 1 }] });
     expect((await send()).status).toBe(201);
     expect((await send()).status).toBe(201);
     expect(await ProductOrder.countDocuments({})).toBe(1);

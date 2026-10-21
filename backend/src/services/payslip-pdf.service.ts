@@ -141,7 +141,7 @@ const COLOR = {
   white: '#ffffff',
 };
 
-function inr(amount: number): string {
+export function inr(amount: number): string {
   // PDFKit's bundled Helvetica does not include the ₹ glyph (renders as ¹).
   // "Rs." is universally readable on every PDF viewer.
   return `Rs. ${Number(amount || 0).toLocaleString('en-IN', {
@@ -151,7 +151,7 @@ function inr(amount: number): string {
 }
 
 /** Convert a number to Indian-style English words (whole rupees). */
-function numberToIndianWords(n: number): string {
+export function numberToIndianWords(n: number): string {
   const ones = [
     '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
     'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',

@@ -4,6 +4,7 @@ import { ProductOrder, type IProductOrder, type OrderStatus } from '../models/pr
 import { Client } from '../models/client.model.js';
 import { Visit } from '../models/visit.model.js';
 import { PaymentCollection } from '../models/payment-collection.model.js';
+import { Product } from '../models/product.model.js';
 import { AppError, ForbiddenError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { recomputeAfterMutation } from '../services/field-ledger.service.js';
@@ -33,8 +34,12 @@ import {
  * A rep may cancel their own pending order; confirming, delivering and
  * cancelling a confirmed order need `field-sales.manage` (a rep cannot
  * self-confirm to reach a target). Legacy `draft` behaves as `pending`,
- * `processing`/`shipped` as `confirmed`. Money is always computed here — any
- * total the client sends is ignored.
+ * `processing`/`shipped` as `confirmed`.
+ *
+ * Lines name a catalogue product, a quantity and an optional discount
+ * percent; name, SKU, unit, unit price and GST rate come from the catalogue
+ * and every amount is computed here — prices or totals the client sends are
+ * ignored. Orders booked before the catalogue (free-text lines) still read.
  */
 
 const STATUSES = ['pending', 'confirmed', 'delivered', 'cancelled'] as const;
@@ -54,11 +59,9 @@ const TRANSITIONS: Record<Exclude<(typeof STATUSES)[number], 'pending'>, OrderSt
 const OPEN_STATUSES: OrderStatus[] = ['pending', 'draft'];
 
 const orderItemSchema = z.object({
-  productId: objectIdString.optional(),
-  name: z.string().trim().min(1).max(200),
-  quantity: z.coerce.number().positive(),
-  unitPrice: z.coerce.number().min(0),
-  /** Line discount in percent (0–100); `discount` is the older spelling. */
+  productId: objectIdString,
+  quantity: z.coerce.number().positive().max(1_000_000),
+  /** Line discount in percent (0–100); `discount` is the mobile app's name for it. */
   discountPercent: z.coerce.number().min(0).max(100).optional(),
   discount: z.coerce.number().min(0).max(100).optional(),
 });
@@ -107,23 +110,64 @@ const LIST_POPULATE = [
 
 type ItemInput = z.infer<typeof orderItemSchema>;
 
-/** Server-side pricing: line = qty × unit price × (1 − discount %), paise-rounded. */
-function priceItems(items: ItemInput[]) {
-  const lines = items.map((i) => {
-    const discountPercent = i.discountPercent ?? i.discount ?? 0;
-    const gross = i.quantity * i.unitPrice;
-    const total = roundMoney(gross * (1 - discountPercent / 100));
+/**
+ * Price `items` from the catalogue: 400 PRODUCT_NOT_FOUND for an unknown or
+ * deleted product, 400 PRODUCT_INACTIVE for an inactive one.
+ *
+ *   lineSubtotal = qty × price × (1 − discount%),  lineGst = lineSubtotal × gstRate%,
+ *   lineTotal = lineSubtotal + lineGst;  order subtotal / taxAmount (gstTotal) /
+ *   totalAmount (total) are the sums — every figure paise-rounded.
+ */
+async function priceItems(items: ItemInput[]) {
+  const ids = [...new Set(items.map((i) => i.productId))];
+  const products = await Product.find({ _id: { $in: ids } }).lean().exec();
+  const byId = new Map(products.map((p) => [String(p._id), p]));
+
+  let gross = 0;
+  const lines = items.map((item, index) => {
+    const product = byId.get(item.productId);
+    if (!product) {
+      throw new AppError(`Line ${index + 1}: product not found`, 400, 'PRODUCT_NOT_FOUND', { productId: item.productId });
+    }
+    if (!product.isActive) {
+      throw new AppError(`Line ${index + 1}: ${product.name} is not available for orders`, 400, 'PRODUCT_INACTIVE', {
+        productId: item.productId,
+      });
+    }
+    const discountPercent = item.discountPercent ?? item.discount ?? 0;
+    const lineGross = roundMoney(item.quantity * product.price);
+    const lineSubtotal = roundMoney(lineGross * (1 - discountPercent / 100));
+    const lineGst = roundMoney((lineSubtotal * product.gstRate) / 100);
+    const lineTotal = roundMoney(lineSubtotal + lineGst);
+    gross += lineGross;
     return {
-      ...(i.productId ? { productId: i.productId } : {}),
-      name: i.name,
-      quantity: i.quantity,
-      unitPrice: roundMoney(i.unitPrice),
+      productId: product._id,
+      name: product.name,
+      sku: product.sku,
+      unit: product.unit,
+      category: product.category,
+      hsnCode: product.hsnCode,
+      quantity: item.quantity,
+      unitPrice: product.price,
+      discountPercent,
+      gstRate: product.gstRate,
+      lineSubtotal,
+      lineGst,
+      lineTotal,
+      // Older readers' names for the same figures.
       discount: discountPercent,
-      total,
+      total: lineTotal,
     };
   });
-  const subtotal = roundMoney(lines.reduce((s, l) => s + l.total, 0));
-  return { items: lines, subtotal, taxAmount: 0, totalAmount: subtotal };
+  const subtotal = roundMoney(lines.reduce((sum, l) => sum + l.lineSubtotal, 0));
+  const taxAmount = roundMoney(lines.reduce((sum, l) => sum + l.lineGst, 0));
+  return {
+    items: lines,
+    subtotal,
+    discountTotal: roundMoney(gross - subtotal),
+    taxAmount,
+    totalAmount: roundMoney(subtotal + taxAmount),
+  };
 }
 
 async function loadOrder(id: string): Promise<IProductOrder> {
@@ -197,7 +241,7 @@ export async function createOrder(req: Request, res: Response): Promise<void> {
     }
   }
 
-  const priced = priceItems(body.items);
+  const priced = await priceItems(body.items);
   const doc = await createWithNumber(
     () => nextYearlyNumber({ prefix: 'ORD', model: ProductOrder, field: 'orderNumber' }),
     (orderNumber) =>
@@ -233,7 +277,7 @@ export async function updateOrder(req: Request, res: Response): Promise<void> {
     if (!OPEN_STATUSES.includes(order.status)) {
       throw new AppError('Only a pending order can be changed', 409, 'ORDER_LOCKED');
     }
-    const priced = priceItems(body.items);
+    const priced = await priceItems(body.items);
     if (priced.totalAmount < order.paidAmount) {
       throw new AppError(
         'The new total is below what has already been collected against this order',

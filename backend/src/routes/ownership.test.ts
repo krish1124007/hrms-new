@@ -24,6 +24,7 @@ import { FieldTask } from '../models/field-task.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { PaymentCollection } from '../models/payment-collection.model.js';
+import { Product } from '../models/product.model.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -752,13 +753,14 @@ describe('field module', () => {
     expect(visit.status).toBe(201);
     expect(String(visit.body.data.employeeId)).toBe(String(A.employee._id));
 
+    const product = await Product.create({ name: 'Widget', sku: 'WIDGET', category: 'General', price: 10, gstRate: 0 });
     const order = await request(app)
       .post('/api/v1/field/orders')
       .set(auth(A.token))
       .send({
         employeeId: String(B.employee._id),
         clientId: String(client._id),
-        items: [{ name: 'Widget', quantity: 1, unitPrice: 10, total: 10 }],
+        items: [{ productId: String(product._id), quantity: 1 }],
       });
     expect(order.status).toBe(201);
     expect(String(order.body.data.employeeId)).toBe(String(A.employee._id));
