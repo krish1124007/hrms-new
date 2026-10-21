@@ -3,6 +3,8 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { Notice } from '../models/notice.model.js';
 import { NotFoundError, UnauthorizedError } from '../lib/errors.js';
+import { currentEmployeeId, hasPermission } from '../lib/access.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 import { sanitizeStrict, sanitizeRich } from '../lib/sanitize.js';
 import { notifyNoticePublished } from '../services/notification.service.js';
@@ -40,6 +42,19 @@ export const listQuerySchema = z.object({
   priority: z.enum(['normal', 'important', 'urgent']).optional(),
 });
 
+/**
+ * Which notices the caller may see: `notices.manage` holders all of them;
+ * everyone else the company-wide ones (no departments) plus those targeted to
+ * their own department.
+ */
+async function audienceFilter(req: Request): Promise<Record<string, unknown>> {
+  if (hasPermission(req.user, 'notices.manage')) return {};
+  const me = await currentEmployeeId(req);
+  const employee = me ? await Employee.findById(me).select('department').lean().exec() : null;
+  const everyone = [{ departments: { $exists: false } }, { departments: { $size: 0 } }];
+  return { $or: employee?.department ? [...everyone, { departments: employee.department }] : everyone };
+}
+
 export async function listNotices(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
@@ -50,23 +65,17 @@ export async function listNotices(req: Request, res: Response): Promise<void> {
   const now = new Date();
   // Show non-expired notices. Mongoose softDelete plugin already filters
   // out isDeleted=true documents at the query level.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {
-    $or: [{ expiresAt: { $gte: now } }, { expiresAt: null }, { expiresAt: { $exists: false } }],
-  };
-  if (q.priority) filter.priority = q.priority;
+  const conditions: Record<string, unknown>[] = [
+    { $or: [{ expiresAt: { $gte: now } }, { expiresAt: null }, { expiresAt: { $exists: false } }] },
+    await audienceFilter(req),
+  ];
   if (q.search) {
-    filter.$and = [
-      { $or: filter.$or },
-      {
-        $or: [
-          { title: { $regex: q.search, $options: 'i' } },
-          { content: { $regex: q.search, $options: 'i' } },
-        ],
-      },
-    ];
-    delete filter.$or;
+    const rx = containsInsensitive(q.search);
+    conditions.push({ $or: [{ title: rx }, { content: rx }] });
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const filter: Record<string, any> = { $and: conditions };
+  if (q.priority) filter.priority = q.priority;
 
   const [notices, total] = await Promise.all([
     Notice.find(filter)
@@ -131,7 +140,8 @@ export async function createNotice(req: Request, res: Response): Promise<void> {
 }
 
 export async function getNotice(req: Request, res: Response): Promise<void> {
-  const notice = await Notice.findById(String(req.params.id))
+  // A notice targeted at other departments does not exist for the caller.
+  const notice = await Notice.findOne({ _id: String(req.params.id), ...(await audienceFilter(req)) })
     .populate('postedBy', 'firstName lastName email')
     .populate('departments', 'name code')
     .exec();
@@ -169,7 +179,7 @@ export async function deleteNotice(req: Request, res: Response): Promise<void> {
 export async function acknowledgeNotice(req: Request, res: Response): Promise<void> {
   if (!req.user) throw new UnauthorizedError();
   const userId = req.user._id;
-  const notice = await Notice.findById(String(req.params.id)).exec();
+  const notice = await Notice.findOne({ _id: String(req.params.id), ...(await audienceFilter(req)) }).exec();
   if (!notice) throw new NotFoundError('Notice not found');
 
   const alreadyAcked = notice.acknowledgements.some(

@@ -13,6 +13,7 @@ import { Holiday } from '../models/holiday.model.js';
 import { ExpenseClaim } from '../models/expense-claim.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { DEFAULT_WORK_DAYS, isWeekOff, toKey } from '../lib/week-off.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { DAY_MS, localDateOf, startOfBusinessDay } from '../lib/business-day.js';
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import {
@@ -45,6 +46,7 @@ import {
   reportingManagerUserId,
 } from '../services/notification.service.js';
 import { LocationTrack } from '../models/location-track.model.js';
+import { fieldStaffAmong } from '../services/location-track.service.js';
 
 // ============================================================================
 // CONFIG
@@ -650,11 +652,15 @@ export async function endBreak(_req: Request, res: Response): Promise<void> {
 // RECORDS / REPORTS
 // ============================================================================
 
+/** `?x=` with nothing after it means "no filter". */
+const blankQuery = (v: unknown): unknown => (v === '' ? undefined : v);
+
 export const listRecordsSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(200).default(50),
-  employeeId: z.string().optional(),
-  departmentId: z.string().optional(),
+  // A malformed id is a 400 here, not a 500 further down. Blank = no filter.
+  employeeId: z.preprocess(blankQuery, z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid employeeId').optional()),
+  departmentId: z.preprocess(blankQuery, z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid departmentId').optional()),
   search: z.string().optional(),
   status: z
     .enum(['present', 'absent', 'half_day', 'late', 'on_leave', 'holiday', 'weekend'])
@@ -776,7 +782,7 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
   }
 
   if (q.search) {
-    const searchRegex = new RegExp(q.search, 'i');
+    const searchRegex = containsInsensitive(q.search);
     const matchedEmps = await Employee.find({
       $or: [
         { firstName: searchRegex },
@@ -1516,12 +1522,19 @@ export const reportQuerySchema = z.object({
 
 export async function dashboardStats(req: Request, res: Response): Promise<void> {
   const today = startOfDay(new Date());
-  const filter: Record<string, unknown> = { date: today };
+  // Whose numbers: HR (`attendance.manage`) the company's; a manager their
+  // direct reports' and their own; any other `attendance.view` holder only
+  // their own — the same scope as the records list.
+  const scope = await scopeFilter(req, 'attendance');
+  const filter: Record<string, unknown> = { date: today, ...scope };
   // Headcount must be counted the same way the main dashboard counts it —
   // active employees only — or the two dashboards report different totals.
   // When a department filter is applied it has to narrow the headcount too,
   // otherwise the derived absent count is nonsense.
-  const employeeFilter: Record<string, unknown> = { status: 'active' };
+  const employeeFilter: Record<string, unknown> = {
+    status: 'active',
+    ...(await scopeFilter(req, 'attendance', '_id')),
+  };
   if (req.query.departmentId) {
     employeeFilter.department = String(req.query.departmentId);
     const empIds = await Employee.find(employeeFilter).distinct('_id');
@@ -1582,7 +1595,7 @@ export async function dashboardStats(req: Request, res: Response): Promise<void>
   const heatFrom = new Date(today);
   heatFrom.setDate(heatFrom.getDate() - 29);
   const heatRecords = await Attendance.aggregate([
-    { $match: { date: { $gte: heatFrom, $lte: today } } },
+    { $match: { ...scope, date: { $gte: heatFrom, $lte: today } } },
     {
       $group: {
         _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
@@ -1594,7 +1607,7 @@ export async function dashboardStats(req: Request, res: Response): Promise<void>
   ]);
 
   // Late comers today
-  const lateComers = await Attendance.find({ date: today, status: 'late' })
+  const lateComers = await Attendance.find({ ...scope, date: today, status: 'late' })
     .populate('employeeId', 'firstName lastName employeeId')
     .limit(10)
     .lean()
@@ -1679,13 +1692,16 @@ export async function getLiveTracking(req: Request, res: Response): Promise<void
     },
   ]);
 
-  const empIds = docs.map((d) => d._id);
+  // Only field staff are tracked; fixes stored for anyone else before the
+  // ingest checked it stay hidden.
+  const staff = await fieldStaffAmong(docs.map((d) => d._id));
+  const empIds = docs.map((d) => d._id).filter((id) => staff.has(String(id)));
   const employees = await Employee.find({ _id: { $in: empIds } })
     .select('firstName lastName employeeId avatar department')
     .exec();
   const empMap = new Map(employees.map((e) => [String(e._id), e]));
 
-  const enriched = docs.map((d) => ({
+  const enriched = docs.filter((d) => staff.has(String(d._id))).map((d) => ({
     employeeId: d._id,
     employee: empMap.get(String(d._id)),
     timestamp: d.timestamp,

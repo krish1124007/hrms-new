@@ -50,24 +50,28 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
     const redisKey = `idem:${scope}:${key}`;
     const lockKey = `${redisKey}:lock`;
 
+    /** Answer from a cached response (replay, or 409 for a different body). */
+    const replay = (cached: string): void => {
+      const cachedObj = JSON.parse(cached) as { bodyHash: string; status: number; body: unknown };
+      if (cachedObj.bodyHash !== bodyHash) {
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'IDEMPOTENCY_CONFLICT',
+            message: 'This idempotency key was used with a different request body',
+          },
+        });
+        return;
+      }
+      logger.info({ key, scope }, 'Idempotency cache hit — replaying response');
+      res.setHeader('X-Idempotency-Replay', 'true');
+      res.status(cachedObj.status).json(cachedObj.body);
+    };
+
     try {
       const cached = await redisApp.get(redisKey);
       if (cached) {
-        const cachedObj = JSON.parse(cached) as { bodyHash: string; status: number; body: unknown };
-        if (cachedObj.bodyHash !== bodyHash) {
-          res.status(409).json({
-            success: false,
-            error: {
-              code: 'IDEMPOTENCY_CONFLICT',
-              message: 'This idempotency key was used with a different request body',
-            },
-          });
-          return;
-        }
-        // Cache hit — replay the previous response
-        logger.info({ key, scope }, 'Idempotency cache hit — replaying response');
-        res.setHeader('X-Idempotency-Replay', 'true');
-        res.status(cachedObj.status).json(cachedObj.body);
+        replay(cached);
         return;
       }
       const acquired = await redisApp.set(lockKey, '1', 'EX', LOCK_TTL_SECONDS, 'NX');
@@ -79,6 +83,14 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
             message: 'A request with this idempotency key is still being processed — retry shortly',
           },
         });
+        return;
+      }
+      // The first request may have finished — cached its response and freed
+      // the lock — between our read and our lock: read again before running.
+      const cachedMeanwhile = await redisApp.get(redisKey);
+      if (cachedMeanwhile) {
+        await redisApp.del(lockKey);
+        replay(cachedMeanwhile);
         return;
       }
     } catch (err) {

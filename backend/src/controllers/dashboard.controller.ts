@@ -254,6 +254,13 @@ export async function recentActivity(_req: Request, res: Response): Promise<void
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/**
+ * Field collections that are money received: every status but `bounced`
+ * (`collected`, `deposited` and `verified` alike), never a deleted payment —
+ * aggregations skip the soft-delete query hook, so it is excluded here.
+ */
+const RECEIVED = { status: { $ne: 'bounced' }, isDeleted: { $ne: true } };
+
 export async function analytics(_req: Request, res: Response): Promise<void> {
   const now = new Date();
   const todayStart = startOfDay(now);
@@ -285,11 +292,11 @@ export async function analytics(_req: Request, res: Response): Promise<void> {
     }),
     Attendance.countDocuments({ date: { $gte: monthStart, $lte: todayEnd } }),
     PaymentCollection.aggregate([
-      { $match: { status: 'collected', collectedAt: { $gte: monthStart, $lte: todayEnd } } },
+      { $match: { ...RECEIVED, collectedAt: { $gte: monthStart, $lte: todayEnd } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
     PaymentCollection.aggregate([
-      { $match: { status: 'collected', collectedAt: { $gte: prevMonthStart, $lte: prevMonthEnd } } },
+      { $match: { ...RECEIVED, collectedAt: { $gte: prevMonthStart, $lte: prevMonthEnd } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
     Task.countDocuments({
@@ -321,7 +328,7 @@ export async function analytics(_req: Request, res: Response): Promise<void> {
     _id: { y: number; m: number };
     revenue: number;
   }>([
-    { $match: { status: 'collected', collectedAt: { $gte: sixMonthsAgo } } },
+    { $match: { ...RECEIVED, collectedAt: { $gte: sixMonthsAgo } } },
     {
       $group: {
         _id: { y: { $year: '$collectedAt' }, m: { $month: '$collectedAt' } },
@@ -443,7 +450,7 @@ export async function analytics(_req: Request, res: Response): Promise<void> {
       status: { $ne: 'cancelled' },
     }),
     PaymentCollection.aggregate([
-      { $match: { status: 'collected', collectedAt: { $gte: todayStart, $lte: todayEnd } } },
+      { $match: { ...RECEIVED, collectedAt: { $gte: todayStart, $lte: todayEnd } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
   ]);

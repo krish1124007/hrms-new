@@ -36,10 +36,11 @@ const TYPE_LABEL: Record<ComponentType, string> = {
 };
 
 /**
- * Marks an earning as part of the PF wage (backend `statutoryBase`). When no
- * component is flagged, payroll goes by the name (Basic / Dearness / DA).
+ * Whether an earning is part of the PF wage (backend `statutoryBase`), decided
+ * per component: Basic / DA — it is; `none` — it never is; unset (null) — its
+ * name decides (Basic / Dearness / DA).
  */
-type StatutoryBase = 'basic' | 'da';
+type StatutoryBase = 'basic' | 'da' | 'none';
 type WithStatutoryBase = { statutoryBase?: StatutoryBase | null };
 
 type FormState = SalaryComponentInput & WithStatutoryBase;
@@ -296,13 +297,14 @@ export default function SalaryComponentsPage(): ReactElement {
                   })
                 }
               >
-                <option value="">Not flagged (decided by name)</option>
+                <option value="">Auto (by name)</option>
                 <option value="basic">Basic</option>
-                <option value="da">Dearness allowance (DA)</option>
+                <option value="da">DA</option>
+                <option value="none">Not part of PF wage</option>
               </Select>
               <p className="mt-1 text-xs text-muted-foreground">
-                PF is calculated on the earnings flagged Basic or DA. If no component is flagged,
-                components named Basic, Dearness or DA are used.
+                PF is calculated on the earnings set to Basic or DA. Auto counts a component when
+                its name is Basic, Dearness or DA; Not part of PF wage never counts it.
               </p>
             </div>
           )}

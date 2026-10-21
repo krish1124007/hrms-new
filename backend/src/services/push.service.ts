@@ -40,15 +40,37 @@ interface MulticastSender {
     apns: { payload: { aps: { sound: string } } };
   }): Promise<{
     successCount: number;
-    responses: Array<{ success: boolean; error?: { code?: string } }>;
+    responses: Array<{ success: boolean; error?: { code?: string; message?: string } }>;
   }>;
 }
 
 /** FCM accepts at most 500 tokens per multicast. */
 const MULTICAST_LIMIT = 500;
 
-/** Error codes meaning the token will never work again. */
-const DEAD_TOKEN_CODES = new Set(['registration-token-not-registered', 'invalid-registration-token']);
+/**
+ * Error codes meaning the token will never work again: unregistered,
+ * malformed, or issued for another Firebase project (`sender-id-mismatch` —
+ * e.g. a build pointed at a different project).
+ */
+const DEAD_TOKEN_CODES = new Set([
+  'registration-token-not-registered',
+  'invalid-registration-token',
+  'mismatched-credential',
+  'sender-id-mismatch',
+]);
+
+/**
+ * True when one device's send failed because of its token. `invalid-argument`
+ * is about the token only when FCM says so ("…registration token…"); the
+ * same code for a bad payload would fail every device and must not delete
+ * any of them.
+ */
+function isDeadToken(error: { code?: string; message?: string } | undefined): boolean {
+  const code = error?.code?.replace(/^messaging\//, '');
+  if (!code) return false;
+  if (DEAD_TOKEN_CODES.has(code)) return true;
+  return code === 'invalid-argument' && /registration token/i.test(error?.message ?? '');
+}
 
 const NOTHING_SENT: PushResult = { sent: 0, removed: 0 };
 
@@ -121,8 +143,7 @@ export async function sendPush(userId: string, msg: PushMessage): Promise<PushRe
       });
       sent += response.successCount;
       response.responses.forEach((result, index) => {
-        const code = result.error?.code?.replace(/^messaging\//, '');
-        if (!result.success && code && DEAD_TOKEN_CODES.has(code)) dead.push(batch[index]!);
+        if (!result.success && isDeadToken(result.error)) dead.push(batch[index]!);
       });
     }
 

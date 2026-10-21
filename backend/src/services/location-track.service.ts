@@ -7,8 +7,11 @@
  * through `recordLocationBatch`: one schema, one gate, one store, one
  * broadcast.
  *
- * The gate ("consented and clocked in") is the one the attendance copy
- * enforced:
+ * The gate ("field staff, consented and clocked in"):
+ *   • field staff — only field staff are tracked at all: the employee is
+ *     flagged `isFieldStaff`, or their login holds a `field-sales.*`
+ *     permission (granted by name — the admin wildcard does not make anyone
+ *     field staff). Otherwise 403 `NOT_FIELD_STAFF`.
  *   • consent — live tracking is switched on in the attendance config
  *     (`AttendanceConfig.liveTracking.enabled`, the company's tracking
  *     policy the employee works under). Off → 403 `TRACKING_DISABLED`.
@@ -16,9 +19,14 @@
  *     and no check-out (today's row, or a night shift's row from yesterday
  *     still in progress — the same rule as the attendance "today" card).
  *     Otherwise 403 `NOT_CLOCKED_IN`.
+ * The legacy URL answers a failed gate with 200 `{ ignored: true }` instead
+ * (shipped apps poll it and must not see errors). Fixes recorded more than
+ * 24 h ago are dropped from a batch, not refused with it.
  *
  * Visibility for every read: `field-sales.manage` sees every rep; anyone
- * else sees themselves and their direct reports.
+ * else sees themselves and their direct reports — and only field staff's
+ * fixes are ever shown (rows stored for anyone else before this gate
+ * existed stay hidden).
  */
 import type { Request } from 'express';
 import { Types } from 'mongoose';
@@ -26,6 +34,7 @@ import { z } from 'zod';
 import { logger } from '../config/logger.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { Employee } from '../models/employee.model.js';
+import { User } from '../models/user.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { AppError, UnauthorizedError } from '../lib/errors.js';
@@ -44,7 +53,7 @@ import {
 const HOUR_MS = 60 * 60 * 1000;
 
 export const MAX_POINTS_PER_BATCH = 200;
-/** Fixes recorded longer ago than this are refused (400). */
+/** Fixes recorded longer ago than this are dropped from the batch (not stored). */
 export const MAX_POINT_AGE_MS = DAY_MS;
 /** The live map shows each rep's newest fix of this window. */
 export const LIVE_WINDOW_MS = 2 * HOUR_MS;
@@ -95,25 +104,13 @@ const pointSchema = z
 
 /**
  * `{ points: [{ lat, lng, accuracy, speed?, heading?, recordedAt }] }`, 1–200
- * points, none recorded more than 24 h ago. `timestamp` is accepted for
- * `recordedAt` (older clients).
+ * points. `timestamp` is accepted for `recordedAt` (older clients). Points
+ * recorded more than 24 h ago are dropped at ingest — a phone that was
+ * offline for a day still delivers the rest of its queue.
  */
-export const trackingBatchSchema = z
-  .object({
-    points: z.array(pointSchema).min(1).max(MAX_POINTS_PER_BATCH),
-  })
-  .superRefine((body, ctx) => {
-    const oldest = Date.now() - MAX_POINT_AGE_MS;
-    body.points.forEach((p, i) => {
-      if (p.recordedAt.getTime() < oldest) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['points', i, 'recordedAt'],
-          message: 'Fixes recorded more than 24 hours ago are not accepted',
-        });
-      }
-    });
-  });
+export const trackingBatchSchema = z.object({
+  points: z.array(pointSchema).min(1).max(MAX_POINTS_PER_BATCH),
+});
 
 export type TrackingBatch = z.output<typeof trackingBatchSchema>;
 export type TrackingPoint = TrackingBatch['points'][number];
@@ -127,6 +124,59 @@ interface TrackedEmployee {
   profileImage?: string;
   reportingManager?: Types.ObjectId | null;
   shift?: unknown;
+  isFieldStaff?: boolean;
+}
+
+/** The 403 codes of the tracking gate — the legacy URL answers these with 200 `{ ignored: true }`. */
+export const TRACKING_GATE_CODES: ReadonlySet<string> = new Set([
+  'NOT_FIELD_STAFF',
+  'TRACKING_DISABLED',
+  'NOT_CLOCKED_IN',
+]);
+
+/**
+ * True when a role/user permission list grants a `field-sales.*` permission
+ * by name. The admin wildcard `*` deliberately does not count: holding every
+ * permission does not make someone field staff.
+ */
+export function grantsFieldPermission(permissions: readonly string[] | undefined): boolean {
+  return (permissions ?? []).some((p) => p.startsWith('field-sales.'));
+}
+
+/** The permissions a user holds: their role's plus their custom ones. */
+function userPermissions(user: { role?: unknown; customPermissions?: string[] } | null | undefined): string[] {
+  const role = user?.role as { permissions?: string[] } | undefined;
+  return [...(role && typeof role === 'object' ? (role.permissions ?? []) : []), ...(user?.customPermissions ?? [])];
+}
+
+/**
+ * Of `employeeIds`, the ones that are field staff (hex ids): flagged
+ * `isFieldStaff`, or whose login holds a `field-sales.*` permission.
+ */
+export async function fieldStaffAmong(employeeIds: readonly unknown[]): Promise<Set<string>> {
+  const ids = employeeIds.map((id) => idOf(id)).filter((id): id is string => Boolean(id));
+  if (ids.length === 0) return new Set();
+  const employees = await Employee.find({ _id: { $in: ids } })
+    .select('isFieldStaff userId')
+    .lean()
+    .exec();
+  const result = new Set<string>();
+  const byUser = new Map<string, string>();
+  for (const emp of employees) {
+    if (emp.isFieldStaff) result.add(String(emp._id));
+    else if (emp.userId) byUser.set(String(emp.userId), String(emp._id));
+  }
+  if (byUser.size > 0) {
+    const users = await User.find({ _id: { $in: [...byUser.keys()] } })
+      .select('role customPermissions')
+      .populate('role', 'permissions')
+      .lean()
+      .exec();
+    for (const user of users) {
+      if (grantsFieldPermission(userPermissions(user))) result.add(byUser.get(String(user._id))!);
+    }
+  }
+  return result;
 }
 
 /**
@@ -156,8 +206,18 @@ export async function isClockedIn(employee: TrackedEmployee, now: Date): Promise
   return !!open && isRowInProgress(open, await resolveShift(employee), now);
 }
 
-/** 403 `TRACKING_DISABLED` / `NOT_CLOCKED_IN` unless the employee may be tracked now. */
-export async function assertMayTrack(employee: TrackedEmployee, now: Date): Promise<void> {
+/**
+ * 403 `NOT_FIELD_STAFF` / `TRACKING_DISABLED` / `NOT_CLOCKED_IN` unless the
+ * employee may be tracked now. `user` is the employee's login (populated role).
+ */
+export async function assertMayTrack(
+  employee: TrackedEmployee,
+  user: { role?: unknown; customPermissions?: string[] } | null | undefined,
+  now: Date,
+): Promise<void> {
+  if (!employee.isFieldStaff && !grantsFieldPermission(userPermissions(user))) {
+    throw new AppError('Location is only recorded for field staff', 403, 'NOT_FIELD_STAFF');
+  }
   const cfg = await AttendanceConfig.findOne({}).select('liveTracking').lean().exec();
   if (!cfg?.liveTracking?.enabled) {
     throw new AppError('Live location tracking is turned off', 403, 'TRACKING_DISABLED');
@@ -181,12 +241,16 @@ export function employeeName(e: { firstName?: string; lastName?: string } | null
  * Store a batch of the caller's fixes and broadcast the newest one. Each fix
  * keeps the device's `recordedAt` (as `timestamp`, clamped to now if the
  * phone's clock runs ahead) and gets the server's `receivedAt`, which
- * retention keys on. Returns the number stored.
+ * retention keys on. Fixes recorded more than 24 h ago are dropped. Returns
+ * how many were stored and how many dropped.
  */
-export async function recordLocationBatch(req: Request, points: TrackingPoint[]): Promise<number> {
+export async function recordLocationBatch(
+  req: Request,
+  points: TrackingPoint[],
+): Promise<{ ingested: number; dropped: number }> {
   if (!req.user?._id) throw new UnauthorizedError();
   const employee = await Employee.findOne({ userId: req.user._id })
-    .select('firstName lastName profileImage reportingManager shift')
+    .select('firstName lastName profileImage reportingManager shift isFieldStaff')
     .lean<TrackedEmployee>()
     .exec();
   if (!employee) {
@@ -194,9 +258,14 @@ export async function recordLocationBatch(req: Request, points: TrackingPoint[])
   }
 
   const now = new Date();
-  await assertMayTrack(employee, now);
+  await assertMayTrack(employee, req.user, now);
 
-  const docs = points.map((p) => ({
+  const oldest = now.getTime() - MAX_POINT_AGE_MS;
+  const fresh = points.filter((p) => p.recordedAt.getTime() >= oldest);
+  const dropped = points.length - fresh.length;
+  if (fresh.length === 0) return { ingested: 0, dropped };
+
+  const docs = fresh.map((p) => ({
     employeeId: employee._id,
     timestamp: p.recordedAt.getTime() > now.getTime() ? now : p.recordedAt,
     receivedAt: now,
@@ -221,7 +290,7 @@ export async function recordLocationBatch(req: Request, points: TrackingPoint[])
     accuracy: latest.accuracy,
     recordedAt: latest.timestamp,
   });
-  return docs.length;
+  return { ingested: docs.length, dropped };
 }
 
 /**

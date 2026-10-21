@@ -13,6 +13,9 @@
  *
  * A negative outstanding is a credit (the client paid ahead, or an order they
  * paid for was cancelled).
+ *
+ * `scripts/recompute-field-ledgers.ts` runs the same computation over every
+ * client and order (the deploy-time backfill).
  */
 import { Types } from 'mongoose';
 import { Client } from '../models/client.model.js';
@@ -20,6 +23,7 @@ import { ProductOrder, type OrderPaymentStatus } from '../models/product-order.m
 import { PaymentCollection } from '../models/payment-collection.model.js';
 import { idOf } from '../lib/access.js';
 import { roundMoney } from '../lib/field-utils.js';
+import { logger } from '../config/logger.js';
 
 /**
  * Order statuses that are receivables: confirmed and delivered, plus the
@@ -37,14 +41,19 @@ export interface ClientLedger {
   outstandingAmount: number;
 }
 
+export interface OrderPayments {
+  paidAmount: number;
+  paymentStatus: OrderPaymentStatus;
+}
+
 function oid(id: unknown): Types.ObjectId {
   const hex = idOf(id);
   if (!hex || !Types.ObjectId.isValid(hex)) throw new Error(`field-ledger: invalid id ${String(id)}`);
   return new Types.ObjectId(hex);
 }
 
-/** Recompute and store a client's ledger figures; returns them. */
-export async function recomputeClientLedger(clientId: unknown): Promise<ClientLedger> {
+/** A client's ledger figures computed from its orders and payments (nothing written). */
+export async function computeClientLedger(clientId: unknown): Promise<ClientLedger> {
   const id = oid(clientId);
   const [[orders], [payments]] = await Promise.all([
     ProductOrder.aggregate<{ count: number; value: number }>([
@@ -58,13 +67,18 @@ export async function recomputeClientLedger(clientId: unknown): Promise<ClientLe
   ]);
   const totalOrderValue = roundMoney(orders?.value ?? 0);
   const totalPayments = roundMoney(payments?.total ?? 0);
-  const ledger: ClientLedger = {
+  return {
     totalOrders: orders?.count ?? 0,
     totalOrderValue,
     totalPayments,
     outstandingAmount: roundMoney(totalOrderValue - totalPayments),
   };
-  await Client.updateOne({ _id: id }, { $set: ledger }).exec();
+}
+
+/** Recompute and store a client's ledger figures; returns them. */
+export async function recomputeClientLedger(clientId: unknown): Promise<ClientLedger> {
+  const ledger = await computeClientLedger(clientId);
+  await Client.updateOne({ _id: oid(clientId) }, { $set: ledger }).setOptions({ withDeleted: true }).exec();
   return ledger;
 }
 
@@ -79,20 +93,24 @@ export async function paidTowardsOrder(orderId: unknown, excludePaymentId?: unkn
   return roundMoney(row?.total ?? 0);
 }
 
-/** Recompute and store an order's `paidAmount` and `paymentStatus`. */
-export async function recomputeOrderPayments(
-  orderId: unknown,
-): Promise<{ paidAmount: number; paymentStatus: OrderPaymentStatus }> {
+/** An order's `paidAmount` and `paymentStatus` computed from its payments (nothing written). */
+export async function computeOrderPayments(orderId: unknown): Promise<OrderPayments> {
   const id = oid(orderId);
   const order = await ProductOrder.findById(id).select('totalAmount').setOptions({ withDeleted: true }).lean().exec();
   const paidAmount = await paidTowardsOrder(id);
   const total = order?.totalAmount ?? 0;
   const paymentStatus: OrderPaymentStatus =
     paidAmount <= 0 ? 'pending' : paidAmount >= total ? 'paid' : 'partial';
-  await ProductOrder.updateOne({ _id: id }, { $set: { paidAmount, paymentStatus } })
+  return { paidAmount, paymentStatus };
+}
+
+/** Recompute and store an order's `paidAmount` and `paymentStatus`. */
+export async function recomputeOrderPayments(orderId: unknown): Promise<OrderPayments> {
+  const computed = await computeOrderPayments(orderId);
+  await ProductOrder.updateOne({ _id: oid(orderId) }, { $set: computed })
     .setOptions({ withDeleted: true })
     .exec();
-  return { paidAmount, paymentStatus };
+  return computed;
 }
 
 /** Recompute every client and order touched by a mutation (duplicates and blanks skipped). */
@@ -106,4 +124,25 @@ export async function recomputeAfterMutation(touched: {
   // reading the order right after expect its payment state settled.
   await Promise.all(unique(touched.orders).map((id) => recomputeOrderPayments(id)));
   await Promise.all(unique(touched.clients).map((id) => recomputeClientLedger(id)));
+}
+
+/**
+ * `recomputeAfterMutation` after a write that has already been committed: a
+ * failure is logged, never thrown. Failing the request would tell the client
+ * the write did not happen — a retry would then record it twice — while the
+ * figures are only a cache of the source rows that the next mutation (or
+ * `scripts/recompute-field-ledgers.ts`) puts right.
+ */
+export async function recomputeAfterCommit(
+  touched: { clients?: unknown[]; orders?: unknown[] },
+  context: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    await recomputeAfterMutation(touched);
+  } catch (err) {
+    logger.error(
+      { err, ...context },
+      'field-ledger: recompute after a committed write failed — figures stay stale until the next mutation or a recompute-field-ledgers run',
+    );
+  }
 }

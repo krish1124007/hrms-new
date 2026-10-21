@@ -27,7 +27,10 @@ export interface BackupRow {
 export interface BackupSchedule {
   enabled: boolean;
   pattern: string;
+  /** The schedule's timezone (IST). */
+  timezone?: string;
   description: string;
+  /** When the backup really runs next (epoch ms) — the month-end run, computed by the server. */
   nextRun?: number;
 }
 

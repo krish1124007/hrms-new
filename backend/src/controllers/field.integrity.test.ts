@@ -21,6 +21,7 @@ import { Notification } from '../models/notification.model.js';
 import { Product } from '../models/product.model.js';
 import { AuditLog } from '../models/audit-log.model.js';
 import { nextSequence } from '../lib/sequence.js';
+import * as ledgerService from '../services/field-ledger.service.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -451,18 +452,24 @@ describe('payment rules', () => {
     expect(update?.changes?.after?.amount).toBe(90);
   });
 
-  it('a rep marks their own collection deposited; only a manager verifies', async () => {
+  it('only a manager verifies; then the rep marks their own verified collection deposited', async () => {
     const client = await newClient();
     const pay = await collect(A, { clientId: String(client._id), amount: 100 });
     const id = pay.body.data._id as string;
-    expect((await request(app).patch(`/api/v1/field/payments/${id}/deposit`).set(auth(B.token))).status).toBe(403);
-    const deposited = await request(app).patch(`/api/v1/field/payments/${id}/deposit`).set(auth(A.token));
-    expect(deposited.status).toBe(200);
-    expect(deposited.body.data.status).toBe('deposited');
+    // collected → deposited skips verification.
+    const early = await request(app).patch(`/api/v1/field/payments/${id}/deposit`).set(auth(A.token));
+    expect(early.status).toBe(409);
+    expect(early.body.error.code).toBe('INVALID_STATUS_TRANSITION');
     expect((await request(app).patch(`/api/v1/field/payments/${id}/verify`).set(auth(A.token))).status).toBe(403);
     expect((await request(app).patch(`/api/v1/field/payments/${id}/verify`).set(auth(M.token))).body.data.status).toBe(
       'verified',
     );
+    expect((await request(app).patch(`/api/v1/field/payments/${id}/deposit`).set(auth(B.token))).status).toBe(403);
+    const deposited = await request(app).patch(`/api/v1/field/payments/${id}/deposit`).set(auth(A.token));
+    expect(deposited.status).toBe(200);
+    expect(deposited.body.data.status).toBe('deposited');
+    // deposited is final: no second verify.
+    expect((await request(app).patch(`/api/v1/field/payments/${id}/verify`).set(auth(M.token))).status).toBe(409);
   });
 });
 
@@ -569,8 +576,12 @@ describe('visit lifecycle', () => {
     expect(out.status).toBe(200);
     expect(out.body.data.outcome).toBe('positive');
     expect(out.body.data.nextFollowUpDate).toBeTruthy();
-    expect(out.body.data.notes).toBe('Will reorder');
+    // Check-out notes are stored apart: the check-in notes survive.
+    expect(out.body.data.notes).toBe('Walk-in');
+    expect(out.body.data.checkOut.notes).toBe('Will reorder');
     expect(out.body.data.checkOut.location).toMatchObject(MUMBAI);
+    const shown = await request(app).get(`/api/v1/field/visits/${res.body.data._id}`).set(auth(M.token));
+    expect(shown.body.data).toMatchObject({ notes: 'Walk-in', checkOut: { notes: 'Will reorder' } });
   });
 
   it('404 for an unknown client', async () => {
@@ -868,5 +879,311 @@ describe('list endpoints and clients', () => {
       .send({ outstandingAmount: -99999 });
     expect(forged.status).toBe(200);
     expect(forged.body.data.outstandingAmount).toBe(0);
+  });
+});
+
+// ─── Final review fixes ──────────────────────────────────────────────────────
+
+const patchPayment = (actor: Actor, id: string, body: Record<string, unknown>) =>
+  request(app).patch(`/api/v1/field/payments/${id}`).set(auth(actor.token)).send(body);
+
+describe('payment status machine', () => {
+  it('bounce from any status; un-bounce only from bounced and only while the order has room; no other backward move', async () => {
+    const client = await newClient();
+    const order = await bookOrder(A, client._id, 1000);
+    await setStatus(M, order._id, 'confirmed');
+    const first = await collect(A, { clientId: String(client._id), orderId: order._id, amount: 600 });
+    expect(first.status).toBe(201);
+    const firstId = first.body.data._id as string;
+
+    const bounced = await patchPayment(M, firstId, { status: 'bounced' });
+    expect(bounced.status).toBe(200);
+    expect((await ProductOrder.findById(order._id).lean())?.paidAmount).toBe(0);
+
+    // With the cheque bounced the order has room again — for 700.
+    const second = await collect(A, { clientId: String(client._id), orderId: order._id, amount: 700 });
+    expect(second.status).toBe(201);
+    const secondId = second.body.data._id as string;
+
+    // Taking the bounce back would put 1,300 against a 1,000 order.
+    const unbounce = await patchPayment(M, firstId, { status: 'collected' });
+    expect(unbounce.status).toBe(400);
+    expect(unbounce.body.error.code).toBe('OVERPAYMENT');
+    expect((await PaymentCollection.findById(firstId).lean())?.status).toBe('bounced');
+    expect((await ProductOrder.findById(order._id).lean())?.paidAmount).toBe(700);
+
+    // verified / deposited never go back to collected.
+    expect((await request(app).patch(`/api/v1/field/payments/${secondId}/verify`).set(auth(M.token))).status).toBe(200);
+    const fromVerified = await patchPayment(M, secondId, { status: 'collected' });
+    expect(fromVerified.status).toBe(409);
+    expect(fromVerified.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+    expect((await request(app).patch(`/api/v1/field/payments/${secondId}/deposit`).set(auth(A.token))).status).toBe(200);
+    const fromDeposited = await patchPayment(M, secondId, { status: 'collected' });
+    expect(fromDeposited.status).toBe(409);
+    expect((await PaymentCollection.findById(secondId).lean())?.status).toBe('deposited');
+
+    // A deposited payment can still bounce; then the first one fits again.
+    expect((await patchPayment(M, secondId, { status: 'bounced' })).status).toBe(200);
+    const fits = await patchPayment(M, firstId, { status: 'collected' });
+    expect(fits.status).toBe(200);
+    expect(await ProductOrder.findById(order._id).lean()).toMatchObject({ paidAmount: 600, paymentStatus: 'partial' });
+    expect(await ledgerOf(client._id)).toMatchObject({ totalPayments: 600, outstandingAmount: 400 });
+  });
+
+  it('an un-bounce into a cancelled order is refused', async () => {
+    const client = await newClient();
+    const order = await bookOrder(A, client._id, 500);
+    await setStatus(M, order._id, 'confirmed');
+    const pay = await collect(A, { clientId: String(client._id), orderId: order._id, amount: 500 });
+    await patchPayment(M, pay.body.data._id, { status: 'bounced' });
+    await setStatus(M, order._id, 'cancelled');
+    const res = await patchPayment(M, pay.body.data._id, { status: 'collected' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('ORDER_CANCELLED');
+  });
+
+  it("a manager's amount edit that overpays after the check (a concurrent edit) is put back", async () => {
+    const client = await newClient();
+    const order = await bookOrder(A, client._id, 1000);
+    await setStatus(M, order._id, 'confirmed');
+    const a = await collect(A, { clientId: String(client._id), orderId: order._id, amount: 400 });
+    await collect(A, { clientId: String(client._id), orderId: order._id, amount: 400 });
+    // The pre-check reads a stale figure, as it would mid-race with another edit.
+    const spy = vi.spyOn(ledgerService, 'paidTowardsOrder').mockResolvedValueOnce(0);
+    try {
+      const res = await patchPayment(M, a.body.data._id, { amount: 900 });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('OVERPAYMENT');
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await PaymentCollection.findById(a.body.data._id).lean())?.amount).toBe(400);
+    expect((await ProductOrder.findById(order._id).lean())?.paidAmount).toBe(800);
+  });
+
+  it('caps a payment at ₹10 crore', async () => {
+    const client = await newClient();
+    expect((await collect(A, { clientId: String(client._id), amount: 10_00_00_001 })).status).toBe(400);
+    expect((await collect(M, { clientId: String(client._id), amount: 10_00_00_000 })).status).toBe(201);
+  });
+
+  it('a rep may date a collection at most 7 days back; a field manager further', async () => {
+    const client = await newClient();
+    const daysAgo = (d: number) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString();
+    const old = await collect(A, { clientId: String(client._id), amount: 10, collectedAt: daysAgo(8) });
+    expect(old.status).toBe(400);
+    expect((await collect(A, { clientId: String(client._id), amount: 10, collectedAt: daysAgo(6) })).status).toBe(201);
+    expect((await collect(M, { clientId: String(client._id), amount: 10, collectedAt: daysAgo(30) })).status).toBe(201);
+    expect(
+      (await collect(A, { clientId: String(client._id), amount: 10, collectedAt: new Date(Date.now() + 3_600_000).toISOString() }))
+        .status,
+    ).toBe(400);
+  });
+});
+
+describe('committed writes never fail on the ledger recompute', () => {
+  it('a payment whose recompute fails is still 201, and its idempotent replay is cached', async () => {
+    const client = await newClient();
+    const spy = vi.spyOn(Client, 'updateOne').mockImplementationOnce(() => {
+      throw new Error('ledger write failed');
+    });
+    try {
+      const body = { clientId: String(client._id), amount: 250 };
+      const first = await collect(A, body, 'pay-key-recompute-1');
+      expect(first.status).toBe(201);
+      const again = await collect(A, body, 'pay-key-recompute-1');
+      expect(again.status).toBe(201);
+      expect(again.headers['x-idempotency-replay']).toBe('true');
+      expect(await PaymentCollection.countDocuments({})).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an order whose recompute fails is still 201', async () => {
+    const client = await newClient();
+    const spy = vi.spyOn(Client, 'updateOne').mockImplementationOnce(() => {
+      throw new Error('ledger write failed');
+    });
+    try {
+      const res = await request(app)
+        .post('/api/v1/field/orders')
+        .set(auth(A.token))
+        .send({ clientId: String(client._id), items: [{ productId: await productAt(50), quantity: 1 }] });
+      expect(res.status).toBe(201);
+      expect(await ProductOrder.countDocuments({})).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('order guards', () => {
+  it('a rep cannot cancel their pending order once a payment is recorded against it; a manager can', async () => {
+    const client = await newClient();
+    const order = await bookOrder(A, client._id, 500);
+    await collect(A, { clientId: String(client._id), orderId: order._id, amount: 100 });
+    const rep = await setStatus(A, order._id, 'cancelled');
+    expect(rep.status).toBe(403);
+    expect(rep.body.error.code).toBe('ORDER_HAS_PAYMENTS');
+    expect((await setStatus(M, order._id, 'cancelled')).status).toBe(200);
+  });
+
+  it('ORDER_TOTAL_BELOW_PAID is checked against the payments, not the stored paidAmount', async () => {
+    const client = await newClient();
+    const order = await bookOrder(A, client._id, 1000);
+    await collect(A, { clientId: String(client._id), orderId: order._id, amount: 600 });
+    // A stale cache: the stored figure says nothing is paid.
+    await ProductOrder.updateOne({ _id: order._id }, { $set: { paidAmount: 0 } });
+    const res = await request(app)
+      .patch(`/api/v1/field/orders/${order._id}`)
+      .set(auth(A.token))
+      .send({ items: [{ productId: await productAt(500), quantity: 1 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('ORDER_TOTAL_BELOW_PAID');
+  });
+
+  it('nobody confirms or delivers their own order — not even a field manager', async () => {
+    const client = await newClient();
+    const own = await bookOrder(M, client._id, 300);
+    const confirm = await setStatus(M, own._id, 'confirmed');
+    expect(confirm.status).toBe(403);
+    expect(confirm.body.error.code).toBe('SELF_APPROVAL');
+
+    const other = await fieldManager();
+    expect((await setStatus(other, own._id, 'confirmed')).status).toBe(200);
+    const deliver = await setStatus(M, own._id, 'delivered');
+    expect(deliver.status).toBe(403);
+    expect(deliver.body.error.code).toBe('SELF_APPROVAL');
+    expect((await setStatus(other, own._id, 'delivered')).status).toBe(200);
+  });
+});
+
+describe('null clears an optional field on update', () => {
+  it('client pin and assigned rep, product HSN, target category, task client / location / due date', async () => {
+    const client = await newClient({
+      location: { type: 'Point', coordinates: [MUMBAI.lng, MUMBAI.lat] },
+      assignedTo: A.employee._id,
+      territory: 'West',
+    });
+    const c = await request(app)
+      .patch(`/api/v1/field/clients/${client._id}`)
+      .set(auth(M.token))
+      .send({ location: null, assignedTo: null, territory: null });
+    expect(c.status).toBe(200);
+    const storedClient = await Client.findById(client._id).lean();
+    expect(storedClient?.location?.coordinates ?? null).toBeNull();
+    expect(storedClient?.assignedTo ?? null).toBeNull();
+    expect(storedClient?.territory ?? null).toBeNull();
+
+    const p = await request(app)
+      .post('/api/v1/field/products')
+      .set(auth(M.token))
+      .send({ name: 'Soap', sku: 'SOAP-1', category: 'Home', price: 10, hsnCode: '3401', description: 'Bar' });
+    expect(p.status).toBe(201);
+    const pClear = await request(app)
+      .patch(`/api/v1/field/products/${p.body.data._id}`)
+      .set(auth(M.token))
+      .send({ hsnCode: null, description: null });
+    expect(pClear.status).toBe(200);
+    const storedProduct = await Product.findById(p.body.data._id).lean();
+    expect(storedProduct?.hsnCode).toBeUndefined();
+    expect(storedProduct?.description).toBeUndefined();
+    // A required field cannot be cleared.
+    expect((await request(app).patch(`/api/v1/field/products/${p.body.data._id}`).set(auth(M.token)).send({ category: null })).status).toBe(400);
+
+    const t = await request(app)
+      .post('/api/v1/field/targets')
+      .set(auth(M.token))
+      .send({ employeeId: String(A.employee._id), period: { month: 1, year: 2027 }, type: 'amount', productCategory: 'Home', targetValue: 1000 });
+    expect(t.status).toBe(201);
+    const tClear = await request(app)
+      .patch(`/api/v1/field/targets/${t.body.data._id}`)
+      .set(auth(M.token))
+      .send({ productCategory: null });
+    expect(tClear.status).toBe(200);
+    expect((await SalesTarget.findById(t.body.data._id).lean())?.productCategory).toBeUndefined();
+
+    const task = await request(app)
+      .post('/api/v1/field/tasks')
+      .set(auth(M.token))
+      .send({
+        title: 'Collect cheque',
+        assignedTo: String(A.employee._id),
+        clientId: String(client._id),
+        location: { lat: MUMBAI.lat, lng: MUMBAI.lng, address: 'MG Road' },
+        dueDate: '2027-01-05',
+      });
+    expect(task.status).toBe(201);
+    const taskClear = await request(app)
+      .patch(`/api/v1/field/tasks/${task.body.data._id}`)
+      .set(auth(M.token))
+      .send({ clientId: null, location: null, dueDate: null });
+    expect(taskClear.status).toBe(200);
+    const storedTask = await FieldTask.findById(task.body.data._id).lean();
+    expect(storedTask?.clientId ?? null).toBeNull();
+    expect(storedTask?.location ?? null).toBeNull();
+    expect(storedTask?.dueDate ?? null).toBeNull();
+    expect(String(storedTask?.assignedTo)).toBe(String(A.employee._id));
+    expect((await request(app).patch(`/api/v1/field/tasks/${task.body.data._id}`).set(auth(M.token)).send({ assignedTo: null })).status).toBe(400);
+  });
+});
+
+describe('check-in without a location fix', () => {
+  it('is flagged locationMissing at a client with a pin, never refused', async () => {
+    const pinned = await newClient({ location: { type: 'Point', coordinates: [MUMBAI.lng, MUMBAI.lat] } });
+    const blind = await checkIn(A, { clientId: String(pinned._id) });
+    expect(blind.status).toBe(201);
+    expect(blind.body.data).toMatchObject({ locationMissing: true, locationMismatch: false });
+    await checkOut(A, blind.body.data._id);
+
+    const located = await checkIn(A, { clientId: String(pinned._id), location: MUMBAI });
+    expect(located.body.data.locationMissing).toBe(false);
+    await checkOut(A, located.body.data._id);
+
+    const unpinned = await newClient({ name: 'No pin' });
+    const nothingToCompare = await checkIn(A, { clientId: String(unpinned._id) });
+    expect(nothingToCompare.body.data.locationMissing).toBe(false);
+  });
+});
+
+describe('totals leave out bounced payments and cancelled orders', () => {
+  it('field dashboard and daily report', async () => {
+    const client = await newClient();
+    const kept = await bookOrder(A, client._id, 300);
+    const dropped = await bookOrder(A, client._id, 700);
+    await setStatus(M, dropped._id, 'cancelled');
+    await collect(A, { clientId: String(client._id), amount: 100 });
+    const bounced = await collect(A, { clientId: String(client._id), amount: 900 });
+    await patchPayment(M, bounced.body.data._id, { status: 'bounced' });
+
+    const dash = await request(app).get('/api/v1/field/dashboard').set(auth(M.token));
+    expect(dash.status).toBe(200);
+    expect(dash.body.data.orders).toEqual({ count: 1, total: kept.totalAmount });
+    expect(dash.body.data.payments).toEqual({ count: 1, total: 100 });
+
+    const daily = await request(app).get('/api/v1/field/payments/reports/daily').set(auth(M.token));
+    expect(daily.body.data.totals).toMatchObject({ count: 1, total: 100 });
+  });
+
+  it('main dashboard revenue counts every non-bounced, non-deleted payment', async () => {
+    const client = await newClient();
+    const base = { employeeId: A.employee._id, clientId: client._id, method: 'cash', collectedAt: new Date() };
+    let n = 0;
+    const pay = (amount: number, status: string, extra: Record<string, unknown> = {}) => {
+      n += 1;
+      return PaymentCollection.create({ ...base, amount, status, receiptNumber: `RCPT-T-${n}`, ...extra });
+    };
+    await pay(100, 'collected');
+    await pay(200, 'deposited');
+    await pay(400, 'verified');
+    await pay(800, 'bounced');
+    await pay(1600, 'collected', { isDeleted: true, deletedAt: new Date() });
+
+    const { token } = await createUser({ roleSlug: 'admin' });
+    const res = await request(app).get('/api/v1/dashboard/analytics').set(auth(token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.kpis.totalRevenue).toBe(700);
+    expect(res.body.data.fieldStats.collectionToday).toBe(700);
   });
 });

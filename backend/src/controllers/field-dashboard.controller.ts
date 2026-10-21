@@ -25,12 +25,13 @@ export async function fieldDashboard(req: Request, res: Response): Promise<void>
   const [visitCount, tasksCompleted, ordersAgg, paymentsAgg, recent] = await Promise.all([
     Visit.countDocuments(visitsToday),
     FieldTask.countDocuments({ ...byAssignee, completedAt: range, status: 'completed' }),
+    // A cancelled order was not a sale; a bounced cheque was not a collection.
     ProductOrder.aggregate([
-      { $match: { ...byEmployee, ...live, createdAt: range } },
+      { $match: { ...byEmployee, ...live, createdAt: range, status: { $ne: 'cancelled' } } },
       { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
     ]),
     PaymentCollection.aggregate([
-      { $match: { ...byEmployee, ...live, collectedAt: range } },
+      { $match: { ...byEmployee, ...live, collectedAt: range, status: { $ne: 'bounced' } } },
       { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
     ]),
     Visit.find(visitsToday)

@@ -5,6 +5,7 @@ import { Asset, AssetCategory, AssetStatus, AssetCondition } from '../models/ass
 import { Employee } from '../models/employee.model.js';
 import { User } from '../models/user.model.js';
 import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { containsInsensitive, escapeRegex } from '../lib/regex.js';
 import { getUserId } from '../lib/async-context.js';
 import { audit } from '../services/audit.service.js';
 
@@ -107,7 +108,7 @@ export async function listAssets(req: Request, res: Response): Promise<void> {
   if (q.status) filter.status = q.status;
   if (q.assignedTo) filter.assignedTo = q.assignedTo;
   if (q.search) {
-    const re = new RegExp(q.search, 'i');
+    const re = containsInsensitive(q.search);
     filter.$or = [
       { name: re },
       { assetCode: re },
@@ -377,10 +378,10 @@ export async function importAssets(req: Request, res: Response): Promise<void> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let employeeDoc: any = null;
       if (email) {
-        employeeDoc = await Employee.findOne({ email: new RegExp(`^${email}$`, 'i') }).exec();
+        employeeDoc = await Employee.findOne({ email: new RegExp(`^${escapeRegex(String(email))}$`, 'i') }).exec();
 
         if (!employeeDoc) {
-          const userDoc = await User.findOne({ email: new RegExp(`^${email}$`, 'i') }).exec();
+          const userDoc = await User.findOne({ email: new RegExp(`^${escapeRegex(String(email))}$`, 'i') }).exec();
 
           const nameParts = empName ? empName.split(' ') : ['Employee'];
           const firstName = nameParts[0] || 'Employee';
@@ -434,7 +435,7 @@ export async function importAssets(req: Request, res: Response): Promise<void> {
       const assetCode = rawAssetCode || (await nextAssetCode());
       const finalName = assetName || `Asset ${assetCode}`;
 
-      let asset = await Asset.findOne({ assetCode: new RegExp(`^${assetCode}$`, 'i') }).exec();
+      let asset = await Asset.findOne({ assetCode: new RegExp(`^${escapeRegex(String(assetCode))}$`, 'i') }).exec();
 
       if (asset) {
         asset.name = finalName;

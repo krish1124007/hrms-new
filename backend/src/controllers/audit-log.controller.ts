@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Types, type FilterQuery } from 'mongoose';
 import { AuditLog, type IAuditLog } from '../models/audit-log.model.js';
+import { containsInsensitive } from '../lib/regex.js';
 
 export const listAuditLogsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
@@ -33,7 +34,7 @@ export async function listAuditLogs(req: Request, res: Response): Promise<void> 
     if (q.to) filter.createdAt.$lte = new Date(q.to);
   }
   if (q.search) {
-    const rx = new RegExp(q.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const rx = containsInsensitive(q.search);
     filter.$or = [{ entity: rx }, { entityId: rx }, { 'metadata.event': rx }];
   }
 

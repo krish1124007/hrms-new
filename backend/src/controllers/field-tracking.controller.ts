@@ -4,14 +4,16 @@ import { z } from 'zod';
 import { LocationTrack, type ILocationGeo } from '../models/location-track.model.js';
 import { Employee } from '../models/employee.model.js';
 import { Visit } from '../models/visit.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { idOf } from '../lib/access.js';
 import {
   LIVE_WINDOW_MS,
+  TRACKING_GATE_CODES,
   assertCanSeeRep,
   businessDayRange,
   dateKeySchema,
   employeeName,
+  fieldStaffAmong,
   openVisitSince,
   recordLocationBatch,
   trackingBatchSchema,
@@ -32,14 +34,38 @@ export const trailQuerySchema = z.object({
 });
 
 /**
- * `POST /field/tracking/batch` (and `POST /attendance/tracking/batch`) —
- * consented + clocked-in gate, store, broadcast; see
- * `services/location-track.service.ts`. 201 `{ ingested }`.
+ * `POST /field/tracking/batch` — field-staff + consented + clocked-in gate,
+ * store, broadcast; see `services/location-track.service.ts`.
+ * 201 `{ ingested, dropped }` (`dropped`: fixes more than 24 h old).
  */
 export async function ingestBatch(req: Request, res: Response): Promise<void> {
   const body = req.body as TrackingBatch;
-  const ingested = await recordLocationBatch(req, body.points);
-  res.status(201).json({ success: true, data: { ingested } });
+  const { ingested, dropped } = await recordLocationBatch(req, body.points);
+  res.status(201).json({ success: true, data: { ingested, dropped } });
+}
+
+/**
+ * `POST /attendance/tracking/batch` — the URL shipped mobile builds poll for
+ * every signed-in user. The same ingest, but a failed gate (not field staff,
+ * tracking off, not clocked in) is 200 `{ ignored: true }`, never an error.
+ */
+export async function ingestLegacyBatch(req: Request, res: Response): Promise<void> {
+  const body = req.body as TrackingBatch;
+  try {
+    const { ingested, dropped } = await recordLocationBatch(req, body.points);
+    res.status(201).json({ success: true, data: { ingested, dropped } });
+  } catch (err) {
+    if (err instanceof AppError && TRACKING_GATE_CODES.has(err.code)) {
+      res.status(200).json({
+        success: true,
+        ignored: true,
+        message: err.message,
+        data: { ignored: true, reason: err.code },
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 interface LatestFix {
@@ -80,7 +106,10 @@ export async function liveTracking(req: Request, res: Response): Promise<void> {
       },
     },
   ]);
-  const repIds = fixes.map((f) => f._id);
+  // Only field staff are shown (fixes stored for anyone else before the
+  // ingest checked it stay hidden).
+  const staff = await fieldStaffAmong(fixes.map((f) => f._id));
+  const repIds = fixes.filter((f) => staff.has(String(f._id))).map((f) => f._id);
 
   const [employees, openVisits] = await Promise.all([
     Employee.find({ _id: { $in: repIds } })
@@ -158,14 +187,18 @@ export async function trackingTrail(req: Request, res: Response): Promise<void> 
     .lean()
     .exec();
   if (!employee) throw new NotFoundError('Employee not found');
+  // Only field staff's locations are shown — anyone else's trail is empty.
+  const tracked = (await fieldStaffAmong([employeeId])).has(employeeId);
 
   const [fixes, visits] = await Promise.all([
-    LocationTrack.find({ employeeId, timestamp: { $gte: from, $lt: to } })
-      .sort({ timestamp: 1 })
-      .limit(TRAIL_MAX_POINTS + 1)
-      .select('timestamp location accuracy speed heading')
-      .lean()
-      .exec(),
+    tracked
+      ? LocationTrack.find({ employeeId, timestamp: { $gte: from, $lt: to } })
+          .sort({ timestamp: 1 })
+          .limit(TRAIL_MAX_POINTS + 1)
+          .select('timestamp location accuracy speed heading')
+          .lean()
+          .exec()
+      : Promise.resolve([]),
     Visit.find({ employeeId, 'checkIn.time': { $gte: from, $lt: to } })
       .sort({ 'checkIn.time': 1 })
       .select('employeeId clientId checkIn checkOut status purpose')

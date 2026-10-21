@@ -12,6 +12,7 @@ import {
   ValidationAppError,
 } from '../lib/errors.js';
 import { currentEmployeeId, hasPermission } from '../lib/access.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 import { saveFile, deleteFile } from '../lib/local-storage.js';
 
@@ -115,7 +116,7 @@ export async function list(req: Request, res: Response): Promise<void> {
   if (q.mandatory) filter.mandatory = q.mandatory === 'true';
   if (q.tag) filter.tags = q.tag;
   if (q.search) {
-    const re = new RegExp(q.search, 'i');
+    const re = containsInsensitive(q.search);
     filter.$or = [{ title: re }, { policyCode: re }, { summary: re }, { tags: re }];
   }
 
@@ -214,6 +215,24 @@ export async function create(req: Request, res: Response): Promise<void> {
   }
 }
 
+/**
+ * Who has acknowledged a policy is HR's business: `policies.manage` holders
+ * get the full list; everyone else only their own acknowledgement (if any).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function withVisibleAcknowledgements(req: Request, policy: any): Promise<Record<string, unknown>> {
+  const obj = typeof policy.toJSON === 'function' ? policy.toJSON() : { ...policy };
+  if (hasPermission(req.user, 'policies.manage')) return obj;
+  const me = await currentEmployeeId(req);
+  const mine = me ? me.toHexString() : null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  obj.acknowledgements = ((obj.acknowledgements ?? []) as any[]).filter((ack) => {
+    const who = ack?.employee && typeof ack.employee === 'object' && '_id' in ack.employee ? ack.employee._id : ack?.employee;
+    return mine !== null && String(who) === mine;
+  });
+  return obj;
+}
+
 /** GET /api/v1/hr-policies/:id */
 export async function get(req: Request, res: Response): Promise<void> {
   const policy = await HrPolicy.findById(String(req.params.id))
@@ -222,7 +241,7 @@ export async function get(req: Request, res: Response): Promise<void> {
     .populate('acknowledgements.employee', 'firstName lastName employeeId email profileImage')
     .exec();
   if (!policy) throw new NotFoundError('Policy not found');
-  res.json({ success: true, data: policy });
+  res.json({ success: true, data: await withVisibleAcknowledgements(req, policy) });
 }
 
 /** PATCH /api/v1/hr-policies/:id */
@@ -407,7 +426,7 @@ export async function acknowledge(req: Request, res: Response): Promise<void> {
     'firstName lastName employeeId email profileImage',
   );
 
-  res.json({ success: true, data: policy });
+  res.json({ success: true, data: await withVisibleAcknowledgements(req, policy) });
 }
 
 /** GET /api/v1/hr-policies/:id/acknowledgements */
@@ -419,10 +438,12 @@ export async function listAcknowledgements(req: Request, res: Response): Promise
 
   const total = await Employee.countDocuments({ status: 'active' });
   const acked = policy.acknowledgements.length;
+  const visible = await withVisibleAcknowledgements(req, policy);
   res.json({
     success: true,
     data: {
-      acknowledgements: policy.acknowledgements,
+      // The list: everyone's for HR, only the caller's own for anyone else.
+      acknowledgements: visible.acknowledgements,
       summary: {
         total,
         acknowledged: acked,
