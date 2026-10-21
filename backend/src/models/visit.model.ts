@@ -6,7 +6,7 @@ import {
   type PaginateModel,
 } from '../lib/mongoose-plugins.js';
 
-export type VisitPurpose = 'sales' | 'service' | 'collection' | 'followup' | 'other';
+export type VisitPurpose = 'sales' | 'service' | 'collection' | 'followup' | 'delivery' | 'other';
 export type VisitOutcome = 'positive' | 'negative' | 'neutral' | 'followup_required';
 export type VisitStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -23,6 +23,10 @@ export interface IVisit extends Document {
   purpose: VisitPurpose;
   checkIn?: IVisitCheckpoint;
   checkOut?: IVisitCheckpoint;
+  /** Metres between the check-in fix and the client's pin; unset when either is unknown. */
+  distanceFromClientM?: number;
+  /** Check-in farther than FIELD_VISIT_RADIUS_M from the client — flagged, never refused. */
+  locationMismatch?: boolean;
   duration?: number; // minutes
   notes?: string;
   outcome?: VisitOutcome;
@@ -57,12 +61,14 @@ const visitSchema = new Schema<IVisit>({
   clientId: { type: Schema.Types.ObjectId, ref: 'Client', required: true },
   purpose: {
     type: String,
-    enum: ['sales', 'service', 'collection', 'followup', 'other'],
+    enum: ['sales', 'service', 'collection', 'followup', 'delivery', 'other'],
     default: 'sales',
   },
   checkIn: checkpointSchema,
   checkOut: checkpointSchema,
-  duration: Number,
+  distanceFromClientM: Number,
+  locationMismatch: { type: Boolean, default: false },
+  duration: { type: Number, min: 0 },
   notes: String,
   outcome: {
     type: String,
@@ -88,6 +94,17 @@ visitSchema.plugin(paginatePlugin);
 visitSchema.index({ employeeId: 1, createdAt: -1 });
 visitSchema.index({ clientId: 1, createdAt: -1 });
 visitSchema.index({ status: 1 });
+visitSchema.index({ 'checkIn.time': -1 });
+// One open visit per rep: a concurrent second check-in fails on this index.
+// Production builds indexes by hand (autoIndex is off) — see the deploy checklist.
+visitSchema.index(
+  { employeeId: 1 },
+  {
+    unique: true,
+    name: 'one_open_visit_per_employee',
+    partialFilterExpression: { status: 'in_progress', isDeleted: false },
+  },
+);
 
 export const Visit = model<IVisit, PaginateModel<IVisit> & Model<IVisit>>(
   'Visit',

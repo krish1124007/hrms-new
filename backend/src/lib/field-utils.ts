@@ -1,0 +1,133 @@
+/**
+ * Small shared pieces of the field-sales controllers: IST day/month windows,
+ * query-string parsing (ids, date bounds, sort keys), money rounding and
+ * great-circle distance.
+ */
+import { z } from 'zod';
+import { Types } from 'mongoose';
+import { atBusinessTime, DAY_MS, startOfBusinessDay } from './business-day.js';
+
+/* ── Business-day (IST) windows ── */
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/** `[start, end)` instants of the business (IST) day containing `d`. */
+export function businessDayWindow(d: Date = new Date()): { start: Date; end: Date } {
+  const start = atBusinessTime(startOfBusinessDay(d), '00:00');
+  return { start, end: new Date(start.getTime() + DAY_MS) };
+}
+
+/** `[start, end)` instants of the IST calendar day `ymd` (`YYYY-MM-DD`). */
+export function businessDateWindow(ymd: string): { start: Date; end: Date } {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const start = atBusinessTime(new Date(Date.UTC(y, m - 1, d)), '00:00');
+  return { start, end: new Date(start.getTime() + DAY_MS) };
+}
+
+/** `[start, end)` instants of IST calendar month `month` (1–12) of `year`. */
+export function businessMonthWindow(year: number, month: number): { start: Date; end: Date } {
+  return {
+    start: atBusinessTime(new Date(Date.UTC(year, month - 1, 1)), '00:00'),
+    end: atBusinessTime(new Date(Date.UTC(year, month, 1)), '00:00'),
+  };
+}
+
+/** The IST `{ year, month }` of `d`. */
+export function businessYearMonth(d: Date = new Date()): { year: number; month: number } {
+  const label = startOfBusinessDay(d);
+  return { year: label.getUTCFullYear(), month: label.getUTCMonth() + 1 };
+}
+
+/**
+ * A `?date=` value: a `YYYY-MM-DD` string names an IST calendar day; anything
+ * else parseable names the IST day it falls on; missing/invalid → today.
+ */
+export function windowForDateParam(value: unknown): { start: Date; end: Date } {
+  if (typeof value === 'string' && YMD.test(value)) return businessDateWindow(value);
+  if (typeof value === 'string' && value) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return businessDayWindow(d);
+  }
+  return businessDayWindow();
+}
+
+/* ── Query parsing ── */
+
+export const objectIdString = z
+  .string()
+  .trim()
+  .refine((v) => Types.ObjectId.isValid(v) && /^[a-f\d]{24}$/i.test(v), 'Invalid id');
+
+/**
+ * A `?from=` / `?to=` bound. `YYYY-MM-DD` is an IST calendar day (`from` = its
+ * first instant, `to` = the first instant of the next day, used with `$lt`);
+ * a full timestamp is taken as given (`to` made exclusive by +1 ms).
+ */
+export function dateBound(edge: 'from' | 'to') {
+  return z.string().trim().transform((value, ctx) => {
+    if (YMD.test(value)) {
+      const { start, end } = businessDateWindow(value);
+      return edge === 'from' ? start : end;
+    }
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid date' });
+      return z.NEVER;
+    }
+    return edge === 'from' ? d : new Date(d.getTime() + 1);
+  });
+}
+
+/** `{ $gte: from, $lt: to }` for whichever bounds are present, or undefined. */
+export function rangeFilter(from?: Date, to?: Date): Record<string, Date> | undefined {
+  if (!from && !to) return undefined;
+  const range: Record<string, Date> = {};
+  if (from) range.$gte = from;
+  if (to) range.$lt = to;
+  return range;
+}
+
+/** `?sort=` restricted to `fields`, ascending or (`-field`) descending. */
+export function sortParam(fields: readonly string[]) {
+  const allowed = fields.flatMap((f) => [f, `-${f}`]);
+  return z.string().refine((v) => allowed.includes(v), `sort must be one of: ${allowed.join(', ')}`);
+}
+
+/** `?limit=` — the global guard already clamps to 100; this keeps the schema honest. */
+export const pageParams = {
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+};
+
+/** Escape user text for a literal `$regex` match (no ReDoS, no operators). */
+export function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/* ── Money and geometry ── */
+
+/** Round to paise. */
+export function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Great-circle distance in metres between two `{ lat, lng }` points. */
+export function distanceMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const R = 6_371_000;
+  const rad = (deg: number): number => (deg * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** `[lng, lat]` GeoJSON coordinates as `{ lat, lng }`; null when absent or the 0,0 placeholder. */
+export function pointOf(coordinates: unknown): { lat: number; lng: number } | null {
+  if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+  const [lng, lat] = coordinates.map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return null;
+  return { lat, lng };
+}

@@ -1,0 +1,109 @@
+/**
+ * Client receivables and order payment state, recomputed from their source
+ * rows.
+ *
+ * These figures used to be `$inc`-ed on create and never reversed, so every
+ * edit, cancellation and deletion left them wrong for good. Mongo here is a
+ * standalone server (no multi-document transactions), so instead of keeping
+ * running totals in step we recompute them from the orders and payments after
+ * every mutation: whatever happened before, the next recompute is right.
+ *
+ *   outstanding = Σ total of non-deleted orders in a receivable status
+ *               − Σ amount of non-deleted, non-bounced payments
+ *
+ * A negative outstanding is a credit (the client paid ahead, or an order they
+ * paid for was cancelled).
+ */
+import { Types } from 'mongoose';
+import { Client } from '../models/client.model.js';
+import { ProductOrder, type OrderPaymentStatus } from '../models/product-order.model.js';
+import { PaymentCollection } from '../models/payment-collection.model.js';
+import { idOf } from '../lib/access.js';
+import { roundMoney } from '../lib/field-utils.js';
+
+/**
+ * Order statuses that are receivables: confirmed and delivered, plus the
+ * legacy in-between statuses (`processing`, `shipped`) older orders may carry.
+ */
+export const RECEIVABLE_ORDER_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'] as const;
+
+/** Payment statuses that count as money received (a bounced cheque does not). */
+const COUNTED_PAYMENT = { $ne: 'bounced' };
+
+export interface ClientLedger {
+  totalOrders: number;
+  totalOrderValue: number;
+  totalPayments: number;
+  outstandingAmount: number;
+}
+
+function oid(id: unknown): Types.ObjectId {
+  const hex = idOf(id);
+  if (!hex || !Types.ObjectId.isValid(hex)) throw new Error(`field-ledger: invalid id ${String(id)}`);
+  return new Types.ObjectId(hex);
+}
+
+/** Recompute and store a client's ledger figures; returns them. */
+export async function recomputeClientLedger(clientId: unknown): Promise<ClientLedger> {
+  const id = oid(clientId);
+  const [[orders], [payments]] = await Promise.all([
+    ProductOrder.aggregate<{ count: number; value: number }>([
+      { $match: { clientId: id, isDeleted: { $ne: true }, status: { $in: RECEIVABLE_ORDER_STATUSES } } },
+      { $group: { _id: null, count: { $sum: 1 }, value: { $sum: '$totalAmount' } } },
+    ]),
+    PaymentCollection.aggregate<{ total: number }>([
+      { $match: { clientId: id, isDeleted: { $ne: true }, status: COUNTED_PAYMENT } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]),
+  ]);
+  const totalOrderValue = roundMoney(orders?.value ?? 0);
+  const totalPayments = roundMoney(payments?.total ?? 0);
+  const ledger: ClientLedger = {
+    totalOrders: orders?.count ?? 0,
+    totalOrderValue,
+    totalPayments,
+    outstandingAmount: roundMoney(totalOrderValue - totalPayments),
+  };
+  await Client.updateOne({ _id: id }, { $set: ledger }).exec();
+  return ledger;
+}
+
+/** Sum of the counted payments allocated to `orderId`, optionally leaving one payment out. */
+export async function paidTowardsOrder(orderId: unknown, excludePaymentId?: unknown): Promise<number> {
+  const match: Record<string, unknown> = { orderId: oid(orderId), isDeleted: { $ne: true }, status: COUNTED_PAYMENT };
+  if (excludePaymentId) match._id = { $ne: oid(excludePaymentId) };
+  const [row] = await PaymentCollection.aggregate<{ total: number }>([
+    { $match: match },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  return roundMoney(row?.total ?? 0);
+}
+
+/** Recompute and store an order's `paidAmount` and `paymentStatus`. */
+export async function recomputeOrderPayments(
+  orderId: unknown,
+): Promise<{ paidAmount: number; paymentStatus: OrderPaymentStatus }> {
+  const id = oid(orderId);
+  const order = await ProductOrder.findById(id).select('totalAmount').setOptions({ withDeleted: true }).lean().exec();
+  const paidAmount = await paidTowardsOrder(id);
+  const total = order?.totalAmount ?? 0;
+  const paymentStatus: OrderPaymentStatus =
+    paidAmount <= 0 ? 'pending' : paidAmount >= total ? 'paid' : 'partial';
+  await ProductOrder.updateOne({ _id: id }, { $set: { paidAmount, paymentStatus } })
+    .setOptions({ withDeleted: true })
+    .exec();
+  return { paidAmount, paymentStatus };
+}
+
+/** Recompute every client and order touched by a mutation (duplicates and blanks skipped). */
+export async function recomputeAfterMutation(touched: {
+  clients?: unknown[];
+  orders?: unknown[];
+}): Promise<void> {
+  const unique = (ids: unknown[] = []): string[] =>
+    [...new Set(ids.map((id) => idOf(id)).filter((id): id is string => Boolean(id)))];
+  // Orders first: nothing in the client ledger depends on them, but callers
+  // reading the order right after expect its payment state settled.
+  await Promise.all(unique(touched.orders).map((id) => recomputeOrderPayments(id)));
+  await Promise.all(unique(touched.clients).map((id) => recomputeClientLedger(id)));
+}

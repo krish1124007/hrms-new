@@ -1,159 +1,238 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { FieldTask } from '../models/field-task.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { Types } from 'mongoose';
+import { FieldTask, type IFieldTask } from '../models/field-task.model.js';
+import { Employee } from '../models/employee.model.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { createNotification, formatBusinessDate } from '../services/notification.service.js';
+import { logger } from '../config/logger.js';
+import {
+  assertFieldRead,
+  assertFieldWrite,
+  canManageField,
+  fieldScope,
+  requireOwnEmployeeId,
+} from '../lib/field-access.js';
+import { objectIdString, pageParams, sortParam } from '../lib/field-utils.js';
 
-/** Field managers see and edit every task; reps only those assigned to them. */
-const MANAGE = 'field-sales.manage';
+const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
+const STATUSES = ['new', 'accepted', 'in_progress', 'completed', 'cancelled'] as const;
+const CLOSED: readonly string[] = ['completed', 'cancelled'];
+
+const photoRef = z.string().trim().min(1).max(2048);
 
 export const createTaskSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  assignedTo: z.string().min(1),
-  clientId: z.string().optional(),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(5000).optional(),
+  assignedTo: objectIdString,
+  clientId: objectIdString.optional(),
   location: z
     .object({
-      lat: z.coerce.number().optional(),
-      lng: z.coerce.number().optional(),
-      address: z.string().optional(),
+      lat: z.coerce.number().min(-90).max(90).optional(),
+      lng: z.coerce.number().min(-180).max(180).optional(),
+      address: z.string().trim().max(500).optional(),
     })
     .optional(),
-  priority: z.enum(['low', 'medium', 'high', 'urgent']).default('medium'),
-  status: z
-    .enum(['new', 'accepted', 'in_progress', 'completed', 'cancelled'])
-    .default('new'),
+  priority: z.enum(PRIORITIES).default('medium'),
+  status: z.enum(['new', 'accepted', 'in_progress']).default('new'),
   dueDate: z.coerce.date().optional(),
 });
 
-export const updateTaskSchema = createTaskSchema.partial();
+export const updateTaskSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  description: z.string().trim().max(5000).optional(),
+  assignedTo: objectIdString.optional(),
+  clientId: objectIdString.optional(),
+  location: createTaskSchema.shape.location,
+  priority: z.enum(PRIORITIES).optional(),
+  status: z.enum(STATUSES).optional(),
+  dueDate: z.coerce.date().optional(),
+});
 
+/** `notes`/`photo` are the mobile app's names for `completionNotes`/`completionPhotos`. */
 export const completeSchema = z.object({
-  completionPhotos: z.array(z.string()).optional(),
-  completionNotes: z.string().optional(),
+  completionPhotos: z.array(photoRef).max(20).optional(),
+  completionNotes: z.string().trim().max(5000).optional(),
+  notes: z.string().trim().max(5000).optional(),
+  photo: photoRef.optional(),
 });
 
 export const listQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(200).default(20),
-  assignedTo: z.string().optional(),
-  status: z.string().optional(),
-  priority: z.string().optional(),
-  sort: z.string().optional(),
+  ...pageParams,
+  assignedTo: objectIdString.optional(),
+  status: z.enum(STATUSES).optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  sort: sortParam(['createdAt', 'dueDate', 'priority']).optional(),
 });
 
-/** 404 if the task does not exist; 403 unless it is assigned to the caller or they manage. */
-async function assertTaskAccess(req: Request, id: string): Promise<void> {
-  const task = await FieldTask.findById(id).select('assignedTo').lean().exec();
+export const myQuerySchema = z.object({ ...pageParams, status: z.enum(STATUSES).optional() });
+
+const POPULATE = [
+  { path: 'assignedTo', select: 'firstName lastName employeeId' },
+  { path: 'clientId', select: 'name address location' },
+];
+
+async function loadTask(id: string): Promise<IFieldTask> {
+  const task = await FieldTask.findById(id).exec();
   if (!task) throw new NotFoundError('Task not found');
-  await assertOwnOrPermission(req, task.assignedTo, MANAGE);
+  return task;
+}
+
+/** The assignee's login, or 400 when `employeeId` is not an employee. */
+async function assigneeUserId(employeeId: string): Promise<string | null> {
+  const emp = Types.ObjectId.isValid(employeeId)
+    ? await Employee.findById(employeeId).select('userId').lean().exec()
+    : null;
+  if (!emp) throw new ValidationAppError('assignedTo does not name an employee');
+  return emp.userId ? String(emp.userId) : null;
+}
+
+/** Tell the assignee about a task given to them. Never fails the request. */
+async function notifyAssignee(userId: string | null, task: IFieldTask): Promise<void> {
+  if (!userId) return;
+  try {
+    await createNotification({
+      userId,
+      type: 'task_assigned',
+      title: 'New field task',
+      message: task.dueDate
+        ? `"${task.title}" has been assigned to you (due ${formatBusinessDate(task.dueDate)}).`
+        : `"${task.title}" has been assigned to you.`,
+      link: `/field/tasks/${String(task._id)}`,
+      metadata: { module: 'field', taskId: String(task._id) },
+    });
+  } catch (err) {
+    logger.warn({ err, taskId: String(task._id) }, 'field task notification failed');
+  }
 }
 
 export async function listTasks(req: Request, res: Response): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const q = req.query as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
-  if (q.assignedTo) filter.assignedTo = q.assignedTo;
-  // Reps only ever see their own (`null` — no employee record — matches nothing).
-  if (!hasPermission(req.user, MANAGE)) filter.assignedTo = await currentEmployeeId(req);
+  const q = req.query as unknown as z.infer<typeof listQuerySchema>;
+  const filter: Record<string, unknown> = await fieldScope(req, q.assignedTo, 'assignedTo');
   if (q.status) filter.status = q.status;
   if (q.priority) filter.priority = q.priority;
   const result = await FieldTask.paginate(filter, {
     page: q.page,
     limit: q.limit,
     sort: q.sort ?? '-createdAt',
-    populate: [
-      { path: 'assignedTo', select: 'firstName lastName employeeCode' },
-      { path: 'clientId', select: 'name' },
-    ],
+    populate: POPULATE,
   });
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export async function myTasks(req: Request, res: Response): Promise<void> {
-  const empId = await currentEmployeeId(req);
-  if (!empId) throw new ValidationAppError('Employee profile not found');
-  const docs = await FieldTask.find({ assignedTo: empId })
-    .populate('clientId', 'name address')
-    .sort({ dueDate: 1 })
-    .exec();
-  res.json({ success: true, data: docs });
+  const q = req.query as unknown as z.infer<typeof myQuerySchema>;
+  const filter: Record<string, unknown> = { assignedTo: await requireOwnEmployeeId(req) };
+  if (q.status) filter.status = q.status;
+  const result = await FieldTask.paginate(filter, {
+    page: q.page,
+    limit: q.limit,
+    sort: { dueDate: 1, createdAt: -1 },
+    populate: [{ path: 'clientId', select: 'name address location' }],
+  });
+  res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
+/** The tasks of the reps the caller can see (field managers: everyone), paginated. */
 export async function teamTasks(req: Request, res: Response): Promise<void> {
-  const filter: Record<string, unknown> = {};
-  if (!hasPermission(req.user, MANAGE)) filter.assignedTo = await currentEmployeeId(req);
-  const docs = await FieldTask.find(filter)
-    .populate('assignedTo', 'firstName lastName')
-    .populate('clientId', 'name')
-    .sort({ createdAt: -1 })
-    .exec();
-  res.json({ success: true, data: docs });
+  const q = req.query as unknown as z.infer<typeof myQuerySchema>;
+  const filter: Record<string, unknown> = await fieldScope(req, undefined, 'assignedTo');
+  // A rep's "team" is the people who report to them, not themselves.
+  if (!canManageField(req)) {
+    const self = await requireOwnEmployeeId(req);
+    const ids = ((filter.assignedTo as { $in: Types.ObjectId[] }).$in ?? []).filter((id) => !id.equals(self));
+    filter.assignedTo = { $in: ids };
+  }
+  if (q.status) filter.status = q.status;
+  const result = await FieldTask.paginate(filter, {
+    page: q.page,
+    limit: q.limit,
+    sort: '-createdAt',
+    populate: POPULATE,
+  });
+  res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export async function getTask(req: Request, res: Response): Promise<void> {
-  const doc = await FieldTask.findById(String(req.params.id))
-    .populate('assignedTo', 'firstName lastName employeeCode')
-    .populate('clientId', 'name address')
-    .exec();
+  const doc = await FieldTask.findById(String(req.params.id)).populate(POPULATE).exec();
   if (!doc) throw new NotFoundError('Task not found');
-  await assertOwnOrPermission(req, doc.assignedTo, MANAGE);
+  await assertFieldRead(req, doc.assignedTo);
   res.json({ success: true, data: doc });
 }
 
 export async function createTask(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createTaskSchema>;
+  const userId = await assigneeUserId(body.assignedTo);
   const doc = await FieldTask.create(body);
   void audit({ action: 'create', entity: 'FieldTask', entityId: String(doc._id) });
+  await notifyAssignee(userId, doc);
   res.status(201).json({ success: true, data: doc });
 }
 
+/** Managers edit anything (reassigning notifies the new assignee); the assignee only moves the status along. */
 export async function updateTask(req: Request, res: Response): Promise<void> {
-  await assertTaskAccess(req, String(req.params.id));
-  const update: Record<string, unknown> = { ...req.body };
-  // Only a manager may reassign a task.
-  if (!hasPermission(req.user, MANAGE)) delete update.assignedTo;
-  const doc = await FieldTask.findByIdAndUpdate(String(req.params.id), update, {
-    new: true,
-  }).exec();
+  const body = req.body as z.infer<typeof updateTaskSchema>;
+  const task = await loadTask(String(req.params.id));
+  await assertFieldWrite(req, task.assignedTo);
+  const manager = canManageField(req);
+
+  const set: Record<string, unknown> = manager ? { ...body } : {};
+  if (!manager && body.status) set.status = body.status;
+  if (set.status && set.status !== task.status) {
+    if (CLOSED.includes(task.status)) throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
+    if (set.status === 'cancelled' && !manager) {
+      throw new AppError('Only a field sales manager can cancel a task', 403, 'FORBIDDEN');
+    }
+    if (set.status === 'completed') set.completedAt = new Date();
+  }
+
+  const reassigned = manager && body.assignedTo && body.assignedTo !== String(task.assignedTo);
+  const newAssigneeUser = reassigned ? await assigneeUserId(body.assignedTo as string) : null;
+
+  const doc = await FieldTask.findByIdAndUpdate(task._id, { $set: set }, { new: true }).exec();
   if (!doc) throw new NotFoundError('Task not found');
+  if (reassigned) await notifyAssignee(newAssigneeUser, doc);
   res.json({ success: true, data: doc });
 }
 
 export async function deleteTask(req: Request, res: Response): Promise<void> {
-  const doc = await FieldTask.findById(String(req.params.id)).exec();
-  if (!doc) throw new NotFoundError('Task not found');
+  const doc = await loadTask(String(req.params.id));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (doc as any).softDelete();
+  await (doc as any).softDelete({ by: req.user?._id });
+  void audit({ action: 'delete', entity: 'FieldTask', entityId: String(doc._id) });
   res.json({ success: true, message: 'Task deleted' });
 }
 
 export async function acceptTask(req: Request, res: Response): Promise<void> {
-  await assertTaskAccess(req, String(req.params.id));
-  const doc = await FieldTask.findByIdAndUpdate(
-    String(req.params.id),
-    { status: 'accepted' },
+  const task = await loadTask(String(req.params.id));
+  await assertFieldWrite(req, task.assignedTo);
+  const doc = await FieldTask.findOneAndUpdate(
+    { _id: task._id, status: { $in: ['new', 'accepted'] } },
+    { $set: { status: 'accepted' } },
     { new: true },
   ).exec();
-  if (!doc) throw new NotFoundError('Task not found');
+  if (!doc) throw new AppError(`A task that is ${task.status} cannot be accepted`, 409, 'TASK_CLOSED');
   res.json({ success: true, data: doc });
 }
 
 export async function completeTask(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof completeSchema>;
-  await assertTaskAccess(req, String(req.params.id));
-  const doc = await FieldTask.findByIdAndUpdate(
-    String(req.params.id),
+  const task = await loadTask(String(req.params.id));
+  await assertFieldWrite(req, task.assignedTo);
+  const photos = [...(body.completionPhotos ?? []), ...(body.photo ? [body.photo] : [])];
+  const doc = await FieldTask.findOneAndUpdate(
+    { _id: task._id, status: { $nin: CLOSED } },
     {
-      status: 'completed',
-      completedAt: new Date(),
-      completionPhotos: body.completionPhotos ?? [],
-      completionNotes: body.completionNotes,
+      $set: {
+        status: 'completed',
+        completedAt: new Date(),
+        completionPhotos: photos,
+        completionNotes: body.completionNotes ?? body.notes,
+      },
     },
     { new: true },
   ).exec();
-  if (!doc) throw new NotFoundError('Task not found');
+  if (!doc) throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
   res.json({ success: true, data: doc });
 }

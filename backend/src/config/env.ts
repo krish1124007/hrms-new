@@ -88,6 +88,12 @@ const envSchema = z.object({
   ESI_EMPLOYEE_PERCENT: z.coerce.number().min(0).max(100).default(0.75),
   ESI_EMPLOYER_PERCENT: z.coerce.number().min(0).max(100).default(3.25),
 
+  /**
+   * Field visits: a check-in farther than this many metres from the client's
+   * pin is flagged `locationMismatch` (never refused).
+   */
+  FIELD_VISIT_RADIUS_M: z.coerce.number().positive().default(300),
+
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

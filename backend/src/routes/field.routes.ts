@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
+import { idempotent } from '../middleware/idempotency.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
 
 import * as clients from '../controllers/field-clients.controller.js';
@@ -11,10 +13,32 @@ import * as targets from '../controllers/field-targets.controller.js';
 import * as orders from '../controllers/field-orders.controller.js';
 import * as payments from '../controllers/field-payments.controller.js';
 import * as tracking from '../controllers/field-tracking.controller.js';
+import * as uploads from '../controllers/field-uploads.controller.js';
 import { fieldDashboard } from '../controllers/field-dashboard.controller.js';
 
 const router = Router();
 router.use(authMiddleware);
+
+/*
+ * Record-level rules live in the controllers (lib/field-access.ts): reps act
+ * on their own records, team leads also read their direct reports',
+ * `field-sales.manage` sees and acts on everyone's.
+ */
+
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: uploads.MAX_PHOTO_BYTES, files: 1 },
+  fileFilter: uploads.photoFileFilter,
+});
+
+/* ── Uploads ── */
+router.post(
+  '/uploads/photo',
+  requirePermission('field-sales.view'),
+  photoUpload.single('photo'),
+  uploads.photoUploadErrors,
+  asyncHandler(uploads.uploadPhoto),
+);
 
 /* ── Dashboard ── */
 router.get('/dashboard', requirePermission('field-sales.view'), asyncHandler(fieldDashboard));
@@ -45,7 +69,7 @@ router.get(
 );
 router.post(
   '/clients',
-  requirePermission('field-sales.manage'),
+  requirePermission('field-sales.view'), // a rep's new client is assigned to them
   validate(clients.createClientSchema),
   asyncHandler(clients.createClient),
 );
@@ -128,11 +152,13 @@ router.delete(
 router.get(
   '/tasks/my',
   requirePermission('field-sales.view'),
+  validate(tasks.myQuerySchema, 'query'),
   asyncHandler(tasks.myTasks),
 );
 router.get(
   '/tasks/team',
   requirePermission('field-sales.view'),
+  validate(tasks.myQuerySchema, 'query'),
   asyncHandler(tasks.teamTasks),
 );
 router.get(
@@ -184,11 +210,13 @@ router.get(
 router.get(
   '/targets/leaderboard',
   requirePermission('field-sales.view'),
+  validate(targets.periodQuerySchema, 'query'),
   asyncHandler(targets.leaderboard),
 );
 router.get(
   '/targets/team-summary',
   requirePermission('field-sales.view'),
+  validate(targets.periodQuerySchema, 'query'),
   asyncHandler(targets.teamSummary),
 );
 router.get(
@@ -224,11 +252,13 @@ router.delete(
 router.get(
   '/orders/my',
   requirePermission('field-sales.view'),
+  validate(orders.myQuerySchema, 'query'),
   asyncHandler(orders.myOrders),
 );
 router.get(
   '/orders/reports',
   requirePermission('field-sales.view'),
+  validate(orders.reportQuerySchema, 'query'),
   asyncHandler(orders.orderReports),
 );
 router.get(
@@ -240,6 +270,7 @@ router.get(
 router.post(
   '/orders',
   requirePermission('field-sales.view'),
+  idempotent(),
   validate(orders.createOrderSchema),
   asyncHandler(orders.createOrder),
 );
@@ -270,6 +301,7 @@ router.patch(
 router.get(
   '/payments/my',
   requirePermission('field-sales.view'),
+  validate(payments.myQuerySchema, 'query'),
   asyncHandler(payments.myPayments),
 );
 router.get(
@@ -280,6 +312,7 @@ router.get(
 router.get(
   '/payments/reports/outstanding',
   requirePermission('field-sales.view'),
+  validate(payments.outstandingQuerySchema, 'query'),
   asyncHandler(payments.outstandingReport),
 );
 router.get(
@@ -291,6 +324,7 @@ router.get(
 router.post(
   '/payments',
   requirePermission('field-sales.view'),
+  idempotent(),
   validate(payments.createPaymentSchema),
   asyncHandler(payments.createPayment),
 );
@@ -309,6 +343,11 @@ router.delete(
   '/payments/:id',
   requirePermission('field-sales.manage'),
   asyncHandler(payments.deletePayment),
+);
+router.patch(
+  '/payments/:id/deposit',
+  requirePermission('field-sales.view'),
+  asyncHandler(payments.depositPayment),
 );
 router.patch(
   '/payments/:id/verify',

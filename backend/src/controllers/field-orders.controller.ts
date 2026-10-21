@@ -1,206 +1,341 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { ProductOrder } from '../models/product-order.model.js';
+import { ProductOrder, type IProductOrder, type OrderStatus } from '../models/product-order.model.js';
 import { Client } from '../models/client.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { Visit } from '../models/visit.model.js';
+import { PaymentCollection } from '../models/payment-collection.model.js';
+import { AppError, ForbiddenError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { recomputeAfterMutation } from '../services/field-ledger.service.js';
+import { createWithNumber, nextYearlyNumber } from '../lib/sequence.js';
+import {
+  assertFieldRead,
+  assertFieldWrite,
+  canManageField,
+  fieldScope,
+  ownerForCreate,
+  requireOwnEmployeeId,
+} from '../lib/field-access.js';
+import {
+  businessDayWindow,
+  businessMonthWindow,
+  businessYearMonth,
+  dateBound,
+  objectIdString,
+  pageParams,
+  rangeFilter,
+  roundMoney,
+  sortParam,
+} from '../lib/field-utils.js';
 
-/** Field managers see and edit every rep's orders; reps only their own. */
-const MANAGE = 'field-sales.manage';
+/*
+ * Status machine:  pending → confirmed → delivered,  pending | confirmed → cancelled.
+ * A rep may cancel their own pending order; confirming, delivering and
+ * cancelling a confirmed order need `field-sales.manage` (a rep cannot
+ * self-confirm to reach a target). Legacy `draft` behaves as `pending`,
+ * `processing`/`shipped` as `confirmed`. Money is always computed here — any
+ * total the client sends is ignored.
+ */
+
+const STATUSES = ['pending', 'confirmed', 'delivered', 'cancelled'] as const;
+/** Old spellings accepted on input. */
+const STATUS_ALIASES: Record<string, (typeof STATUSES)[number]> = { draft: 'pending' };
+const statusSchema_ = z.preprocess(
+  (v) => (typeof v === 'string' ? (STATUS_ALIASES[v] ?? v) : v),
+  z.enum(STATUSES),
+);
+
+/** Which stored statuses a target status may be reached from. */
+const TRANSITIONS: Record<Exclude<(typeof STATUSES)[number], 'pending'>, OrderStatus[]> = {
+  confirmed: ['pending', 'draft'],
+  delivered: ['confirmed', 'processing', 'shipped'],
+  cancelled: ['pending', 'draft', 'confirmed', 'processing', 'shipped'],
+};
+const OPEN_STATUSES: OrderStatus[] = ['pending', 'draft'];
 
 const orderItemSchema = z.object({
-  productId: z.string().optional(),
-  name: z.string().min(1),
+  productId: objectIdString.optional(),
+  name: z.string().trim().min(1).max(200),
   quantity: z.coerce.number().positive(),
   unitPrice: z.coerce.number().min(0),
-  discount: z.coerce.number().min(0).default(0),
-  total: z.coerce.number().min(0),
+  /** Line discount in percent (0–100); `discount` is the older spelling. */
+  discountPercent: z.coerce.number().min(0).max(100).optional(),
+  discount: z.coerce.number().min(0).max(100).optional(),
 });
 
 export const createOrderSchema = z.object({
-  clientId: z.string().min(1),
-  employeeId: z.string().optional(),
-  items: z.array(orderItemSchema).min(1),
-  taxAmount: z.coerce.number().min(0).default(0),
-  status: z
-    .enum(['draft', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'])
-    .default('draft'),
+  clientId: objectIdString,
+  /** Honoured only for a field manager (book an order for a rep). */
+  employeeId: objectIdString.optional(),
+  items: z.array(orderItemSchema).min(1).max(200),
   deliveryDate: z.coerce.date().optional(),
-  notes: z.string().optional(),
-  visitId: z.string().optional(),
+  notes: z.string().trim().max(2000).optional(),
+  visitId: objectIdString.optional(),
 });
 
-export const updateOrderSchema = createOrderSchema.partial();
-
-export const statusSchema = z.object({
-  status: z.enum([
-    'draft',
-    'confirmed',
-    'processing',
-    'shipped',
-    'delivered',
-    'cancelled',
-  ]),
+export const updateOrderSchema = z.object({
+  items: z.array(orderItemSchema).min(1).max(200).optional(),
+  deliveryDate: z.coerce.date().optional(),
+  notes: z.string().trim().max(2000).optional(),
 });
+
+export const statusSchema = z.object({ status: statusSchema_ });
 
 export const listQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(200).default(20),
-  employeeId: z.string().optional(),
-  clientId: z.string().optional(),
-  status: z.string().optional(),
-  paymentStatus: z.string().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-  sort: z.string().optional(),
+  ...pageParams,
+  employeeId: objectIdString.optional(),
+  clientId: objectIdString.optional(),
+  status: statusSchema_.optional(),
+  paymentStatus: z.enum(['pending', 'partial', 'paid']).optional(),
+  from: dateBound('from').optional(),
+  to: dateBound('to').optional(),
+  sort: sortParam(['createdAt', 'totalAmount', 'orderNumber']).optional(),
 });
 
-/** 404 if the order does not exist; 403 unless it is the caller's or they manage. */
-async function assertOrderAccess(req: Request, id: string): Promise<void> {
-  const order = await ProductOrder.findById(id).select('employeeId').lean().exec();
-  if (!order) throw new NotFoundError('Order not found');
-  await assertOwnOrPermission(req, order.employeeId, MANAGE);
+export const myQuerySchema = z.object({ ...pageParams, status: statusSchema_.optional() });
+
+export const reportQuerySchema = z.object({
+  from: dateBound('from').optional(),
+  to: dateBound('to').optional(),
+  employeeId: objectIdString.optional(),
+});
+
+const LIST_POPULATE = [
+  { path: 'clientId', select: 'name company' },
+  { path: 'employeeId', select: 'firstName lastName employeeId' },
+];
+
+type ItemInput = z.infer<typeof orderItemSchema>;
+
+/** Server-side pricing: line = qty × unit price × (1 − discount %), paise-rounded. */
+function priceItems(items: ItemInput[]) {
+  const lines = items.map((i) => {
+    const discountPercent = i.discountPercent ?? i.discount ?? 0;
+    const gross = i.quantity * i.unitPrice;
+    const total = roundMoney(gross * (1 - discountPercent / 100));
+    return {
+      ...(i.productId ? { productId: i.productId } : {}),
+      name: i.name,
+      quantity: i.quantity,
+      unitPrice: roundMoney(i.unitPrice),
+      discount: discountPercent,
+      total,
+    };
+  });
+  const subtotal = roundMoney(lines.reduce((s, l) => s + l.total, 0));
+  return { items: lines, subtotal, taxAmount: 0, totalAmount: subtotal };
 }
 
-async function nextOrderNumber(): Promise<string> {
-  const now = new Date();
-  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const prefix = `ORD-${ym}-`;
-  const last = await ProductOrder.findOne({ orderNumber: { $regex: `^${prefix}` } })
-    .sort({ orderNumber: -1 })
-    .select('orderNumber')
-    .exec();
-  let seq = 1;
-  if (last) {
-    const m = last.orderNumber.match(/-(\d+)$/);
-    if (m) seq = Number(m[1]) + 1;
-  }
-  return `${prefix}${String(seq).padStart(4, '0')}`;
+async function loadOrder(id: string): Promise<IProductOrder> {
+  const order = await ProductOrder.findById(id).exec();
+  if (!order) throw new NotFoundError('Order not found');
+  return order;
 }
+
+/** The money-relevant snapshot of an order for the audit trail. */
+const moneyView = (o: Pick<IProductOrder, 'orderNumber' | 'status' | 'subtotal' | 'taxAmount' | 'totalAmount' | 'clientId' | 'employeeId'>) => ({
+  orderNumber: o.orderNumber,
+  status: o.status,
+  subtotal: o.subtotal,
+  taxAmount: o.taxAmount,
+  totalAmount: o.totalAmount,
+  clientId: String(o.clientId),
+  employeeId: String(o.employeeId),
+});
 
 export async function listOrders(req: Request, res: Response): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const q = req.query as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
-  if (q.employeeId) filter.employeeId = q.employeeId;
-  // Reps only ever see their own (`null` — no employee record — matches nothing).
-  if (!hasPermission(req.user, MANAGE)) filter.employeeId = await currentEmployeeId(req);
+  const q = req.query as unknown as z.infer<typeof listQuerySchema>;
+  const filter: Record<string, unknown> = await fieldScope(req, q.employeeId);
   if (q.clientId) filter.clientId = q.clientId;
-  if (q.status) filter.status = q.status;
+  if (q.status) filter.status = q.status === 'pending' ? { $in: OPEN_STATUSES } : q.status;
   if (q.paymentStatus) filter.paymentStatus = q.paymentStatus;
-  if (q.from || q.to) {
-    filter.createdAt = {};
-    if (q.from) filter.createdAt.$gte = q.from;
-    if (q.to) filter.createdAt.$lte = q.to;
-  }
+  const range = rangeFilter(q.from, q.to);
+  if (range) filter.createdAt = range;
   const result = await ProductOrder.paginate(filter, {
     page: q.page,
     limit: q.limit,
     sort: q.sort ?? '-createdAt',
-    populate: [
-      { path: 'clientId', select: 'name company' },
-      { path: 'employeeId', select: 'firstName lastName employeeCode' },
-    ],
+    populate: LIST_POPULATE,
   });
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export async function myOrders(req: Request, res: Response): Promise<void> {
-  const empId = await currentEmployeeId(req);
-  if (!empId) throw new ValidationAppError('Employee profile not found');
-  const docs = await ProductOrder.find({ employeeId: empId })
-    .populate('clientId', 'name company')
-    .sort({ createdAt: -1 })
-    .exec();
-  res.json({ success: true, data: docs });
+  const q = req.query as unknown as z.infer<typeof myQuerySchema>;
+  const filter: Record<string, unknown> = { employeeId: await requireOwnEmployeeId(req) };
+  if (q.status) filter.status = q.status === 'pending' ? { $in: OPEN_STATUSES } : q.status;
+  const result = await ProductOrder.paginate(filter, {
+    page: q.page,
+    limit: q.limit,
+    sort: '-createdAt',
+    populate: [{ path: 'clientId', select: 'name company' }],
+  });
+  res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export async function getOrder(req: Request, res: Response): Promise<void> {
   const doc = await ProductOrder.findById(String(req.params.id))
     .populate('clientId', 'name company phone address')
-    .populate('employeeId', 'firstName lastName employeeCode')
+    .populate('employeeId', 'firstName lastName employeeId')
     .exec();
   if (!doc) throw new NotFoundError('Order not found');
-  await assertOwnOrPermission(req, doc.employeeId, MANAGE);
+  await assertFieldRead(req, doc.employeeId);
   res.json({ success: true, data: doc });
 }
 
 export async function createOrder(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createOrderSchema>;
-  // Only a manager may book an order against another rep.
-  let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
-  if (!employeeId) {
-    const own = await currentEmployeeId(req);
-    if (!own) throw new ValidationAppError('employeeId required');
-    employeeId = String(own);
+  const employeeId = await ownerForCreate(req, body.employeeId);
+  const client = await Client.findById(body.clientId).select('_id').lean().exec();
+  if (!client) throw new NotFoundError('Client not found');
+  if (body.visitId) {
+    const visit = await Visit.findById(body.visitId).select('employeeId clientId').lean().exec();
+    if (!visit) throw new NotFoundError('Visit not found');
+    await assertFieldWrite(req, visit.employeeId);
+    if (String(visit.clientId) !== body.clientId) {
+      throw new ValidationAppError('The visit is for a different client');
+    }
   }
-  const subtotal = body.items.reduce((s, i) => s + i.total, 0);
-  const totalAmount = subtotal + (body.taxAmount ?? 0);
-  const orderNumber = await nextOrderNumber();
-  const doc = await ProductOrder.create({
-    ...body,
-    employeeId,
-    orderNumber,
-    subtotal,
-    totalAmount,
-  });
-  // increment client totalOrders
-  await Client.updateOne(
-    { _id: body.clientId },
-    { $inc: { totalOrders: 1, outstandingAmount: totalAmount } },
-  ).exec();
-  void audit({ action: 'create', entity: 'ProductOrder', entityId: String(doc._id) });
+
+  const priced = priceItems(body.items);
+  const doc = await createWithNumber(
+    () => nextYearlyNumber({ prefix: 'ORD', model: ProductOrder, field: 'orderNumber' }),
+    (orderNumber) =>
+      ProductOrder.create({
+        orderNumber,
+        employeeId,
+        clientId: body.clientId,
+        ...priced,
+        status: 'pending',
+        deliveryDate: body.deliveryDate,
+        notes: body.notes,
+        visitId: body.visitId,
+      }),
+    'orderNumber',
+  );
+  if (body.visitId) await Visit.updateOne({ _id: body.visitId }, { $set: { orderPlaced: doc._id } }).exec();
+  await recomputeAfterMutation({ clients: [doc.clientId] });
+  await audit({ action: 'create', entity: 'ProductOrder', entityId: String(doc._id), after: moneyView(doc) });
   res.status(201).json({ success: true, data: doc });
 }
 
+/** Edit notes/delivery date; items only while the order is still pending (repriced here). */
 export async function updateOrder(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateOrderSchema>;
-  await assertOrderAccess(req, String(req.params.id));
-  const update: Record<string, unknown> = { ...body };
-  // A rep can't hand their order to someone else.
-  if (!hasPermission(req.user, MANAGE)) delete update.employeeId;
+  const order = await loadOrder(String(req.params.id));
+  await assertFieldWrite(req, order.employeeId);
+
+  const set: Record<string, unknown> = {};
+  if (body.notes !== undefined) set.notes = body.notes;
+  if (body.deliveryDate !== undefined) set.deliveryDate = body.deliveryDate;
+  const filter: Record<string, unknown> = { _id: order._id };
   if (body.items) {
-    const subtotal = body.items.reduce((s, i) => s + i.total, 0);
-    update.subtotal = subtotal;
-    update.totalAmount = subtotal + (body.taxAmount ?? 0);
+    if (!OPEN_STATUSES.includes(order.status)) {
+      throw new AppError('Only a pending order can be changed', 409, 'ORDER_LOCKED');
+    }
+    const priced = priceItems(body.items);
+    if (priced.totalAmount < order.paidAmount) {
+      throw new AppError(
+        'The new total is below what has already been collected against this order',
+        400,
+        'ORDER_TOTAL_BELOW_PAID',
+      );
+    }
+    Object.assign(set, priced);
+    filter.status = { $in: OPEN_STATUSES }; // still pending when we write
   }
-  const doc = await ProductOrder.findByIdAndUpdate(String(req.params.id), update, {
-    new: true,
-  }).exec();
-  if (!doc) throw new NotFoundError('Order not found');
+
+  const doc = await ProductOrder.findOneAndUpdate(filter, { $set: set }, { new: true }).exec();
+  if (!doc) throw new AppError('Only a pending order can be changed', 409, 'ORDER_LOCKED');
+  if (body.items) {
+    await recomputeAfterMutation({ orders: [doc._id], clients: [doc.clientId] });
+    await audit({
+      action: 'update',
+      entity: 'ProductOrder',
+      entityId: String(doc._id),
+      before: moneyView(order),
+      after: moneyView(doc),
+    });
+  }
   res.json({ success: true, data: doc });
 }
 
+/** Soft-delete (field managers). An order with payments against it is cancelled instead. */
 export async function deleteOrder(req: Request, res: Response): Promise<void> {
-  const doc = await ProductOrder.findById(String(req.params.id)).exec();
-  if (!doc) throw new NotFoundError('Order not found');
+  const order = await loadOrder(String(req.params.id));
+  const payments = await PaymentCollection.countDocuments({ orderId: order._id }).exec();
+  if (payments > 0) {
+    throw new AppError(
+      'Payments are recorded against this order — cancel it, or move or delete the payments first',
+      409,
+      'ORDER_HAS_PAYMENTS',
+    );
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (doc as any).softDelete();
+  await (order as any).softDelete({ by: req.user?._id });
+  await recomputeAfterMutation({ clients: [order.clientId] });
+  await audit({ action: 'delete', entity: 'ProductOrder', entityId: String(order._id), before: moneyView(order) });
   res.json({ success: true, message: 'Order deleted' });
 }
 
 export async function updateOrderStatus(req: Request, res: Response): Promise<void> {
-  const body = req.body as z.infer<typeof statusSchema>;
-  await assertOrderAccess(req, String(req.params.id));
-  const doc = await ProductOrder.findByIdAndUpdate(
-    String(req.params.id),
-    { status: body.status },
+  const { status } = req.body as z.infer<typeof statusSchema>;
+  const order = await loadOrder(String(req.params.id));
+  await assertFieldWrite(req, order.employeeId);
+  const manager = canManageField(req);
+
+  if (status === 'pending') {
+    throw new AppError('An order cannot go back to pending', 409, 'INVALID_STATUS_TRANSITION');
+  }
+  const from = TRANSITIONS[status];
+  if (!from.includes(order.status)) {
+    throw new AppError(
+      `A ${order.status} order cannot become ${status}`,
+      409,
+      'INVALID_STATUS_TRANSITION',
+    );
+  }
+  // A rep may only withdraw their own pending order.
+  const repMayDo = status === 'cancelled' && OPEN_STATUSES.includes(order.status);
+  if (!manager && !repMayDo) {
+    throw new ForbiddenError('Only a field sales manager can confirm, deliver or cancel a confirmed order');
+  }
+
+  const now = new Date();
+  const stamp: Record<string, unknown> = { status };
+  if (status === 'confirmed') Object.assign(stamp, { confirmedAt: now, confirmedBy: req.user?._id });
+  if (status === 'delivered') Object.assign(stamp, { deliveredAt: now, deliveredBy: req.user?._id });
+  if (status === 'cancelled') Object.assign(stamp, { cancelledAt: now, cancelledBy: req.user?._id });
+
+  // Conditional on the status we checked, so concurrent transitions cannot both apply.
+  const doc = await ProductOrder.findOneAndUpdate(
+    { _id: order._id, status: order.status },
+    { $set: stamp },
     { new: true },
   ).exec();
-  if (!doc) throw new NotFoundError('Order not found');
+  if (!doc) throw new AppError('The order changed meanwhile — reload and try again', 409, 'INVALID_STATUS_TRANSITION');
+  await recomputeAfterMutation({ clients: [doc.clientId] });
+  await audit({
+    action: 'update',
+    entity: 'ProductOrder',
+    entityId: String(doc._id),
+    before: { status: order.status },
+    after: { status: doc.status, totalAmount: doc.totalAmount },
+  });
   res.json({ success: true, data: doc });
 }
 
+/** Totals by status over `[from, to)` (default: this IST month to now), in the caller's scope. */
 export async function orderReports(req: Request, res: Response): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const q = req.query as any;
-  const from = q.from ? new Date(q.from) : new Date(new Date().setDate(1));
-  const to = q.to ? new Date(q.to) : new Date();
-  const match: Record<string, unknown> = { createdAt: { $gte: from, $lte: to } };
-  // A rep's report covers their own orders only.
-  if (!hasPermission(req.user, MANAGE)) match.employeeId = await currentEmployeeId(req);
+  const q = req.query as unknown as z.infer<typeof reportQuerySchema>;
+  const { year, month } = businessYearMonth();
+  const from = q.from ?? businessMonthWindow(year, month).start;
+  const to = q.to ?? businessDayWindow().end;
+  const match: Record<string, unknown> = {
+    ...(await fieldScope(req, q.employeeId)),
+    createdAt: { $gte: from, $lt: to },
+    isDeleted: { $ne: true },
+  };
   const [byStatus, totals] = await Promise.all([
     ProductOrder.aggregate([
       { $match: match },
@@ -220,11 +355,6 @@ export async function orderReports(req: Request, res: Response): Promise<void> {
   ]);
   res.json({
     success: true,
-    data: {
-      from,
-      to,
-      byStatus,
-      totals: totals[0] ?? { count: 0, total: 0, paid: 0 },
-    },
+    data: { from, to, byStatus, totals: totals[0] ?? { count: 0, total: 0, paid: 0 } },
   });
 }

@@ -1,246 +1,411 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { Visit } from '../models/visit.model.js';
+import { Visit, type IVisit } from '../models/visit.model.js';
 import { Client } from '../models/client.model.js';
-import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
+import { env } from '../config/env.js';
+import { currentEmployeeId } from '../lib/access.js';
+import {
+  assertFieldRead,
+  assertFieldWrite,
+  canManageField,
+  fieldScope,
+  ownerForCreate,
+  requireOwnEmployeeId,
+} from '../lib/field-access.js';
+import {
+  businessDayWindow,
+  dateBound,
+  distanceMeters,
+  objectIdString,
+  pageParams,
+  pointOf,
+  rangeFilter,
+  sortParam,
+  windowForDateParam,
+} from '../lib/field-utils.js';
 
-/** Field managers see and edit every rep's visits; reps only their own. */
-const MANAGE = 'field-sales.manage';
+/*
+ * Lifecycle: `scheduled` (planned, POST /visits) → `in_progress` (check-in)
+ * → `completed` (check-out); `scheduled | in_progress → cancelled`. One open
+ * (`in_progress`) visit per rep; check-out happens once, after a check-in.
+ * Times are the server's clock — a client-supplied check-in/out time is ignored.
+ */
 
+const PURPOSES = ['sales', 'service', 'collection', 'followup', 'delivery', 'other'] as const;
+/** Mobile app spellings → stored purpose. */
+const PURPOSE_ALIASES: Record<string, (typeof PURPOSES)[number]> = {
+  support: 'service',
+  follow_up: 'followup',
+  'follow-up': 'followup',
+};
+const purposeSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? (PURPOSE_ALIASES[v] ?? v) : v),
+  z.enum(PURPOSES),
+);
+
+const OUTCOMES = ['positive', 'negative', 'neutral', 'followup_required'] as const;
+/** Mobile app outcomes → stored outcome. */
+const OUTCOME_ALIASES: Record<string, (typeof OUTCOMES)[number]> = {
+  successful: 'positive',
+  order_taken: 'positive',
+  payment_collected: 'positive',
+  follow_up_needed: 'followup_required',
+  not_available: 'negative',
+  other: 'neutral',
+};
+const outcomeSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? (OUTCOME_ALIASES[v] ?? v) : v),
+  z.enum(OUTCOMES),
+);
+
+const STATUSES = ['scheduled', 'in_progress', 'completed', 'cancelled'] as const;
+
+const latLng = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  accuracy: z.coerce.number().min(0).optional(),
+});
+/** A photo reference — the `url` returned by POST /field/uploads/photo. */
+const photoRef = z.string().trim().min(1).max(2048);
+const address = z.string().trim().max(500);
+const notes = z.string().trim().max(5000);
+
+/** A check-in/out point. `time` is accepted for compatibility and ignored. */
 const checkpointSchema = z.object({
-  time: z.coerce.date().optional(),
-  location: z
-    .object({
-      lat: z.coerce.number(),
-      lng: z.coerce.number(),
-      accuracy: z.coerce.number().optional(),
-    })
-    .optional(),
-  photo: z.string().url().optional(),
-  address: z.string().optional(),
+  location: latLng.optional(),
+  photo: photoRef.optional(),
+  address: address.optional(),
 });
 
 export const createVisitSchema = z.object({
-  employeeId: z.string().optional(),
-  clientId: z.string().min(1),
-  purpose: z
-    .enum(['sales', 'service', 'collection', 'followup', 'other'])
-    .default('sales'),
-  isPlanned: z.boolean().default(false),
-  notes: z.string().optional(),
-  status: z
-    .enum(['scheduled', 'in_progress', 'completed', 'cancelled'])
-    .default('scheduled'),
-  meetingWith: z.string().optional(),
+  /** Honoured only for a field manager (plan a visit for a rep). */
+  employeeId: objectIdString.optional(),
+  clientId: objectIdString,
+  purpose: purposeSchema.default('sales'),
+  isPlanned: z.boolean().default(true),
+  notes: notes.optional(),
+  /** A visit is planned here; check-in starts it. */
+  status: z.literal('scheduled').default('scheduled'),
+  meetingWith: z.string().trim().max(200).optional(),
 });
 
 export const updateVisitSchema = z.object({
-  purpose: z
-    .enum(['sales', 'service', 'collection', 'followup', 'other'])
-    .optional(),
-  notes: z.string().optional(),
-  outcome: z.enum(['positive', 'negative', 'neutral', 'followup_required']).optional(),
+  purpose: purposeSchema.optional(),
+  notes: notes.optional(),
+  outcome: outcomeSchema.optional(),
   nextFollowUpDate: z.coerce.date().optional(),
-  status: z
-    .enum(['scheduled', 'in_progress', 'completed', 'cancelled'])
-    .optional(),
-  photos: z.array(z.string()).optional(),
-  productsDiscussed: z.array(z.string()).optional(),
+  followUpDate: z.coerce.date().optional(),
+  status: z.enum(STATUSES).optional(),
+  photos: z.array(photoRef).max(20).optional(),
+  productsDiscussed: z.array(z.string().trim().max(200)).max(100).optional(),
+  meetingWith: z.string().trim().max(200).optional(),
 });
 
+/**
+ * Web shape `{ clientId, purpose, checkIn: { location, photo, address } }`; the
+ * mobile app's flat `{ clientId, purpose, location, photo, notes }` is
+ * accepted too. `visitId` starts a planned visit instead of creating one.
+ */
 export const checkInSchema = z.object({
-  clientId: z.string().min(1),
-  purpose: z
-    .enum(['sales', 'service', 'collection', 'followup', 'other'])
-    .default('sales'),
-  checkIn: checkpointSchema,
-  isPlanned: z.boolean().default(false),
+  clientId: objectIdString,
+  visitId: objectIdString.optional(),
+  purpose: purposeSchema.default('sales'),
+  isPlanned: z.boolean().optional(),
+  checkIn: checkpointSchema.optional(),
+  location: latLng.optional(),
+  photo: photoRef.optional(),
+  address: address.optional(),
+  notes: notes.optional(),
 });
 
+/** Web `{ checkOut: {...}, notes, outcome }`; mobile flat `{ location, photo, outcome, followUpDate, ... }`. */
 export const checkOutSchema = z.object({
-  checkOut: checkpointSchema,
-  notes: z.string().optional(),
-  outcome: z.enum(['positive', 'negative', 'neutral', 'followup_required']).optional(),
-  productsDiscussed: z.array(z.string()).optional(),
+  checkOut: checkpointSchema.optional(),
+  location: latLng.optional(),
+  photo: photoRef.optional(),
+  address: address.optional(),
+  notes: notes.optional(),
+  outcome: outcomeSchema.optional(),
+  nextFollowUpDate: z.coerce.date().optional(),
+  followUpDate: z.coerce.date().optional(),
+  productsDiscussed: z.array(z.string().trim().max(200)).max(100).optional(),
 });
 
 export const listQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(200).default(20),
-  employeeId: z.string().optional(),
-  clientId: z.string().optional(),
-  status: z.string().optional(),
-  purpose: z.string().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-  sort: z.string().optional(),
+  ...pageParams,
+  employeeId: objectIdString.optional(),
+  clientId: objectIdString.optional(),
+  status: z.enum(STATUSES).optional(),
+  purpose: purposeSchema.optional(),
+  from: dateBound('from').optional(),
+  to: dateBound('to').optional(),
+  sort: sortParam(['createdAt', 'checkIn.time', 'checkOut.time']).optional(),
 });
 
-/** 404 if the visit does not exist; 403 unless it is the caller's or they manage. */
-async function assertVisitAccess(req: Request, id: string): Promise<void> {
-  const visit = await Visit.findById(id).select('employeeId').lean().exec();
+const LIST_POPULATE = [
+  { path: 'clientId', select: 'name category company address location' },
+  { path: 'employeeId', select: 'firstName lastName employeeId avatar' },
+];
+
+/** Visits that happened (checked in) or were logged within `[start, end)`. */
+function inWindow(start: Date, end: Date): Record<string, unknown> {
+  const range = { $gte: start, $lt: end };
+  return { $or: [{ 'checkIn.time': range }, { 'checkIn.time': null, createdAt: range }] };
+}
+
+async function loadVisit(id: string) {
+  const visit = await Visit.findById(id).exec();
   if (!visit) throw new NotFoundError('Visit not found');
-  await assertOwnOrPermission(req, visit.employeeId, MANAGE);
+  return visit;
+}
+
+async function loadClient(id: string) {
+  const client = await Client.findById(id).select('name location').lean().exec();
+  if (!client) throw new NotFoundError('Client not found');
+  return client;
+}
+
+const isDuplicateKey = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
+
+function alreadyOpen(visitId?: unknown): AppError {
+  return new AppError(
+    'You already have a visit in progress — check out of it first',
+    409,
+    'VISIT_ALREADY_OPEN',
+    visitId ? { visitId: String(visitId) } : undefined,
+  );
 }
 
 export async function listVisits(req: Request, res: Response): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const q = req.query as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const filter: Record<string, any> = {};
-  if (q.employeeId) filter.employeeId = q.employeeId;
-  // Reps only ever see their own (`null` — no employee record — matches nothing).
-  if (!hasPermission(req.user, MANAGE)) filter.employeeId = await currentEmployeeId(req);
+  const q = req.query as unknown as z.infer<typeof listQuerySchema>;
+  const filter: Record<string, unknown> = await fieldScope(req, q.employeeId);
   if (q.clientId) filter.clientId = q.clientId;
   if (q.status) filter.status = q.status;
   if (q.purpose) filter.purpose = q.purpose;
-  if (q.from || q.to) {
-    filter.createdAt = {};
-    if (q.from) filter.createdAt.$gte = q.from;
-    if (q.to) filter.createdAt.$lte = q.to;
-  }
+  const range = rangeFilter(q.from, q.to);
+  if (range) filter.createdAt = range;
   const result = await Visit.paginate(filter, {
     page: q.page,
     limit: q.limit,
     sort: q.sort ?? '-createdAt',
-    populate: [
-      { path: 'clientId', select: 'name category company' },
-      { path: 'employeeId', select: 'firstName lastName employeeCode' },
-    ],
+    populate: LIST_POPULATE,
   });
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
+/** The caller's visits today (IST); a field manager without an employee record sees everyone's. */
 export async function todayVisits(req: Request, res: Response): Promise<void> {
+  const { start, end } = businessDayWindow();
+  const filter: Record<string, unknown> = inWindow(start, end);
   const empId = await currentEmployeeId(req);
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-  const filter: Record<string, unknown> = { createdAt: { $gte: start, $lte: end } };
-  // A manager without an employee record still sees everyone's day; anyone
-  // else is pinned to their own (or nothing, if they have no record).
-  if (empId || !hasPermission(req.user, MANAGE)) filter.employeeId = empId;
+  if (empId) filter.employeeId = empId;
+  else if (!canManageField(req)) await requireOwnEmployeeId(req);
   const docs = await Visit.find(filter)
     .populate('clientId', 'name category address location')
     .sort({ createdAt: -1 })
+    .limit(200)
     .exec();
   res.json({ success: true, data: docs });
 }
 
 export async function getVisit(req: Request, res: Response): Promise<void> {
   const doc = await Visit.findById(String(req.params.id))
-    .populate('clientId', 'name category company phone')
-    .populate('employeeId', 'firstName lastName employeeCode')
+    .populate('clientId', 'name category company phone address location')
+    .populate('employeeId', 'firstName lastName employeeId avatar')
     .exec();
   if (!doc) throw new NotFoundError('Visit not found');
-  await assertOwnOrPermission(req, doc.employeeId, MANAGE);
+  await assertFieldRead(req, doc.employeeId);
   res.json({ success: true, data: doc });
 }
 
+/** Plan a visit (status `scheduled`); the rep starts it with check-in. */
 export async function createVisit(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createVisitSchema>;
-  // Only a manager may log a visit against another rep.
-  let employeeId = hasPermission(req.user, MANAGE) ? body.employeeId : undefined;
-  if (!employeeId) {
-    const own = await currentEmployeeId(req);
-    if (!own) throw new ValidationAppError('employeeId required');
-    employeeId = String(own);
-  }
-  const doc = await Visit.create({ ...body, employeeId });
+  const employeeId = await ownerForCreate(req, body.employeeId);
+  await loadClient(body.clientId);
+  const doc = await Visit.create({
+    employeeId,
+    clientId: body.clientId,
+    purpose: body.purpose,
+    isPlanned: body.isPlanned,
+    notes: body.notes,
+    meetingWith: body.meetingWith,
+    status: 'scheduled',
+  });
   void audit({ action: 'create', entity: 'Visit', entityId: String(doc._id) });
   res.status(201).json({ success: true, data: doc });
 }
 
 export async function updateVisit(req: Request, res: Response): Promise<void> {
-  await assertVisitAccess(req, String(req.params.id));
-  const update: Record<string, unknown> = { ...(req.body as z.infer<typeof updateVisitSchema>) };
-  // A rep can't hand their visit to someone else (the schema does not accept
-  // employeeId today; this keeps it so if the schema ever grows one).
-  if (!hasPermission(req.user, MANAGE)) delete update.employeeId;
-  const doc = await Visit.findByIdAndUpdate(String(req.params.id), update, {
-    new: true,
-  }).exec();
-  if (!doc) throw new NotFoundError('Visit not found');
+  const body = req.body as z.infer<typeof updateVisitSchema>;
+  const visit = await loadVisit(String(req.params.id));
+  await assertFieldWrite(req, visit.employeeId);
+
+  const set: Record<string, unknown> = {};
+  for (const key of ['purpose', 'notes', 'outcome', 'photos', 'productsDiscussed', 'meetingWith'] as const) {
+    if (body[key] !== undefined) set[key] = body[key];
+  }
+  const followUp = body.nextFollowUpDate ?? body.followUpDate;
+  if (followUp) set.nextFollowUpDate = followUp;
+
+  // Status changes follow the lifecycle; completion here closes an open visit
+  // the same way a check-out does.
+  const expected: Record<string, unknown> = {};
+  if (body.status && body.status !== visit.status) {
+    if (visit.status === 'completed' || visit.status === 'cancelled') {
+      throw new AppError(`The visit is already ${visit.status}`, 409, 'VISIT_CLOSED');
+    }
+    if (body.status === 'in_progress') {
+      throw new ValidationAppError('Start a visit with POST /field/visits/check-in');
+    }
+    if (body.status === 'scheduled') {
+      throw new AppError('A started visit cannot go back to scheduled', 409, 'INVALID_STATUS_TRANSITION');
+    }
+    if (body.status === 'completed') {
+      if (!visit.checkIn?.time) {
+        throw new AppError('A visit can only be completed after a check-in', 409, 'VISIT_NOT_CHECKED_IN');
+      }
+      const now = new Date();
+      set['checkOut.time'] = now;
+      set.duration = Math.max(0, Math.round((now.getTime() - visit.checkIn.time.getTime()) / 60_000));
+    }
+    set.status = body.status;
+    expected.status = visit.status; // nobody changed it in between
+  }
+
+  const doc = await Visit.findOneAndUpdate({ _id: visit._id, ...expected }, { $set: set }, { new: true }).exec();
+  if (!doc) throw new AppError('The visit changed meanwhile — reload and try again', 409, 'VISIT_CHANGED');
   res.json({ success: true, data: doc });
 }
 
 export async function deleteVisit(req: Request, res: Response): Promise<void> {
-  const doc = await Visit.findById(String(req.params.id)).exec();
-  if (!doc) throw new NotFoundError('Visit not found');
+  const doc = await loadVisit(String(req.params.id));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (doc as any).softDelete();
+  await (doc as any).softDelete({ by: req.user?._id });
+  void audit({ action: 'delete', entity: 'Visit', entityId: String(doc._id) });
   res.json({ success: true, message: 'Visit deleted' });
 }
 
+/**
+ * Start a visit at a client. Stores how far the check-in fix was from the
+ * client's pin and flags it (`locationMismatch`) beyond FIELD_VISIT_RADIUS_M —
+ * a flag for the manager, never a refusal.
+ */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkInSchema>;
-  const empId = await currentEmployeeId(req);
-  if (!empId) throw new ValidationAppError('Employee profile not found');
+  const empId = await requireOwnEmployeeId(req);
+  const client = await loadClient(body.clientId);
 
-  const checkInPoint = {
-    ...body.checkIn,
-    time: body.checkIn.time ?? new Date(),
+  const location = body.checkIn?.location ?? body.location;
+  const point = {
+    time: new Date(),
+    ...(location ? { location } : {}),
+    ...((body.checkIn?.photo ?? body.photo) ? { photo: body.checkIn?.photo ?? body.photo } : {}),
+    ...((body.checkIn?.address ?? body.address) ? { address: body.checkIn?.address ?? body.address } : {}),
+  };
+  const clientPoint = pointOf(client.location?.coordinates);
+  const distanceFromClientM =
+    location && clientPoint ? Math.round(distanceMeters(location, clientPoint)) : undefined;
+  const locationMismatch = distanceFromClientM !== undefined && distanceFromClientM > env.FIELD_VISIT_RADIUS_M;
+
+  const open = await Visit.findOne({ employeeId: empId, status: 'in_progress' }).select('_id').lean().exec();
+  if (open) throw alreadyOpen(open._id);
+
+  const fields = {
+    purpose: body.purpose,
+    checkIn: point,
+    status: 'in_progress' as const,
+    distanceFromClientM,
+    locationMismatch,
+    ...(body.notes ? { notes: body.notes } : {}),
   };
 
-  const doc = await Visit.create({
-    employeeId: empId,
-    clientId: body.clientId,
-    purpose: body.purpose,
-    isPlanned: body.isPlanned,
-    checkIn: checkInPoint,
-    status: 'in_progress',
-  });
+  let doc: IVisit | null;
+  try {
+    if (body.visitId) {
+      const planned = await loadVisit(body.visitId);
+      await assertFieldWrite(req, planned.employeeId);
+      if (String(planned.employeeId) !== String(empId)) {
+        throw new AppError('Only the assigned rep can start this visit', 403, 'FORBIDDEN');
+      }
+      if (String(planned.clientId) !== String(client._id)) {
+        throw new ValidationAppError('The planned visit is for a different client');
+      }
+      doc = await Visit.findOneAndUpdate(
+        { _id: planned._id, status: 'scheduled' },
+        { $set: fields },
+        { new: true },
+      ).exec();
+      if (!doc) throw new AppError('The planned visit has already been started or closed', 409, 'VISIT_CLOSED');
+    } else {
+      doc = await Visit.create({
+        employeeId: empId,
+        clientId: client._id,
+        isPlanned: body.isPlanned ?? false,
+        ...fields,
+      });
+    }
+  } catch (err) {
+    // The partial unique index catches a concurrent second check-in.
+    if (isDuplicateKey(err)) throw alreadyOpen();
+    throw err;
+  }
 
-  // Update client lastVisitDate
-  await Client.updateOne(
-    { _id: body.clientId },
-    { $set: { lastVisitDate: checkInPoint.time } },
-  ).exec();
-
+  await Client.updateOne({ _id: client._id }, { $set: { lastVisitDate: point.time } }).exec();
   res.status(201).json({ success: true, data: doc });
 }
 
+/** Close an open visit — once, and only after its check-in. */
 export async function checkOut(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkOutSchema>;
-  const visit = await Visit.findById(String(req.params.id)).exec();
-  if (!visit) throw new NotFoundError('Visit not found');
-  await assertOwnOrPermission(req, visit.employeeId, MANAGE);
-  if (!visit.checkIn?.time) {
-    throw new ValidationAppError('Visit has no check-in');
+  const visit = await loadVisit(String(req.params.id));
+  await assertFieldWrite(req, visit.employeeId);
+  if (visit.checkOut?.time || visit.status === 'completed') {
+    throw new AppError('This visit is already checked out', 409, 'VISIT_ALREADY_CHECKED_OUT');
   }
-  const checkOutPoint = {
-    ...body.checkOut,
-    time: body.checkOut.time ?? new Date(),
+  if (visit.status === 'cancelled') throw new AppError('The visit was cancelled', 409, 'VISIT_CLOSED');
+  if (!visit.checkIn?.time) {
+    throw new AppError('Check in to the visit before checking out', 409, 'VISIT_NOT_CHECKED_IN');
+  }
+
+  const now = new Date();
+  const location = body.checkOut?.location ?? body.location;
+  const photo = body.checkOut?.photo ?? body.photo;
+  const addr = body.checkOut?.address ?? body.address;
+  const set: Record<string, unknown> = {
+    checkOut: { time: now, ...(location ? { location } : {}), ...(photo ? { photo } : {}), ...(addr ? { address: addr } : {}) },
+    duration: Math.max(0, Math.round((now.getTime() - visit.checkIn.time.getTime()) / 60_000)),
+    status: 'completed',
   };
-  visit.checkOut = checkOutPoint;
-  visit.duration = Math.round(
-    ((checkOutPoint.time as Date).getTime() - visit.checkIn.time.getTime()) / 60000,
-  );
-  if (body.notes) visit.notes = body.notes;
-  if (body.outcome) visit.outcome = body.outcome;
-  if (body.productsDiscussed) visit.productsDiscussed = body.productsDiscussed;
-  visit.status = 'completed';
-  await visit.save();
-  res.json({ success: true, data: visit });
+  if (body.notes) set.notes = body.notes;
+  if (body.outcome) set.outcome = body.outcome;
+  const followUp = body.nextFollowUpDate ?? body.followUpDate;
+  if (followUp) set.nextFollowUpDate = followUp;
+  if (body.productsDiscussed) set.productsDiscussed = body.productsDiscussed;
+
+  // Conditional on still being open, so two concurrent check-outs cannot both win.
+  const doc = await Visit.findOneAndUpdate(
+    { _id: visit._id, status: 'in_progress', 'checkOut.time': null },
+    { $set: set },
+    { new: true },
+  ).exec();
+  if (!doc) throw new AppError('This visit is already checked out', 409, 'VISIT_ALREADY_CHECKED_OUT');
+  res.json({ success: true, data: doc });
 }
 
+/** A rep's visits on one IST day (`?date=YYYY-MM-DD`, default today). */
 export async function visitTimeline(req: Request, res: Response): Promise<void> {
   const employeeId = String(req.params.employeeId);
-  await assertOwnOrPermission(req, employeeId, MANAGE);
-  const date = req.query.date ? new Date(String(req.query.date)) : new Date();
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
-  const docs = await Visit.find({
-    employeeId,
-    createdAt: { $gte: start, $lte: end },
-  })
+  if (!objectIdString.safeParse(employeeId).success) throw new ValidationAppError('Invalid employee id');
+  await assertFieldRead(req, employeeId);
+  const { start, end } = windowForDateParam(req.query.date);
+  const docs = await Visit.find({ employeeId, ...inWindow(start, end) })
     .populate('clientId', 'name address location')
-    .sort({ createdAt: 1 })
+    .sort({ 'checkIn.time': 1, createdAt: 1 })
+    .limit(500)
     .exec();
   res.json({ success: true, data: docs });
 }

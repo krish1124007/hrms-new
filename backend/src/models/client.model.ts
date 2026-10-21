@@ -41,7 +41,9 @@ export interface IClient extends Document {
   assignedTo?: Types.ObjectId;
   territory?: string;
   lastVisitDate?: Date;
+  /** Ledger figures — recomputed from orders/payments (services/field-ledger.service.ts), never written by clients. */
   totalOrders: number;
+  totalOrderValue: number;
   totalPayments: number;
   outstandingAmount: number;
   notes: IClientNote[];
@@ -88,6 +90,7 @@ const clientSchema = new Schema<IClient>({
   territory: String,
   lastVisitDate: Date,
   totalOrders: { type: Number, default: 0 },
+  totalOrderValue: { type: Number, default: 0 },
   totalPayments: { type: Number, default: 0 },
   outstandingAmount: { type: Number, default: 0 },
   notes: { type: [noteSchema], default: [] },

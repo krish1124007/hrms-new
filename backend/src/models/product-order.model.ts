@@ -6,13 +6,20 @@ import {
   type PaginateModel,
 } from '../lib/mongoose-plugins.js';
 
+/**
+ * `pending → confirmed → delivered`, `pending | confirmed → cancelled`
+ * (controllers/field-orders.controller.ts). `draft`, `processing` and
+ * `shipped` are legacy values older orders may still carry: `draft` behaves as
+ * `pending`, `processing`/`shipped` as `confirmed`.
+ */
 export type OrderStatus =
-  | 'draft'
+  | 'pending'
   | 'confirmed'
-  | 'processing'
-  | 'shipped'
   | 'delivered'
-  | 'cancelled';
+  | 'cancelled'
+  | 'draft'
+  | 'processing'
+  | 'shipped';
 export type OrderPaymentStatus = 'pending' | 'partial' | 'paid';
 
 export interface IOrderItem {
@@ -38,6 +45,12 @@ export interface IProductOrder extends Document {
   visitId?: Types.ObjectId;
   paymentStatus: OrderPaymentStatus;
   paidAmount: number;
+  confirmedAt?: Date;
+  confirmedBy?: Types.ObjectId;
+  deliveredAt?: Date;
+  deliveredBy?: Types.ObjectId;
+  cancelledAt?: Date;
+  cancelledBy?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,8 +77,8 @@ const productOrderSchema = new Schema<IProductOrder>({
   totalAmount: { type: Number, default: 0 },
   status: {
     type: String,
-    enum: ['draft', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'],
-    default: 'draft',
+    enum: ['pending', 'confirmed', 'delivered', 'cancelled', 'draft', 'processing', 'shipped'],
+    default: 'pending',
   },
   deliveryDate: Date,
   notes: String,
@@ -76,6 +89,12 @@ const productOrderSchema = new Schema<IProductOrder>({
     default: 'pending',
   },
   paidAmount: { type: Number, default: 0 },
+  confirmedAt: Date,
+  confirmedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  deliveredAt: Date,
+  deliveredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  cancelledAt: Date,
+  cancelledBy: { type: Schema.Types.ObjectId, ref: 'User' },
 });
 productOrderSchema.plugin(timestampPlugin);
 productOrderSchema.plugin(softDeletePlugin);
