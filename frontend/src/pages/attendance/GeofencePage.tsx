@@ -61,7 +61,7 @@ function GeoCirclePreview({
 }
 
 export default function GeofencePage(): ReactElement {
-  const { data, isLoading } = useGeofences({ limit: 100 });
+  const { data, isLoading, error, refetch } = useGeofences({ limit: 100 });
   const create = useCreateGeofence();
   const remove = useDeleteGeofence();
   const update = useUpdateGeofence();
@@ -292,6 +292,8 @@ export default function GeofencePage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No geofence zones"
         emptyDescription="Create a circle zone to enforce location-based clock-in"

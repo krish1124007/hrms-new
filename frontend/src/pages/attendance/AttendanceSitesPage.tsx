@@ -19,11 +19,13 @@ import {
   useDeleteSite,
 } from '@/hooks/use-attendance';
 import type { AttendanceSite } from '@/lib/attendance.api';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 export default function AttendanceSitesPage(): ReactElement {
-  const { data, isLoading } = useAttendanceSites({ limit: 100 });
+  const { data, isLoading, error, refetch } = useAttendanceSites({ limit: 100 });
   const createSite = useCreateSite();
   const deleteSite = useDeleteSite();
+  const [deleting, setDeleting] = useState<AttendanceSite | null>(null);
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -85,8 +87,10 @@ export default function AttendanceSitesPage(): ReactElement {
       width: '60px',
       cell: (r) => (
         <button
-          onClick={() => deleteSite.mutate(r._id)}
+          onClick={() => setDeleting(r)}
           className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+          title="Delete site"
+          aria-label={`Delete site ${r.name}`}
         >
           <Trash2 className="size-4" />
         </button>
@@ -116,9 +120,23 @@ export default function AttendanceSitesPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No sites configured"
         emptyDescription="Add your office locations to enable site-based check-in"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete site"
+        description={`Delete "${deleting?.name ?? ''}"? Employees can no longer check in at this site.`}
+        confirmLabel="Delete site"
+        loading={deleteSite.isPending}
+        onConfirm={() => {
+          if (deleting) deleteSite.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
       />
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">

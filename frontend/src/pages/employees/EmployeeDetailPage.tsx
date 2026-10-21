@@ -40,6 +40,8 @@ import {
   useRestoreEmployee,
 } from '@/hooks/use-systemcore';
 import { DeleteEmployeeDialog } from '@/components/common/DeleteEmployeeDialog';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { formatDate } from '@/lib/format';
 import { EmployeeStatusDialog } from '@/components/employees/EmployeeStatusDialog';
 import { businessDayKey, todayKey } from '@/lib/business-day';
 import { documentsApi } from '@/lib/documents.api';
@@ -213,7 +215,7 @@ export default function EmployeeDetailPage(): ReactElement {
                 <CardTitle>Personal Information</CardTitle>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-4">
-                <Field label="Date of Birth" value={e.dateOfBirth?.slice(0, 10)} />
+                <Field label="Date of Birth" value={e.dateOfBirth ? formatDate(e.dateOfBirth) : undefined} />
                 <Field label="Gender" value={e.gender} />
                 <Field label="Marital Status" value={e.maritalStatus} />
                 <Field label="Blood Group" value={e.bloodGroup} />
@@ -290,11 +292,11 @@ export default function EmployeeDetailPage(): ReactElement {
               <Field label="Work Location" value={e.workLocation} />
               <Field
                 label="Joining Date"
-                value={e.joiningDate ? new Date(e.joiningDate).toLocaleDateString('en-IN') : undefined}
+                value={e.joiningDate ? formatDate(e.joiningDate) : undefined}
               />
               <Field
                 label="Confirmation"
-                value={e.confirmationDate ? new Date(e.confirmationDate).toLocaleDateString('en-IN') : undefined}
+                value={e.confirmationDate ? formatDate(e.confirmationDate) : undefined}
               />
               <Field label="Notice Period (days)" value={e.noticePeriod} />
               <Field label="Field Staff" value={e.isFieldStaff ? 'Yes' : 'No'} />
@@ -387,6 +389,7 @@ function DocumentsTab({
 
   const addDoc = useAddEmployeeDocument();
   const removeDoc = useRemoveEmployeeDocument();
+  const [removing, setRemoving] = useState<{ _id: string; name: string } | null>(null);
 
   const reset = (): void => {
     setDocType(DOC_TYPES[0]);
@@ -454,7 +457,7 @@ function DocumentsTab({
                     <p className="truncate text-sm font-medium text-foreground">{d.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {d.type}
-                      {d.uploadedAt ? ` · ${new Date(d.uploadedAt).toLocaleDateString()}` : ''}
+                      {d.uploadedAt ? ` · ${formatDate(d.uploadedAt)}` : ''}
                     </p>
                   </div>
                 </div>
@@ -469,10 +472,9 @@ function DocumentsTab({
                   </a>
                   {d._id && (
                     <button
-                      onClick={() =>
-                        removeDoc.mutate({ id: employeeId, docId: d._id as string })
-                      }
+                      onClick={() => setRemoving({ _id: d._id as string, name: d.name })}
                       disabled={removeDoc.isPending}
+                      aria-label={`Remove document ${d.name}`}
                       className="rounded-md p-1.5 text-destructive hover:bg-destructive/10 disabled:opacity-40"
                       title="Remove document"
                     >
@@ -552,6 +554,23 @@ function DocumentsTab({
           </Button>
         </DialogFooter>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!removing}
+        onClose={() => setRemoving(null)}
+        title="Remove document"
+        description={`Remove "${removing?.name ?? ''}" from this employee's documents? This can't be undone from the app.`}
+        confirmLabel="Remove document"
+        loading={removeDoc.isPending}
+        onConfirm={() => {
+          if (removing) {
+            removeDoc.mutate(
+              { id: employeeId, docId: removing._id },
+              { onSuccess: () => setRemoving(null) },
+            );
+          }
+        }}
+      />
     </Card>
   );
 }

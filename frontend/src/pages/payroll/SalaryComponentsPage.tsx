@@ -27,6 +27,7 @@ import type {
   StatutoryType,
   SalaryComponentInput,
 } from '@/lib/payroll.api';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TYPE_LABEL: Record<ComponentType, string> = {
   earning: 'Earning',
@@ -57,10 +58,11 @@ const blank: FormState = {
 };
 
 export default function SalaryComponentsPage(): ReactElement {
-  const { data, isLoading } = useSalaryComponents({ limit: 200 });
+  const { data, isLoading, error, refetch } = useSalaryComponents({ limit: 200 });
   const create = useCreateComponent();
   const update = useUpdateComponent();
   const remove = useDeleteComponent();
+  const [deleting, setDeleting] = useState<SalaryComponent | null>(null);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -166,8 +168,10 @@ export default function SalaryComponentsPage(): ReactElement {
             <Pencil className="size-4" />
           </button>
           <button
-            onClick={() => remove.mutate(r._id)}
+            onClick={() => setDeleting(r)}
             className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+            title="Delete component"
+            aria-label={`Delete component ${r.name}`}
           >
             <Trash2 className="size-4" />
           </button>
@@ -198,9 +202,23 @@ export default function SalaryComponentsPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No salary components"
         emptyDescription="Create one to start building salary structures"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete salary component"
+        description={`Delete "${deleting?.name ?? ''}" (${deleting?.code ?? ''})? Check the salary structures that use it first — this can't be undone from the app.`}
+        confirmLabel="Delete component"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
       />
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">

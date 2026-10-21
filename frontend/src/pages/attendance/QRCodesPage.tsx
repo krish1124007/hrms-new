@@ -7,6 +7,8 @@ import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useQRCodes, useCreateQRCode, useDeleteQRCode } from '@/hooks/use-attendance';
 import { attendanceApi, type QRCodeRecord } from '@/lib/attendance.api';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 /**
  * Self-describing QR payload shared with the mobile scanner. The app parses
@@ -24,9 +26,10 @@ function qrImageUrl(data: string, size = 400): string {
 }
 
 export default function QRCodesPage(): ReactElement {
-  const { data, isLoading } = useQRCodes({ limit: 100 });
+  const { data, isLoading, error, refetch } = useQRCodes({ limit: 100 });
   const create = useCreateQRCode();
   const remove = useDeleteQRCode();
+  const [deleting, setDeleting] = useState<QRCodeRecord | null>(null);
 
   const [fullscreen, setFullscreen] = useState(false);
   const [dynamicCode, setDynamicCode] = useState<{ code: string; expiresAt: string } | null>(null);
@@ -65,12 +68,12 @@ export default function QRCodesPage(): ReactElement {
     {
       key: 'expires',
       header: 'Expires',
-      cell: (r) => (r.expiresAt ? new Date(r.expiresAt).toLocaleString() : 'Never'),
+      cell: (r) => (r.expiresAt ? formatDateTime(r.expiresAt) : 'Never'),
     },
     {
       key: 'created',
       header: 'Created',
-      cell: (r) => new Date(r.createdAt).toLocaleDateString(),
+      cell: (r) => formatDate(r.createdAt),
     },
     {
       key: 'actions',
@@ -86,8 +89,9 @@ export default function QRCodesPage(): ReactElement {
             <Maximize2 className="size-4" />
           </button>
           <button
-            onClick={() => remove.mutate(r._id)}
+            onClick={() => setDeleting(r)}
             title="Delete"
+            aria-label={`Delete QR code ${r.code}`}
             className="rounded p-1.5 text-destructive hover:bg-destructive/10"
           >
             <Trash2 className="size-4" />
@@ -186,9 +190,23 @@ export default function QRCodesPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No QR codes generated"
         emptyDescription="Create one to allow QR-based check-ins"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete QR code"
+        description={`Delete QR code ${deleting?.code ?? ''}? Printed copies of it stop working for check-in.`}
+        confirmLabel="Delete QR code"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
       />
     </div>
   );

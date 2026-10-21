@@ -26,6 +26,8 @@ import type {
   SalaryStructure,
   SalaryStructureInput,
 } from '@/lib/payroll.api';
+import { apiErrorMessage } from '@/lib/api-error';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 interface FormLine {
   componentId: string;
@@ -41,11 +43,12 @@ const blank: SalaryStructureInput = {
 };
 
 export default function SalaryStructuresPage(): ReactElement {
-  const { data: structuresData, isLoading } = useSalaryStructures();
+  const { data: structuresData, isLoading, error: structuresError } = useSalaryStructures();
   const { data: componentsData } = useSalaryComponents({ limit: 200 });
   const create = useCreateStructure();
   const update = useUpdateStructure();
   const remove = useDeleteStructure();
+  const [deleting, setDeleting] = useState<SalaryStructure | null>(null);
 
   const components = componentsData?.data ?? [];
   const structures = structuresData?.data ?? [];
@@ -132,6 +135,12 @@ export default function SalaryStructuresPage(): ReactElement {
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : structuresError ? (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-destructive">
+            Couldn't load salary structures: {apiErrorMessage(structuresError)}
+          </CardContent>
+        </Card>
       ) : structures.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -160,8 +169,10 @@ export default function SalaryStructuresPage(): ReactElement {
                       <Pencil className="size-4" />
                     </button>
                     <button
-                      onClick={() => remove.mutate(s._id)}
+                      onClick={() => setDeleting(s)}
                       className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+                      title="Delete structure"
+                      aria-label={`Delete structure ${s.name}`}
                     >
                       <Trash2 className="size-4" />
                     </button>
@@ -287,6 +298,18 @@ export default function SalaryStructuresPage(): ReactElement {
           </Button>
         </DialogFooter>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete salary structure"
+        description={`Delete "${deleting?.name ?? ''}"? Move the employees assigned to it to another structure first — this can't be undone from the app.`}
+        confirmLabel="Delete structure"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
+      />
     </div>
   );
 }

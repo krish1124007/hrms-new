@@ -29,6 +29,8 @@ import { useCreateLocation, useDeleteLocation, useLocations } from '@/hooks/use-
 import { usePermissions } from '@/hooks/use-permissions';
 import type { Location, LocationType } from '@/lib/locations.api';
 import { cn } from '@/lib/utils';
+import { apiErrorMessage } from '@/lib/api-error';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TYPE_CONFIG: Record<
   LocationType,
@@ -58,9 +60,10 @@ const TYPE_CONFIG: Record<
 
 export default function LocationsPage(): ReactElement {
   const [search, setSearch] = useState('');
-  const { data, isLoading } = useLocations({ limit: 100, search: search || undefined });
+  const { data, isLoading, error } = useLocations({ limit: 100, search: search || undefined });
   const createLocation = useCreateLocation();
   const deleteLocation = useDeleteLocation();
+  const [deleting, setDeleting] = useState<Location | null>(null);
   // Anyone signed in can read locations; changing them is `locations.manage`.
   const { has } = usePermissions();
   const canManage = has('locations.manage');
@@ -148,6 +151,11 @@ export default function LocationsPage(): ReactElement {
             <Skeleton key={i} className="h-44 rounded-lg" />
           ))}
         </div>
+      ) : error ? (
+        <div className="rounded-lg border border-dashed border-destructive/40 py-12 text-center text-sm">
+          <p className="font-medium text-foreground">Couldn't load locations</p>
+          <p className="mt-1 text-muted-foreground">{apiErrorMessage(error)}</p>
+        </div>
       ) : total === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
           <MapPin className="mb-3 size-12 text-muted-foreground" />
@@ -192,7 +200,7 @@ export default function LocationsPage(): ReactElement {
                     </Badge>
                     {canManage && (
                       <button
-                        onClick={() => deleteLocation.mutate(loc._id)}
+                        onClick={() => setDeleting(loc)}
                         className="rounded p-1.5 text-destructive hover:bg-destructive/10"
                         title="Delete location"
                       >
@@ -284,6 +292,18 @@ export default function LocationsPage(): ReactElement {
           </Button>
         </DialogFooter>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete location"
+        description={`Delete "${deleting?.name ?? ''}"? It is removed for everyone and can't be restored from the app.`}
+        confirmLabel="Delete location"
+        loading={deleteLocation.isPending}
+        onConfirm={() => {
+          if (deleting) deleteLocation.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
+      />
     </div>
   );
 }

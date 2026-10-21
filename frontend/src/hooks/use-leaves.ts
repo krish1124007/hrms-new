@@ -120,9 +120,9 @@ export function useResetLeaveBalances() {
   return useMutation({
     mutationFn: ({ year, leaveTypeId }: { year: number; leaveTypeId?: string }) =>
       leaveBalancesApi.reset(year, leaveTypeId),
-    onSuccess: () => {
+    onSuccess: (_d, { year }) => {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
-      toast.success('Leave balances reset to 0');
+      toast.success(`Used and carried-forward days for ${year} reset to 0`);
     },
     onError: (e) => toast.error(errMsg(e, 'Failed to reset balances')),
   });

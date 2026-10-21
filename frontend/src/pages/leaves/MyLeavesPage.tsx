@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import { RejectionReason } from '@/components/common/RejectionReason';
 import { ExpandableText } from '@/components/common/ExpandableText';
 import {
@@ -29,6 +29,12 @@ import {
 } from '@/hooks/use-leaves';
 import type { LeaveRequest, LeaveStatus } from '@/lib/leaves.api';
 import { businessDayKey, todayKey } from '@/lib/business-day';
+import { formatDate } from '@/lib/format';
+import { isNoEmployeeProfileError } from '@/lib/api-error';
+import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
+import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
+
+const PAGE_SIZE = 20;
 
 const STATUS_VARIANT: Record<LeaveStatus, 'success' | 'warning' | 'destructive' | 'secondary'> = {
   approved: 'success',
@@ -59,9 +65,19 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function MyLeavesPage(): ReactElement {
-  const year = new Date().getFullYear();
+  // The business (IST) year.
+  const year = Number(todayKey().slice(0, 4));
+  const [page, setPage] = useState(1);
   const { data: balances } = useMyLeaveBalances(year);
-  const { data: requests, isLoading } = useMyLeaveRequests({ limit: 50 });
+  const {
+    data: requests,
+    isLoading,
+    error,
+    refetch,
+  } = useMyLeaveRequests({ page, limit: PAGE_SIZE });
+  const me = useMyEmployeeProfile();
+  // Someone without an employee record (e.g. the seeded admin) has no leaves.
+  const noProfile = me.noProfile || isNoEmployeeProfileError(error);
   const { data: types } = useLeaveTypes({ isActive: true, limit: 100 });
   const apply = useApplyLeave();
   const cancel = useCancelLeave();
@@ -118,7 +134,7 @@ export default function MyLeavesPage(): ReactElement {
       key: 'period',
       header: 'Period',
       cell: (r) =>
-        `${new Date(r.startDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })} → ${new Date(r.endDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`,
+        `${formatDate(r.startDate)} → ${formatDate(r.endDate)}`,
     },
     { key: 'days', header: 'Days', cell: (r) => r.days },
     {
@@ -172,54 +188,65 @@ export default function MyLeavesPage(): ReactElement {
         description={`Apply and track your leave requests for ${year}`}
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'My Leaves' }]}
         actions={
-          <Button size="sm" onClick={openDialog}>
-            <Plus className="size-4" /> Apply Leave
-          </Button>
+          noProfile ? undefined : (
+            <Button size="sm" onClick={openDialog}>
+              <Plus className="size-4" /> Apply Leave
+            </Button>
+          )
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {(balances?.data ?? []).map((b) => {
-          const lt = typeof b.leaveTypeId === 'object' ? b.leaveTypeId : null;
-          const isUnpaid = lt
-            ? lt.paidLeave === false ||
-              /unpaid|un-paid|lwp|loss of pay/i.test(lt.name) ||
-              ['LWP', 'LOP', 'UL', 'UNPAID'].includes((lt.code || '').toUpperCase())
-            : false;
-          const total = (b.allocated ?? 0) + (b.carried ?? 0) + (b.adjusted ?? 0);
-          const remaining = isUnpaid ? '∞' : total - (b.used ?? 0);
-          return (
-            <div
-              key={b._id}
-              className="rounded-lg border border-border bg-card p-4 shadow-card"
-            >
-              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                {lt && <span className="size-2 rounded-full" style={{ backgroundColor: lt.color }} />}
-                {lt?.name ?? 'Leave'}
-                {isUnpaid && <span className="ml-auto text-xs font-normal text-amber-500">(Unpaid)</span>}
+      {noProfile ? (
+        <NoEmployeeProfileNotice feature="leave" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {(balances?.data ?? []).map((b) => {
+              const lt = typeof b.leaveTypeId === 'object' ? b.leaveTypeId : null;
+              const isUnpaid = lt
+                ? lt.paidLeave === false ||
+                  /unpaid|un-paid|lwp|loss of pay/i.test(lt.name) ||
+                  ['LWP', 'LOP', 'UL', 'UNPAID'].includes((lt.code || '').toUpperCase())
+                : false;
+              const total = (b.allocated ?? 0) + (b.carried ?? 0) + (b.adjusted ?? 0);
+              const remaining = isUnpaid ? '∞' : total - (b.used ?? 0);
+              return (
+                <div
+                  key={b._id}
+                  className="rounded-lg border border-border bg-card p-4 shadow-card"
+                >
+                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    {lt && <span className="size-2 rounded-full" style={{ backgroundColor: lt.color }} />}
+                    {lt?.name ?? 'Leave'}
+                    {isUnpaid && <span className="ml-auto text-xs font-normal text-amber-500">(Unpaid)</span>}
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-foreground">{remaining}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {isUnpaid ? `${b.used} days taken` : `${b.used} used of ${total}`}
+                  </div>
+                </div>
+              );
+            })}
+            {(balances?.data ?? []).length === 0 && (
+              <div className="col-span-full rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                No leave balances allocated for this year.
               </div>
-              <div className="mt-2 text-2xl font-semibold text-foreground">{remaining}</div>
-              <div className="text-xs text-muted-foreground">
-                {isUnpaid ? `${b.used} days taken` : `${b.used} used of ${total}`}
-              </div>
-            </div>
-          );
-        })}
-        {(balances?.data ?? []).length === 0 && (
-          <div className="col-span-full rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            No leave balances allocated for this year.
+            )}
           </div>
-        )}
-      </div>
 
-      <DataTable
-        columns={columns}
-        data={requests?.data ?? []}
-        loading={isLoading}
-        rowKey={(r) => r._id}
-        emptyTitle="No leave requests"
-        emptyDescription="Click 'Apply Leave' to submit your first request"
-      />
+          <DataTable
+            columns={columns}
+            data={requests?.data ?? []}
+            loading={isLoading}
+            error={error}
+            onRetry={() => void refetch()}
+            rowKey={(r) => r._id}
+            emptyTitle="No leave requests"
+            emptyDescription="Click 'Apply Leave' to submit your first request"
+          />
+          <Pagination page={page} pages={requests?.pagination?.pages ?? 1} onPageChange={setPage} />
+        </>
+      )}
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
         <DialogHeader>

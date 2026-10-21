@@ -35,6 +35,10 @@ import { useAuthStore } from '@/stores/auth.store';
 import { usePermissions } from '@/hooks/use-permissions';
 import { noticesApi, NOTICE_PRIORITIES, type Notice, type NoticePriority } from '@/lib/notices.api';
 import { formatRelative } from '@/lib/format';
+import { apiErrorMessage } from '@/lib/api-error';
+import { Pagination } from '@/components/ui/data-table';
+
+const PAGE_SIZE = 20;
 import { cn } from '@/lib/utils';
 
 const PRIORITY_STYLES: Record<NoticePriority, { border: string; icon: ReactElement; label: string }> = {
@@ -74,9 +78,14 @@ export default function NoticeBoardPage(): ReactElement {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['notices', search],
-    queryFn: () => noticesApi.list(search ? { search } : {}),
+  // Paged on the server (the API's default page used to be all you saw). A
+  // new search starts again at page 1.
+  const [paging, setPaging] = useState({ search, page: 1 });
+  const page = paging.search === search ? paging.page : 1;
+  const setPage = (p: number): void => setPaging({ search, page: p });
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['notices', search, page],
+    queryFn: () => noticesApi.list({ ...(search ? { search } : {}), page, limit: PAGE_SIZE }),
   });
 
   const create = useMutation({
@@ -168,6 +177,11 @@ export default function NoticeBoardPage(): ReactElement {
             <Skeleton key={i} className="h-36 rounded-lg" />
           ))}
         </div>
+      ) : error ? (
+        <div className="max-w-3xl rounded-lg border border-dashed border-destructive/40 py-12 text-center text-sm">
+          <p className="font-medium text-foreground">Couldn't load notices</p>
+          <p className="mt-1 text-muted-foreground">{apiErrorMessage(error)}</p>
+        </div>
       ) : notices.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
           <Megaphone className="mb-3 size-12 text-muted-foreground" />
@@ -202,6 +216,7 @@ export default function NoticeBoardPage(): ReactElement {
               />
             </div>
           ))}
+          <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
         </div>
       )}
 

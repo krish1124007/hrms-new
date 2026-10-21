@@ -17,6 +17,7 @@ import {
   isStaleProcessing,
 } from '@/lib/payroll-cycle';
 import { inr } from './PayrollDashboardPage';
+import { todayIST } from '@/lib/format';
 
 function exportCSV(rows: PayrollRecord[]): void {
   const headers = [
@@ -55,7 +56,7 @@ function exportCSV(rows: PayrollRecord[]): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `payroll-records-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `payroll-records-${todayIST()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -76,7 +77,7 @@ function isUnsettled(r: PayrollRecord): boolean {
 export default function PayrollCycleDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const { data: cycleData } = usePayrollCycle(id);
-  const { data: recordsData, isLoading, refetch: refetchRecords } = useCycleRecords(id);
+  const { data: recordsData, isLoading, error: recordsError, refetch: refetchRecords } = useCycleRecords(id);
   const cycle = cycleData?.data;
   const records = recordsData?.data ?? [];
 
@@ -276,6 +277,8 @@ export default function PayrollCycleDetailPage(): ReactElement {
         columns={columns}
         data={records}
         loading={isLoading}
+        error={recordsError}
+        onRetry={() => void refetchRecords()}
         rowKey={(r) => r._id}
         emptyTitle="No records"
         emptyDescription="Process the payroll cycle to generate records."

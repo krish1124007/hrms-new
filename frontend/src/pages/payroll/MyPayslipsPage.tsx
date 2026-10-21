@@ -7,6 +7,9 @@ import { Select } from '@/components/ui/select';
 import { useMyPayslips } from '@/hooks/use-payroll';
 import { payrollApi, type PayrollRecord } from '@/lib/payroll.api';
 import { inr } from './PayrollDashboardPage';
+import { apiErrorMessage } from '@/lib/api-error';
+import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
+import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
 
 const MONTHS = [
   'January',
@@ -30,8 +33,10 @@ function periodLabel(record: PayrollRecord): string {
 }
 
 export default function MyPayslipsPage(): ReactElement {
-  const { data, isLoading } = useMyPayslips();
+  const { data, isLoading, error } = useMyPayslips();
   const records = data?.data ?? [];
+  // The API answers an empty list to a user without an employee record.
+  const { noProfile } = useMyEmployeeProfile();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
@@ -83,8 +88,17 @@ export default function MyPayslipsPage(): ReactElement {
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'My Payslips' }]}
       />
 
-      {isLoading ? (
+      {noProfile ? (
+        <NoEmployeeProfileNotice feature="payslip" />
+      ) : isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : error ? (
+        <Card>
+          <CardContent className="py-16 text-center text-sm">
+            <p className="font-medium text-foreground">Couldn't load your payslips</p>
+            <p className="mt-1 text-muted-foreground">{apiErrorMessage(error)}</p>
+          </CardContent>
+        </Card>
       ) : records.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center text-sm text-muted-foreground">
