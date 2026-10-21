@@ -1,7 +1,15 @@
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { uploadRoot } from './local-storage.js';
-import { backupRoot, isSafeBackupName, legacyBackupRoot, locateBackupFiles, restoreTargetProblem } from './backups.js';
+import {
+  backupRoot,
+  isLastBusinessDayOfMonth,
+  isSafeBackupName,
+  legacyBackupRoot,
+  locateBackupFiles,
+  nextMonthlyBackupRun,
+  restoreTargetProblem,
+} from './backups.js';
 
 describe('backup locations', () => {
   it('BACKUP_DIR comes from env and is not inside the upload root', () => {
@@ -86,5 +94,26 @@ describe('restoreTargetProblem', () => {
     ]) {
       expect(restoreTargetProblem(target, live), target).toEqual(expect.any(String));
     }
+  });
+});
+
+describe('monthly backup schedule (IST)', () => {
+  const ist = (s: string) => new Date(`${s}+05:30`);
+
+  it('next run is the last day of this IST month at 23:50 IST, or of the next month once that has passed', () => {
+    expect(nextMonthlyBackupRun(ist('2026-10-21T12:00:00')).toISOString()).toBe(ist('2026-10-31T23:50:00').toISOString());
+    expect(nextMonthlyBackupRun(ist('2026-10-31T23:49:00')).toISOString()).toBe(ist('2026-10-31T23:50:00').toISOString());
+    expect(nextMonthlyBackupRun(ist('2026-10-31T23:50:00')).toISOString()).toBe(ist('2026-11-30T23:50:00').toISOString());
+    expect(nextMonthlyBackupRun(ist('2027-02-01T00:00:00')).toISOString()).toBe(ist('2027-02-28T23:50:00').toISOString());
+    expect(nextMonthlyBackupRun(ist('2028-02-10T00:00:00')).toISOString()).toBe(ist('2028-02-29T23:50:00').toISOString());
+    // 31 Dec 23:55 IST → 31 Jan.
+    expect(nextMonthlyBackupRun(ist('2026-12-31T23:55:00')).toISOString()).toBe(ist('2027-01-31T23:50:00').toISOString());
+  });
+
+  it('the IST calendar decides the month end, not the server clock (UTC)', () => {
+    // 31 Oct 20:00 UTC is already 1 Nov in IST.
+    expect(isLastBusinessDayOfMonth(new Date('2026-10-31T20:00:00Z'))).toBe(false);
+    expect(isLastBusinessDayOfMonth(new Date('2026-10-31T18:00:00Z'))).toBe(true); // 23:30 IST
+    expect(isLastBusinessDayOfMonth(new Date('2026-10-30T19:00:00Z'))).toBe(true); // 00:30 IST, 31 Oct
   });
 });

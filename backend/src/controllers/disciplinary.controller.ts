@@ -10,6 +10,7 @@ import {
   ValidationAppError,
 } from '../lib/errors.js';
 import { getUserId } from '../lib/async-context.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 
 // Permission helper — true when the caller has the manager-level permissions
@@ -149,7 +150,7 @@ export async function list(req: Request, res: Response): Promise<void> {
   if (q.severity) filter.severity = q.severity;
   if (q.employee) filter.employee = q.employee;
   if (q.search) {
-    const re = new RegExp(q.search, 'i');
+    const re = containsInsensitive(q.search);
     filter.$or = [{ caseNumber: re }, { title: re }];
   }
 

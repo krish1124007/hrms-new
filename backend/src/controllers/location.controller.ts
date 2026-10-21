@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Location } from '../models/location.model.js';
 import { NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 
 // ---------- Validation Schemas ----------
@@ -37,8 +38,8 @@ export async function listLocations(req: Request, res: Response): Promise<void> 
   const filter: Record<string, unknown> = { deletedAt: null };
   if (q.search) {
     filter.$or = [
-      { name: { $regex: q.search, $options: 'i' } },
-      { address: { $regex: q.search, $options: 'i' } },
+      { name: containsInsensitive(q.search) },
+      { address: containsInsensitive(q.search) },
     ];
   }
   if (q.type) filter.type = q.type;

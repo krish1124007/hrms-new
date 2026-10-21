@@ -12,9 +12,34 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/env.js';
 import { uploadRoot } from './local-storage.js';
+import { DAY_MS, atBusinessTime, startOfBusinessDay } from './business-day.js';
 
 /** SystemSetting key for the monthly auto-backup toggle (applied at boot by index.ts). */
 export const MONTHLY_BACKUP_SETTING = 'backup.monthlyEnabled';
+
+/** The monthly backup's time of day, business timezone (IST): last day of the month at this time. */
+export const MONTHLY_BACKUP_TIME = '23:50';
+
+/** True when `now` falls on the last calendar day of its business-timezone (IST) month. */
+export function isLastBusinessDayOfMonth(now: Date = new Date()): boolean {
+  const today = startOfBusinessDay(now);
+  return new Date(today.getTime() + DAY_MS).getUTCMonth() !== today.getUTCMonth();
+}
+
+/**
+ * When the monthly backup really runs next: the last day of the current IST
+ * month at MONTHLY_BACKUP_TIME IST, or — once that has passed — the last day
+ * of the next month. (The queue wakes on each of the 28th–31st and only the
+ * last day goes ahead, so the queue's own "next" is often not the run.)
+ */
+export function nextMonthlyBackupRun(now: Date = new Date()): Date {
+  const today = startOfBusinessDay(now);
+  for (let monthsAhead = 0; ; monthsAhead += 1) {
+    const lastDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1 + monthsAhead, 0));
+    const run = atBusinessTime(lastDay, MONTHLY_BACKUP_TIME);
+    if (run.getTime() > now.getTime()) return run;
+  }
+}
 
 const BACKUP_DIR = path.resolve(env.BACKUP_DIR);
 const LEGACY_PREFIX = '/uploads/backups/';

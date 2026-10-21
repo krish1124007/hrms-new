@@ -47,6 +47,7 @@ async function fieldActor(
   const employee = await createEmployeeFor(user, {
     firstName: opts.firstName ?? 'Rep',
     lastName: 'Kumar',
+    isFieldStaff: true,
     ...(opts.reportingManager ? { reportingManager: opts.reportingManager } : {}),
   });
   return { user, token, employee };
@@ -180,7 +181,7 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
     }
   });
 
-  it('400 for more than 200 points, or a point recorded more than 24 h ago; nothing stored', async () => {
+  it('400 for more than 200 points; nothing stored', async () => {
     await enableTracking();
     const rep = await fieldActor();
     await clockIn(rep.employee);
@@ -190,12 +191,77 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
       .set(auth(rep.token))
       .send({ points: many });
     expect(big.status).toBe(400);
+    expect(await LocationTrack.countDocuments({})).toBe(0);
+  });
 
+  it('drops a point recorded more than 24 h ago and stores the rest: { ingested, dropped }', async () => {
+    await enableTracking();
+    const rep = await fieldActor();
+    await clockIn(rep.employee);
     const stale = await request(app)
       .post('/api/v1/field/tracking/batch')
       .set(auth(rep.token))
       .send({ points: [point(1), point(25 * 60)] });
-    expect(stale.status).toBe(400);
+    expect(stale.status).toBe(201);
+    expect(stale.body.data).toEqual({ ingested: 1, dropped: 1 });
+    expect(await LocationTrack.countDocuments({})).toBe(1);
+
+    const allStale = await request(app)
+      .post('/api/v1/field/tracking/batch')
+      .set(auth(rep.token))
+      .send({ points: [point(26 * 60)] });
+    expect(allStale.status).toBe(201);
+    expect(allStale.body.data).toEqual({ ingested: 0, dropped: 1 });
+    expect(await LocationTrack.countDocuments({})).toBe(1);
+  });
+
+  it('403 NOT_FIELD_STAFF for a wildcard admin who is not field staff; an isFieldStaff employee is tracked', async () => {
+    await enableTracking();
+    const { user, token } = await createUser({ roleSlug: 'admin' });
+    const admin = await createEmployeeFor(user);
+    await clockIn(admin);
+    const res = await request(app)
+      .post('/api/v1/field/tracking/batch')
+      .set(auth(token))
+      .send({ points: [point(1)] });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('NOT_FIELD_STAFF');
+
+    await admin.updateOne({ $set: { isFieldStaff: true } });
+    const flagged = await request(app)
+      .post('/api/v1/field/tracking/batch')
+      .set(auth(token))
+      .send({ points: [point(1)] });
+    expect(flagged.status).toBe(201);
+    expect(await LocationTrack.countDocuments({ employeeId: admin._id })).toBe(1);
+  });
+
+  it('403 NOT_FIELD_STAFF for a field-sales.manage holder HR has not flagged as field staff', async () => {
+    await enableTracking();
+    const { user, token } = await createUser({ roleSlug: 'hr_manager' });
+    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field-sales.view', 'field-sales.manage'] } });
+    const hr = await createEmployeeFor(user);
+    await clockIn(hr);
+    const res = await request(app)
+      .post('/api/v1/field/tracking/batch')
+      .set(auth(token))
+      .send({ points: [point(1)] });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('NOT_FIELD_STAFF');
+    expect(await LocationTrack.countDocuments({ employeeId: hr._id })).toBe(0);
+  });
+
+  it('the legacy URL answers a failed gate with 200 { ignored: true } and stores nothing for non-field staff', async () => {
+    await enableTracking();
+    const { user, token } = await createUser({ roleSlug: 'employee' });
+    const office = await createEmployeeFor(user);
+    await clockIn(office);
+    const res = await request(app)
+      .post('/api/v1/attendance/tracking/batch')
+      .set(auth(token))
+      .send({ points: [point(1)] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, ignored: true, data: { ignored: true, reason: 'NOT_FIELD_STAFF' } });
     expect(await LocationTrack.countDocuments({})).toBe(0);
   });
 
@@ -206,8 +272,11 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
       .post('/api/v1/attendance/tracking/batch')
       .set(auth(rep.token))
       .send({ points: [point(1)] });
-    expect(off.status).toBe(403);
-    expect(off.body.error.code).toBe('TRACKING_DISABLED');
+    // Shipped apps poll this URL: a closed gate is not an error there.
+    expect(off.status).toBe(200);
+    expect(off.body.ignored).toBe(true);
+    expect(off.body.data.reason).toBe('TRACKING_DISABLED');
+    expect(await LocationTrack.countDocuments({})).toBe(0);
 
     await enableTracking();
     // The shipped mobile app sends `timestamp` (not `recordedAt`) and nulls.
@@ -317,6 +386,28 @@ describe('GET /field/tracking/live', () => {
     expect(ids).toEqual([String(report.employee._id), String(stranger.employee._id)].sort());
     const sam = all.body.data.find((r: { employeeId: string }) => r.employeeId === String(stranger.employee._id));
     expect(sam.onVisit).toBeNull();
+  });
+
+  it('shows only field staff: a fix stored for an office employee stays hidden from live and trail', async () => {
+    const head = await fieldActor({ manage: true });
+    const { user } = await createUser({ roleSlug: 'employee' });
+    const office = await createEmployeeFor(user, { firstName: 'Olga' });
+    const flagged = await createEmployeeFor((await createUser({ roleSlug: 'employee' })).user, {
+      firstName: 'Farah',
+      isFieldStaff: true,
+    });
+    await track(office, new Date(Date.now() - 5 * MIN));
+    await track(flagged, new Date(Date.now() - 5 * MIN));
+
+    const live = await request(app).get('/api/v1/field/tracking/live').set(auth(head.token));
+    expect(live.status).toBe(200);
+    expect(live.body.data.map((r: { employeeId: string }) => r.employeeId)).toEqual([String(flagged._id)]);
+
+    const trail = await request(app).get(`/api/v1/field/tracking/${office._id}/trail`).set(auth(head.token));
+    expect(trail.status).toBe(200);
+    expect(trail.body.data.points).toEqual([]);
+    const shown = await request(app).get(`/api/v1/field/tracking/${flagged._id}/trail`).set(auth(head.token));
+    expect(shown.body.data.points).toHaveLength(1);
   });
 
   it('leaves out reps whose latest fix is older than 2 hours', async () => {

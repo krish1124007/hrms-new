@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Product, GST_RATES, type IProduct } from '../models/product.model.js';
 import { AppError, NotFoundError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { escapeRegex, pageParams, sortParam } from '../lib/field-utils.js';
+import { escapeRegex, pageParams, setAndUnset, sortParam } from '../lib/field-utils.js';
 
 /*
  * The product catalogue. Everyone with `field-sales.view` browses it (the
@@ -33,9 +33,14 @@ export const createProductSchema = z
   .object(productFields)
   .transform(({ taxRate, gstRate: rate, ...rest }) => ({ ...rest, gstRate: rate ?? taxRate ?? 18 }));
 
+/** A partial product; `null` clears the HSN code or the description (name, SKU, category, price stay required). */
 export const updateProductSchema = z
   .object(productFields)
   .partial()
+  .extend({
+    hsnCode: productFields.hsnCode.unwrap().nullable().optional(),
+    description: productFields.description.unwrap().nullable().optional(),
+  })
   .transform(({ taxRate, gstRate: rate, ...rest }) => {
     const out: Record<string, unknown> = { ...rest };
     const resolved = rate ?? taxRate;
@@ -118,7 +123,7 @@ export async function updateProduct(req: Request, res: Response): Promise<void> 
   if (typeof body.sku === 'string') body.sku = body.sku.toUpperCase();
   let doc: IProduct | null;
   try {
-    doc = await Product.findByIdAndUpdate(before._id, { $set: body }, { new: true, runValidators: true }).exec();
+    doc = await Product.findByIdAndUpdate(before._id, setAndUnset(body), { new: true, runValidators: true }).exec();
   } catch (err) {
     if (isDuplicateKey(err)) throw skuTaken();
     throw err;

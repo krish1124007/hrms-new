@@ -11,6 +11,7 @@
 import type { Model } from 'mongoose';
 import { Counter } from '../models/counter.model.js';
 import { startOfBusinessDay } from './business-day.js';
+import { escapeRegex } from './regex.js';
 
 const isDuplicateKey = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
@@ -40,9 +41,6 @@ export async function nextSequence(key: string, seed?: () => Promise<number>): P
   }
   /* eslint-enable no-await-in-loop */
 }
-
-/** Escape a literal for use inside a RegExp. */
-const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Highest `<prefix>-<year>-<n>` number stored in `field` of `model`,

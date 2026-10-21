@@ -121,6 +121,32 @@ describe('sendPush', () => {
     expect(left).toEqual(['token-flaky-0000000004', 'token-good-00000000001']);
   });
 
+  it('treats sender-id-mismatch and a token invalid-argument as dead; a payload invalid-argument is not', async () => {
+    configurePush();
+    const who = userId();
+    await device(who, 'token-other-project-001');
+    await device(who, 'token-mismatch-0000002');
+    await device(who, 'token-badformat-000003');
+    await device(who, 'token-payload-00000004');
+    fcm.send.mockImplementation(async ({ tokens }: { tokens: string[] }) => {
+      const errors: Record<string, { code: string; message?: string }> = {
+        'token-other-project-001': { code: 'messaging/sender-id-mismatch' },
+        'token-mismatch-0000002': { code: 'messaging/mismatched-credential' },
+        'token-badformat-000003': {
+          code: 'messaging/invalid-argument',
+          message: 'The registration token is not a valid FCM registration token',
+        },
+        'token-payload-00000004': { code: 'messaging/invalid-argument', message: 'Invalid JSON payload received.' },
+      };
+      const responses = tokens.map((token) => ({ success: false, error: errors[token] }));
+      return { successCount: 0, responses };
+    });
+
+    expect(await sendPush(who, message())).toEqual({ sent: 0, removed: 3 });
+    const left = (await PushDevice.find({ userId: who }).lean()).map((d) => d.token);
+    expect(left).toEqual(['token-payload-00000004']);
+  });
+
   it('sends in batches of 500 tokens', async () => {
     configurePush();
     const who = new Types.ObjectId();

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Loan, type ILoanInstallment, type LoanStatus } from '../models/loan.model.js';
 import { Employee } from '../models/employee.model.js';
 import { AppError, ConflictError, NotFoundError, UnauthorizedError, ValidationAppError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { getUserId } from '../lib/async-context.js';
 import { audit } from '../services/audit.service.js';
 import { cycleHoldingInstallment } from '../services/payroll-compute.service.js';
@@ -188,7 +189,7 @@ export async function listLoans(req: Request, res: Response): Promise<void> {
   if (q.type) filter.type = q.type;
   if (q.employee) filter.employee = q.employee;
   if (q.search) {
-    filter.loanNumber = { $regex: q.search, $options: 'i' };
+    filter.loanNumber = containsInsensitive(q.search);
   }
 
   const result = await Loan.paginate(filter, {

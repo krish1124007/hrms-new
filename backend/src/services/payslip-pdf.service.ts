@@ -177,7 +177,9 @@ export function numberToIndianWords(n: number): string {
   const thousand = Math.floor((num % 1_00_000) / 1_000);
   const hundred = num % 1_000;
   const parts: string[] = [];
-  if (crore) parts.push(`${below100(crore)} Crore`);
+  // 100 crore and up: the crore count is itself a number in words
+  // (1,50,00,00,000 → "One Hundred Fifty Crore").
+  if (crore) parts.push(`${crore < 100 ? below100(crore) : numberToIndianWords(crore)} Crore`);
   if (lakh) parts.push(`${below100(lakh)} Lakh`);
   if (thousand) parts.push(`${below100(thousand)} Thousand`);
   if (hundred) parts.push(below1000(hundred));

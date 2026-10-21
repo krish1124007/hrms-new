@@ -99,9 +99,26 @@ export const pageParams = {
   limit: z.coerce.number().int().positive().max(100).default(20),
 };
 
-/** Escape user text for a literal `$regex` match (no ReDoS, no operators). */
-export function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Escape user text for a literal `$regex` match (no ReDoS, no operators) — the shared helper. */
+export { escapeRegex } from './regex.js';
+
+/**
+ * An update body as a Mongo update: `null` clears a field (`$unset`),
+ * `undefined` leaves it alone, anything else is `$set`. Update schemas accept
+ * `null` only for the optional fields that may be cleared.
+ */
+export function setAndUnset(body: Record<string, unknown>): { $set?: Record<string, unknown>; $unset?: Record<string, ''> } {
+  const $set: Record<string, unknown> = {};
+  const $unset: Record<string, ''> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (value === null) $unset[key] = '';
+    else if (value !== undefined) $set[key] = value;
+  }
+  // An empty operator is an error on older MongoDB servers: leave it out.
+  const update: { $set?: Record<string, unknown>; $unset?: Record<string, ''> } = {};
+  if (Object.keys($set).length > 0) update.$set = $set;
+  if (Object.keys($unset).length > 0) update.$unset = $unset;
+  return Object.keys(update).length > 0 ? update : { $set };
 }
 
 /* ── Money and geometry ── */

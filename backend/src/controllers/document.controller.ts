@@ -10,6 +10,7 @@ import {
 } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { saveFile, deleteFile } from '../lib/local-storage.js';
+import { containsInsensitive } from '../lib/regex.js';
 
 // Roles that bypass per-user visibility — HR/admin need to see every document
 // for compliance, payroll, and offboarding workflows.
@@ -86,7 +87,7 @@ export async function listDocuments(req: Request, res: Response): Promise<void> 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: any = { ...visibilityFilter(req.user) };
   if (q.folder) filter.folder = normaliseFolder(q.folder);
-  if (q.search) filter.name = { $regex: q.search, $options: 'i' };
+  if (q.search) filter.name = containsInsensitive(q.search);
 
   const [docs, total] = await Promise.all([
     DocumentRecord.find(filter)

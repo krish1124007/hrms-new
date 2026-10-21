@@ -14,7 +14,7 @@ import {
   fieldScope,
   requireOwnEmployeeId,
 } from '../lib/field-access.js';
-import { businessMonthWindow, businessYearMonth, objectIdString, pageParams } from '../lib/field-utils.js';
+import { businessMonthWindow, businessYearMonth, objectIdString, pageParams, setAndUnset } from '../lib/field-utils.js';
 
 /*
  * Achievement is always computed when a target is read — never stored — from
@@ -49,7 +49,8 @@ export const createTargetSchema = z.object({
 export const updateTargetSchema = z.object({
   period: periodSchema.optional(),
   type: z.enum(TYPES).optional(),
-  productCategory: z.string().trim().max(100).optional(),
+  /** `null` clears the category (the target then counts every product). */
+  productCategory: z.string().trim().max(100).nullable().optional(),
   targetValue: z.coerce.number().positive().optional(),
   milestones: z.array(milestoneSchema).max(20).optional(),
 });
@@ -208,7 +209,7 @@ export async function updateTarget(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof updateTargetSchema>;
   const set: Record<string, unknown> = { ...body };
   if (body.milestones) set.milestones = body.milestones.map((m) => ({ ...m, achieved: false }));
-  const doc = await SalesTarget.findByIdAndUpdate(String(req.params.id), { $set: set }, { new: true }).exec();
+  const doc = await SalesTarget.findByIdAndUpdate(String(req.params.id), setAndUnset(set), { new: true }).exec();
   if (!doc) throw new NotFoundError('Target not found');
   void audit({ action: 'update', entity: 'SalesTarget', entityId: String(doc._id) });
   res.json({ success: true, data: await present(doc) });

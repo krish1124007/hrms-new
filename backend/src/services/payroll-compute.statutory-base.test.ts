@@ -2,11 +2,10 @@
  * PF wage from salary-structure components flagged `statutoryBase`.
  *
  *  - A component flagged `statutoryBase: 'basic' | 'da'` is a PF wage
- *    whatever it is called.
- *  - Once any earning in the structure is flagged, only flagged components
- *    count; a "Basic Bonus" left unflagged is not a PF wage.
- *  - With no flag anywhere, the name match (Basic / Dearness / DA) still applies,
- *    and then the salary basic + DA.
+ *    whatever it is called; one flagged `'none'` never is.
+ *  - An unflagged component (`null`) is decided by its own name (Basic /
+ *    Dearness / DA) — flagging another component does not change that.
+ *  - With no PF wage component at all, the salary basic + DA.
  *
  * Reference month: September 2026 (no attendance rows → no loss of pay), PF
  * 12% up to the 15,000 wage ceiling (test env defaults).
@@ -50,7 +49,7 @@ async function september(): Promise<IPayrollCycle> {
 }
 
 async function structure(
-  components: Array<{ name: string; value: number; statutoryBase?: 'basic' | 'da' | null }>,
+  components: Array<{ name: string; value: number; statutoryBase?: 'basic' | 'da' | 'none' | null }>,
 ) {
   seq += 1;
   const entries = [];
@@ -86,7 +85,7 @@ describe('PF wage and statutoryBase', () => {
     );
   });
 
-  it('once a component is flagged, only flagged ones count: an unflagged "Basic Bonus" is not a PF wage', async () => {
+  it('an unflagged component is still decided by its name: a "Basic Bonus" counts unless flagged none', async () => {
     const s = await structure([
       { name: 'Pay A', value: 8000, statutoryBase: 'basic' },
       { name: 'Cost of Living', value: 2000, statutoryBase: 'da' },
@@ -96,8 +95,36 @@ describe('PF wage and statutoryBase', () => {
 
     const r = (await computeRecord(emp, await september(), cfg))!;
 
-    // 12% of (8,000 + 2,000); the name match would have added the 3,000 bonus (→ 1,560).
+    // 12% of (8,000 + 2,000 + 3,000): the unflagged bonus counts by its name.
+    expect(amountOf(r.deductions, 'PF Employee')).toBe(1560);
+  });
+
+  it('a component flagged none is never a PF wage, whatever its name', async () => {
+    const s = await structure([
+      { name: 'Pay A', value: 8000, statutoryBase: 'basic' },
+      { name: 'Cost of Living', value: 2000, statutoryBase: 'da' },
+      { name: 'Basic Bonus', value: 3000, statutoryBase: 'none' },
+    ]);
+    const emp = await makeEmployee({ salary: { basic: 0 }, salaryStructureId: s._id });
+
+    const r = (await computeRecord(emp, await september(), cfg))!;
+
+    // 12% of (8,000 + 2,000) — the bonus is out.
     expect(amountOf(r.deductions, 'PF Employee')).toBe(1200);
+  });
+
+  it('Basic flagged and an unflagged "DA" component: both count', async () => {
+    const s = await structure([
+      { name: 'Basic', value: 9000, statutoryBase: 'basic' },
+      { name: 'DA', value: 3000 },
+      { name: 'HRA', value: 4000 },
+    ]);
+    const emp = await makeEmployee({ salary: { basic: 0 }, salaryStructureId: s._id });
+
+    const r = (await computeRecord(emp, await september(), cfg))!;
+
+    // 12% of (9,000 + 3,000); under the old flagged-only rule the DA was dropped (→ 1,080).
+    expect(amountOf(r.deductions, 'PF Employee')).toBe(1440);
   });
 
   it('with no flag in the structure the name match still applies', async () => {
@@ -114,7 +141,7 @@ describe('PF wage and statutoryBase', () => {
 });
 
 describe('statutoryBase on the salary component', () => {
-  it('defaults to null and rejects anything but basic / da', async () => {
+  it('defaults to null and rejects anything but basic / da / none', async () => {
     const plain = await SalaryComponent.create({ name: 'Plain', code: 'PLAIN1', type: 'earning' });
     expect(plain.statutoryBase).toBeNull();
 
@@ -142,6 +169,13 @@ describe('statutoryBase on the salary component', () => {
       .send({ statutoryBase: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.data.statutoryBase).toBeNull();
+
+    const excluded = await request(app)
+      .patch(`/api/v1/payroll/components/${id}`)
+      .set(auth)
+      .send({ statutoryBase: 'none' });
+    expect(excluded.status).toBe(200);
+    expect(excluded.body.data.statutoryBase).toBe('none');
 
     const invalid = await request(app)
       .post('/api/v1/payroll/components')

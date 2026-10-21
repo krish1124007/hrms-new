@@ -5,7 +5,7 @@ import { NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { canManageField, requireOwnEmployeeId } from '../lib/field-access.js';
-import { escapeRegex, objectIdString, pageParams, sortParam } from '../lib/field-utils.js';
+import { escapeRegex, objectIdString, pageParams, setAndUnset, sortParam } from '../lib/field-utils.js';
 
 const addressSchema = z.object({
   line1: z.string().trim().max(300).optional(),
@@ -81,7 +81,19 @@ function normaliseClient(body: ClientInput): Record<string, unknown> {
 }
 
 export const createClientSchema = z.object(clientFields);
-export const updateClientSchema = z.object(clientFields).partial();
+/** A partial client; `null` clears an optional field (pin, assigned rep, contact details, territory). */
+export const updateClientSchema = z
+  .object(clientFields)
+  .partial()
+  .extend({
+    location: locationSchema.nullable().optional(),
+    assignedTo: objectIdString.nullable().optional(),
+    contactPerson: clientFields.contactPerson.unwrap().nullable().optional(),
+    phone: clientFields.phone.unwrap().nullable().optional(),
+    email: z.string().trim().email().or(z.literal('')).nullable().optional(),
+    company: clientFields.company.unwrap().nullable().optional(),
+    territory: clientFields.territory.unwrap().nullable().optional(),
+  });
 
 export const listQuerySchema = z.object({
   ...pageParams,
@@ -166,7 +178,8 @@ export async function updateClient(req: Request, res: Response): Promise<void> {
     for (const [key, value] of Object.entries(update.address)) update[`address.${key}`] = value;
     delete update.address;
   }
-  const doc = await Client.findByIdAndUpdate(String(req.params.id), { $set: update }, { new: true }).exec();
+  // `null` clears (e.g. `location: null` removes the pin, `assignedTo: null` unassigns).
+  const doc = await Client.findByIdAndUpdate(String(req.params.id), setAndUnset(update), { new: true }).exec();
   if (!doc) throw new NotFoundError('Client not found');
   void audit({ action: 'update', entity: 'Client', entityId: String(doc._id) });
   res.json({ success: true, data: doc });

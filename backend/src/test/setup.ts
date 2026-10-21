@@ -42,6 +42,9 @@ await vi.hoisted(async () => {
     // Never let a test reach a developer's real Redis or Meilisearch.
     REDIS_URL: 'redis://127.0.0.1:1',
     MEILISEARCH_HOST: 'http://127.0.0.1:1',
+    // Blank: push stays off, so a developer's Firebase service account in
+    // .env can never send a real notification from a test.
+    FIREBASE_SERVICE_ACCOUNT_PATH: '',
   });
 });
 

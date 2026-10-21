@@ -21,9 +21,9 @@
  */
 /* eslint-disable no-console -- CLI script: its result must print regardless of LOG_LEVEL */
 import 'dotenv/config';
-import { pathToFileURL } from 'node:url';
 import type { Types } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
+import { isMainModule } from '../lib/is-main-module.js';
 import { Employee } from '../models/employee.model.js';
 
 /** The keys the seed/import scripts parked in `salary.otherAllowances`. */
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
 }
 
 // Run only when executed (tsx / node), never when imported (tests).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   main()
     .then(() => process.exit(0))
     .catch((err) => {

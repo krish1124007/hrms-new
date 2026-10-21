@@ -14,7 +14,7 @@ import {
   fieldScope,
   requireOwnEmployeeId,
 } from '../lib/field-access.js';
-import { objectIdString, pageParams, sortParam } from '../lib/field-utils.js';
+import { objectIdString, pageParams, setAndUnset, sortParam } from '../lib/field-utils.js';
 
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 const STATUSES = ['new', 'accepted', 'in_progress', 'completed', 'cancelled'] as const;
@@ -39,15 +39,16 @@ export const createTaskSchema = z.object({
   dueDate: z.coerce.date().optional(),
 });
 
+/** `null` clears an optional field: the description, client, location or due date (never the assignee). */
 export const updateTaskSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
-  description: z.string().trim().max(5000).optional(),
+  description: z.string().trim().max(5000).nullable().optional(),
   assignedTo: objectIdString.optional(),
-  clientId: objectIdString.optional(),
-  location: createTaskSchema.shape.location,
+  clientId: objectIdString.nullable().optional(),
+  location: createTaskSchema.shape.location.unwrap().nullable().optional(),
   priority: z.enum(PRIORITIES).optional(),
   status: z.enum(STATUSES).optional(),
-  dueDate: z.coerce.date().optional(),
+  dueDate: z.coerce.date().nullable().optional(),
 });
 
 /** `notes`/`photo` are the mobile app's names for `completionNotes`/`completionPhotos`. */
@@ -190,7 +191,7 @@ export async function updateTask(req: Request, res: Response): Promise<void> {
   const reassigned = manager && body.assignedTo && body.assignedTo !== String(task.assignedTo);
   const newAssigneeUser = reassigned ? await assigneeUserId(body.assignedTo as string) : null;
 
-  const doc = await FieldTask.findByIdAndUpdate(task._id, { $set: set }, { new: true }).exec();
+  const doc = await FieldTask.findByIdAndUpdate(task._id, setAndUnset(set), { new: true }).exec();
   if (!doc) throw new NotFoundError('Task not found');
   if (reassigned) await notifyAssignee(newAssigneeUser, doc);
   res.json({ success: true, data: doc });

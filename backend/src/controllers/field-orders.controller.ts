@@ -7,8 +7,10 @@ import { PaymentCollection } from '../models/payment-collection.model.js';
 import { Product } from '../models/product.model.js';
 import { AppError, ForbiddenError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { recomputeAfterMutation } from '../services/field-ledger.service.js';
+import { paidTowardsOrder, recomputeAfterCommit } from '../services/field-ledger.service.js';
 import { createWithNumber, nextYearlyNumber } from '../lib/sequence.js';
+import { assertNotSelfApproval } from '../lib/access.js';
+import { logger } from '../config/logger.js';
 import {
   assertFieldRead,
   assertFieldWrite,
@@ -31,9 +33,12 @@ import {
 
 /*
  * Status machine:  pending → confirmed → delivered,  pending | confirmed → cancelled.
- * A rep may cancel their own pending order; confirming, delivering and
- * cancelling a confirmed order need `field-sales.manage` (a rep cannot
- * self-confirm to reach a target). Legacy `draft` behaves as `pending`,
+ * A rep may cancel their own pending order while no payment is recorded
+ * against it; confirming, delivering, cancelling a confirmed order and
+ * cancelling one with payments need `field-sales.manage` (a rep cannot
+ * self-confirm to reach a target), and nobody confirms or delivers their own
+ * order (403 SELF_APPROVAL). Legacy `draft` behaves as `pending` (migration
+ * 20261021000002 turns the stored ones into `confirmed`),
  * `processing`/`shipped` as `confirmed`.
  *
  * Lines name a catalogue product, a quantity and an optional discount
@@ -257,8 +262,14 @@ export async function createOrder(req: Request, res: Response): Promise<void> {
       }),
     'orderNumber',
   );
-  if (body.visitId) await Visit.updateOne({ _id: body.visitId }, { $set: { orderPlaced: doc._id } }).exec();
-  await recomputeAfterMutation({ clients: [doc.clientId] });
+  // The order is booked: nothing after this point may fail the request (the
+  // client would retry and book it twice).
+  if (body.visitId) {
+    await Visit.updateOne({ _id: body.visitId }, { $set: { orderPlaced: doc._id } })
+      .exec()
+      .catch((err: unknown) => logger.error({ err, orderId: String(doc._id) }, 'field: linking the visit to its order failed'));
+  }
+  await recomputeAfterCommit({ clients: [doc.clientId] }, { orderId: String(doc._id) });
   await audit({ action: 'create', entity: 'ProductOrder', entityId: String(doc._id), after: moneyView(doc) });
   res.status(201).json({ success: true, data: doc });
 }
@@ -278,7 +289,9 @@ export async function updateOrder(req: Request, res: Response): Promise<void> {
       throw new AppError('Only a pending order can be changed', 409, 'ORDER_LOCKED');
     }
     const priced = await priceItems(body.items);
-    if (priced.totalAmount < order.paidAmount) {
+    // What is really allocated now — the stored paidAmount is a cache that a
+    // concurrent payment may not have updated yet.
+    if (priced.totalAmount + 0.001 < (await paidTowardsOrder(order._id))) {
       throw new AppError(
         'The new total is below what has already been collected against this order',
         400,
@@ -292,7 +305,7 @@ export async function updateOrder(req: Request, res: Response): Promise<void> {
   const doc = await ProductOrder.findOneAndUpdate(filter, { $set: set }, { new: true }).exec();
   if (!doc) throw new AppError('Only a pending order can be changed', 409, 'ORDER_LOCKED');
   if (body.items) {
-    await recomputeAfterMutation({ orders: [doc._id], clients: [doc.clientId] });
+    await recomputeAfterCommit({ orders: [doc._id], clients: [doc.clientId] }, { orderId: String(doc._id) });
     await audit({
       action: 'update',
       entity: 'ProductOrder',
@@ -317,7 +330,7 @@ export async function deleteOrder(req: Request, res: Response): Promise<void> {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (order as any).softDelete({ by: req.user?._id });
-  await recomputeAfterMutation({ clients: [order.clientId] });
+  await recomputeAfterCommit({ clients: [order.clientId] }, { orderId: String(order._id) });
   await audit({ action: 'delete', entity: 'ProductOrder', entityId: String(order._id), before: moneyView(order) });
   res.json({ success: true, message: 'Order deleted' });
 }
@@ -339,10 +352,22 @@ export async function updateOrderStatus(req: Request, res: Response): Promise<vo
       'INVALID_STATUS_TRANSITION',
     );
   }
-  // A rep may only withdraw their own pending order.
+  // A rep may only withdraw their own pending order — and not once money has
+  // been recorded against it (that is a manager's call).
   const repMayDo = status === 'cancelled' && OPEN_STATUSES.includes(order.status);
   if (!manager && !repMayDo) {
     throw new ForbiddenError('Only a field sales manager can confirm, deliver or cancel a confirmed order');
+  }
+  if (!manager && status === 'cancelled' && (await PaymentCollection.countDocuments({ orderId: order._id }).exec()) > 0) {
+    throw new AppError(
+      'Payments are recorded against this order — only a field sales manager can cancel it',
+      403,
+      'ORDER_HAS_PAYMENTS',
+    );
+  }
+  // Confirming or delivering is an approval: never of one's own order.
+  if (status === 'confirmed' || status === 'delivered') {
+    await assertNotSelfApproval(req, order.employeeId, `You cannot mark your own order ${status}`);
   }
 
   const now = new Date();
@@ -358,7 +383,7 @@ export async function updateOrderStatus(req: Request, res: Response): Promise<vo
     { new: true },
   ).exec();
   if (!doc) throw new AppError('The order changed meanwhile — reload and try again', 409, 'INVALID_STATUS_TRANSITION');
-  await recomputeAfterMutation({ clients: [doc.clientId] });
+  await recomputeAfterCommit({ clients: [doc.clientId] }, { orderId: String(doc._id) });
   await audit({
     action: 'update',
     entity: 'ProductOrder',
