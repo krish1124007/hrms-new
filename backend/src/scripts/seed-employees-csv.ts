@@ -182,17 +182,10 @@ async function run(): Promise<void> {
       const deptId = deptIds.get(r.department)!;
       const desigId = desigCache.get(`${deptId}::${r.designation}`)!;
 
-      // Stash CSV-only payroll components in otherAllowances so we don't lose
-      // them. The Employee schema doesn't model PF/ESIC/PT/CTC/netPay, so we
-      // park them under named keys until a payroll feature uses them properly.
-      const otherAllowances: Record<string, number> = {};
-      if (r.salary.employeePf) otherAllowances.employeePf = r.salary.employeePf;
-      if (r.salary.employeeEsic) otherAllowances.employeeEsic = r.salary.employeeEsic;
-      if (r.salary.employerPf) otherAllowances.employerPf = r.salary.employerPf;
-      if (r.salary.employerEsic) otherAllowances.employerEsic = r.salary.employerEsic;
-      if (r.salary.professionalTax) otherAllowances.professionalTax = r.salary.professionalTax;
-      if (r.salary.netPay) otherAllowances.netPay = r.salary.netPay;
-      if (r.salary.ctc) otherAllowances.ctc = r.salary.ctc;
+      // The CSV's PF / ESIC / PT / net pay / CTC columns are NOT stored: payroll
+      // computes them (lib/statutory.ts), and anything in otherAllowances is
+      // added to grossSalary by the employee pre-save hook. (Employees seeded
+      // before this change: run scripts/fix-salary-stash.ts.)
 
       // Build the employee doc. Use the CSV-provided employeeId (EMP000001 etc.)
       // so they line up with the customer's existing records.
@@ -243,7 +236,7 @@ async function run(): Promise<void> {
           hra: r.salary.hra,
           da: 0,
           specialAllowance: r.salary.otherAllowance,
-          otherAllowances,
+          otherAllowances: {},
           grossSalary: r.salary.gross,
         },
       };

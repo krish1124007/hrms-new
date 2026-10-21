@@ -6,14 +6,12 @@ const options: swaggerJsdoc.Options = {
   definition: {
     openapi: '3.0.3',
     info: {
-      title: 'DD HRMS API',
+      title: 'D-HRMS API',
       version: '1.0.0',
       description:
-        'Complete REST API for the DD HRMS multi-tenant SaaS platform. ' +
-        'Covers HR, CRM, Accounting, Field Sales, AI, and more. ' +
-        'Every tenant is isolated via `tenantId` on every document. ' +
+        'REST API of D-HRMS (Dharmesh Deshani Group of Companies): employees, attendance, ' +
+        'leave, payroll, expenses and field sales. ' +
         'Authentication is JWT-based; include the token in the `Authorization: Bearer <token>` header.',
-      contact: { name: 'DD HRMS Team', email: 'api@ddhrms.com' },
       license: { name: 'Proprietary' },
     },
     servers: [{ url: '/api/v1', description: 'API v1' }],
@@ -110,7 +108,6 @@ const options: swaggerJsdoc.Options = {
             email: { type: 'string', format: 'email' },
             role: { type: 'string' },
             status: { type: 'string', enum: ['active', 'inactive', 'suspended'] },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
           },
@@ -132,7 +129,6 @@ const options: swaggerJsdoc.Options = {
             status: { type: 'string', enum: ['active', 'inactive', 'on-leave', 'terminated'] },
             dateOfBirth: { type: 'string', format: 'date' },
             dateOfJoining: { type: 'string', format: 'date' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
           },
@@ -161,7 +157,6 @@ const options: swaggerJsdoc.Options = {
             code: { type: 'string' },
             parentId: { $ref: '#/components/schemas/ObjectId' },
             headId: { $ref: '#/components/schemas/ObjectId' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
           },
@@ -179,7 +174,6 @@ const options: swaggerJsdoc.Options = {
             status: { type: 'string', enum: ['present', 'absent', 'half-day', 'on-leave', 'holiday'] },
             method: { type: 'string', enum: ['manual', 'biometric', 'geofence', 'qr', 'face', 'ip', 'selfie'] },
             workHours: { type: 'number', example: 8.5 },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
           },
         },
         CheckInRequest: {
@@ -206,7 +200,6 @@ const options: swaggerJsdoc.Options = {
             code: { type: 'string', example: 'CL' },
             defaultBalance: { type: 'number', example: 12 },
             carryForward: { type: 'boolean' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
           },
         },
         LeaveRequest: {
@@ -220,7 +213,6 @@ const options: swaggerJsdoc.Options = {
             days: { type: 'number' },
             reason: { type: 'string' },
             status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'] },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
           },
         },
 
@@ -232,7 +224,6 @@ const options: swaggerJsdoc.Options = {
             name: { type: 'string', example: 'Basic Salary' },
             type: { type: 'string', enum: ['earning', 'deduction'] },
             calculationType: { type: 'string', enum: ['fixed', 'percentage'] },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
           },
         },
         PayrollCycle: {
@@ -245,64 +236,6 @@ const options: swaggerJsdoc.Options = {
             totalEarnings: { type: 'number' },
             totalDeductions: { type: 'number' },
             netPayable: { type: 'number' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
-          },
-        },
-
-        // ─── CRM ───
-        Customer: {
-          type: 'object',
-          properties: {
-            _id: { $ref: '#/components/schemas/ObjectId' },
-            name: { type: 'string' },
-            email: { type: 'string', format: 'email' },
-            phone: { type: 'string' },
-            company: { type: 'string' },
-            status: { type: 'string', enum: ['active', 'inactive'] },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
-          },
-        },
-        Lead: {
-          type: 'object',
-          properties: {
-            _id: { $ref: '#/components/schemas/ObjectId' },
-            name: { type: 'string' },
-            email: { type: 'string', format: 'email' },
-            phone: { type: 'string' },
-            source: { type: 'string' },
-            status: { type: 'string', enum: ['new', 'contacted', 'qualified', 'unqualified', 'converted'] },
-            score: { type: 'integer' },
-            assignedTo: { $ref: '#/components/schemas/ObjectId' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
-          },
-        },
-        Deal: {
-          type: 'object',
-          properties: {
-            _id: { $ref: '#/components/schemas/ObjectId' },
-            title: { type: 'string' },
-            value: { type: 'number' },
-            currency: { type: 'string' },
-            stage: { type: 'string' },
-            probability: { type: 'number' },
-            expectedCloseDate: { type: 'string', format: 'date' },
-            customerId: { $ref: '#/components/schemas/ObjectId' },
-            pipelineId: { $ref: '#/components/schemas/ObjectId' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
-          },
-        },
-
-        // ─── Accounting ───
-        Account: {
-          type: 'object',
-          properties: {
-            _id: { $ref: '#/components/schemas/ObjectId' },
-            name: { type: 'string', example: 'Cash' },
-            code: { type: 'string', example: '1001' },
-            type: { type: 'string', enum: ['asset', 'liability', 'equity', 'income', 'expense'] },
-            balance: { type: 'number' },
-            parentId: { $ref: '#/components/schemas/ObjectId' },
-            tenantId: { $ref: '#/components/schemas/ObjectId' },
           },
         },
 
@@ -347,20 +280,12 @@ const options: swaggerJsdoc.Options = {
       { name: 'Leaves', description: 'Leave management (types, balances, requests)' },
       { name: 'Payroll', description: 'Payroll processing (components, structures, cycles, payslips)' },
       { name: 'Expense Claims', description: 'Employee expense claim management' },
-      { name: 'CRM', description: 'Customer relationship management (customers, leads, deals, pipelines, activities)' },
       { name: 'Projects', description: 'Project management with milestones, tasks, and time entries' },
       { name: 'Timesheets', description: 'Employee timesheet views' },
-      { name: 'Accounting', description: 'Accounting, journal entries, income & expense tracking' },
-      { name: 'Inventory', description: 'Product, warehouse & stock management' },
       { name: 'Field Sales', description: 'Field sales operations (clients, visits, tasks, targets, orders, payments, live tracking)' },
-      { name: 'AI', description: 'AI assistants, chat, document AI & usage management' },
-      { name: 'Chat', description: 'Real-time messaging (channels, messages, reactions)' },
-      { name: 'Calls', description: 'Voice/video calls' },
       { name: 'Documents', description: 'Document management & versioning' },
-      { name: 'Forms', description: 'Form builder & submissions' },
       { name: 'Tasks', description: 'Standalone task management' },
       { name: 'Calendar', description: 'Calendar & events' },
-      { name: 'Notes', description: 'Personal notes' },
       { name: 'Notices', description: 'Company notice board' },
       { name: 'Approvals', description: 'Approval workflows' },
       { name: 'Locations', description: 'Office / branch location management' },

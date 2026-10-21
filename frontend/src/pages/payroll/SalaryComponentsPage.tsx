@@ -34,7 +34,14 @@ const TYPE_LABEL: Record<ComponentType, string> = {
   employer_contribution: 'Employer',
 };
 
-interface FormState extends SalaryComponentInput {}
+/**
+ * Marks an earning as part of the PF wage (backend `statutoryBase`). When no
+ * component is flagged, payroll goes by the name (Basic / Dearness / DA).
+ */
+type StatutoryBase = 'basic' | 'da';
+type WithStatutoryBase = { statutoryBase?: StatutoryBase | null };
+
+type FormState = SalaryComponentInput & WithStatutoryBase;
 
 const blank: FormState = {
   name: '',
@@ -44,6 +51,7 @@ const blank: FormState = {
   defaultValue: 0,
   isTaxable: false,
   isStatutory: false,
+  statutoryBase: null,
   order: 0,
   isActive: true,
 };
@@ -75,6 +83,7 @@ export default function SalaryComponentsPage(): ReactElement {
       isTaxable: c.isTaxable,
       isStatutory: c.isStatutory,
       statutoryType: c.statutoryType,
+      statutoryBase: (c as SalaryComponent & WithStatutoryBase).statutoryBase ?? null,
       order: c.order,
       isActive: c.isActive,
     });
@@ -82,13 +91,19 @@ export default function SalaryComponentsPage(): ReactElement {
   };
 
   const submit = (): void => {
+    // Only a non-statutory earning can be part of the PF wage.
+    const input: FormState = {
+      ...form,
+      statutoryBase:
+        form.type === 'earning' && !form.isStatutory ? (form.statutoryBase ?? null) : null,
+    };
     if (editingId) {
       update.mutate(
-        { id: editingId, input: form },
+        { id: editingId, input },
         { onSuccess: () => setOpen(false) },
       );
     } else {
-      create.mutate(form, { onSuccess: () => setOpen(false) });
+      create.mutate(input, { onSuccess: () => setOpen(false) });
     }
   };
 
@@ -250,6 +265,29 @@ export default function SalaryComponentsPage(): ReactElement {
               onChange={(e) => setForm({ ...form, defaultValue: Number(e.target.value) })}
             />
           </div>
+          {form.type === 'earning' && !form.isStatutory && (
+            <div>
+              <Label htmlFor="statutoryBase">PF wage</Label>
+              <Select
+                id="statutoryBase"
+                value={form.statutoryBase ?? ''}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    statutoryBase: (e.target.value || null) as StatutoryBase | null,
+                  })
+                }
+              >
+                <option value="">Not flagged (decided by name)</option>
+                <option value="basic">Basic</option>
+                <option value="da">Dearness allowance (DA)</option>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                PF is calculated on the earnings flagged Basic or DA. If no component is flagged,
+                components named Basic, Dearness or DA are used.
+              </p>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
