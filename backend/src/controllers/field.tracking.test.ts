@@ -47,6 +47,7 @@ async function fieldActor(
   const employee = await createEmployeeFor(user, {
     firstName: opts.firstName ?? 'Rep',
     lastName: 'Kumar',
+    isFieldStaff: true,
     ...(opts.reportingManager ? { reportingManager: opts.reportingManager } : {}),
   });
   return { user, token, employee };
@@ -233,6 +234,21 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
       .send({ points: [point(1)] });
     expect(flagged.status).toBe(201);
     expect(await LocationTrack.countDocuments({ employeeId: admin._id })).toBe(1);
+  });
+
+  it('403 NOT_FIELD_STAFF for a field-sales.manage holder HR has not flagged as field staff', async () => {
+    await enableTracking();
+    const { user, token } = await createUser({ roleSlug: 'hr_manager' });
+    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field-sales.view', 'field-sales.manage'] } });
+    const hr = await createEmployeeFor(user);
+    await clockIn(hr);
+    const res = await request(app)
+      .post('/api/v1/field/tracking/batch')
+      .set(auth(token))
+      .send({ points: [point(1)] });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('NOT_FIELD_STAFF');
+    expect(await LocationTrack.countDocuments({ employeeId: hr._id })).toBe(0);
   });
 
   it('the legacy URL answers a failed gate with 200 { ignored: true } and stores nothing for non-field staff', async () => {

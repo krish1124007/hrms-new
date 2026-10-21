@@ -8,10 +8,10 @@
  * broadcast.
  *
  * The gate ("field staff, consented and clocked in"):
- *   • field staff — only field staff are tracked at all: the employee is
- *     flagged `isFieldStaff`, or their login holds a `field-sales.*`
- *     permission (granted by name — the admin wildcard does not make anyone
- *     field staff). Otherwise 403 `NOT_FIELD_STAFF`.
+ *   • field staff — only employees HR has flagged `isFieldStaff` are tracked
+ *     at all (holding a `field-sales.*` permission does not make anyone field
+ *     staff — HR managers hold one to run the module). Otherwise 403
+ *     `NOT_FIELD_STAFF`.
  *   • consent — live tracking is switched on in the attendance config
  *     (`AttendanceConfig.liveTracking.enabled`, the company's tracking
  *     policy the employee works under). Off → 403 `TRACKING_DISABLED`.
@@ -34,7 +34,6 @@ import { z } from 'zod';
 import { logger } from '../config/logger.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { Employee } from '../models/employee.model.js';
-import { User } from '../models/user.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { AppError, UnauthorizedError } from '../lib/errors.js';
@@ -134,49 +133,15 @@ export const TRACKING_GATE_CODES: ReadonlySet<string> = new Set([
   'NOT_CLOCKED_IN',
 ]);
 
-/**
- * True when a role/user permission list grants a `field-sales.*` permission
- * by name. The admin wildcard `*` deliberately does not count: holding every
- * permission does not make someone field staff.
- */
-export function grantsFieldPermission(permissions: readonly string[] | undefined): boolean {
-  return (permissions ?? []).some((p) => p.startsWith('field-sales.'));
-}
-
-/** The permissions a user holds: their role's plus their custom ones. */
-function userPermissions(user: { role?: unknown; customPermissions?: string[] } | null | undefined): string[] {
-  const role = user?.role as { permissions?: string[] } | undefined;
-  return [...(role && typeof role === 'object' ? (role.permissions ?? []) : []), ...(user?.customPermissions ?? [])];
-}
-
-/**
- * Of `employeeIds`, the ones that are field staff (hex ids): flagged
- * `isFieldStaff`, or whose login holds a `field-sales.*` permission.
- */
+/** Of `employeeIds`, the ones HR has flagged as field staff (hex ids). */
 export async function fieldStaffAmong(employeeIds: readonly unknown[]): Promise<Set<string>> {
   const ids = employeeIds.map((id) => idOf(id)).filter((id): id is string => Boolean(id));
   if (ids.length === 0) return new Set();
-  const employees = await Employee.find({ _id: { $in: ids } })
-    .select('isFieldStaff userId')
+  const employees = await Employee.find({ _id: { $in: ids }, isFieldStaff: true })
+    .select('_id')
     .lean()
     .exec();
-  const result = new Set<string>();
-  const byUser = new Map<string, string>();
-  for (const emp of employees) {
-    if (emp.isFieldStaff) result.add(String(emp._id));
-    else if (emp.userId) byUser.set(String(emp.userId), String(emp._id));
-  }
-  if (byUser.size > 0) {
-    const users = await User.find({ _id: { $in: [...byUser.keys()] } })
-      .select('role customPermissions')
-      .populate('role', 'permissions')
-      .lean()
-      .exec();
-    for (const user of users) {
-      if (grantsFieldPermission(userPermissions(user))) result.add(byUser.get(String(user._id))!);
-    }
-  }
-  return result;
+  return new Set(employees.map((emp) => String(emp._id)));
 }
 
 /**
@@ -212,10 +177,10 @@ export async function isClockedIn(employee: TrackedEmployee, now: Date): Promise
  */
 export async function assertMayTrack(
   employee: TrackedEmployee,
-  user: { role?: unknown; customPermissions?: string[] } | null | undefined,
+  _user: { role?: unknown; customPermissions?: string[] } | null | undefined,
   now: Date,
 ): Promise<void> {
-  if (!employee.isFieldStaff && !grantsFieldPermission(userPermissions(user))) {
+  if (!employee.isFieldStaff) {
     throw new AppError('Location is only recorded for field staff', 403, 'NOT_FIELD_STAFF');
   }
   const cfg = await AttendanceConfig.findOne({}).select('liveTracking').lean().exec();
