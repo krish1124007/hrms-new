@@ -20,6 +20,7 @@ import {
 } from '@/hooks/use-payroll';
 import type { PayrollCycle } from '@/lib/payroll.api';
 import { canRunCycleAction, cyclePeriod, isStaleProcessing } from '@/lib/payroll-cycle';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 interface CycleActionsProps {
   cycle: PayrollCycle;
@@ -72,6 +73,7 @@ export function CycleActions({ cycle, layout }: CycleActionsProps): ReactElement
 
   const [paidOpen, setPaidOpen] = useState(false);
   const [paymentRef, setPaymentRef] = useState('');
+  const [lockOpen, setLockOpen] = useState(false);
 
   const period = cyclePeriod(cycle);
   const can = {
@@ -98,15 +100,10 @@ export function CycleActions({ cycle, layout }: CycleActionsProps): ReactElement
     processMut.mutate(cycle._id);
   };
 
-  const lock = (): void => {
-    if (
-      !window.confirm(
-        `Lock ${period}? The figures become final — no more re-processing or adjustments — and employees can see their payslips.`,
-      )
-    ) {
-      return;
-    }
-    lockMut.mutate(cycle._id);
+  // Locking is one-way: it asks in a dialog that names the period first.
+  const lock = (): void => setLockOpen(true);
+  const confirmLock = (): void => {
+    lockMut.mutate(cycle._id, { onSuccess: () => setLockOpen(false) });
   };
 
   const submitPaid = (): void => {
@@ -182,6 +179,16 @@ export function CycleActions({ cycle, layout }: CycleActionsProps): ReactElement
           Retry settlement
         </Button>
       )}
+
+      <ConfirmDialog
+        open={lockOpen}
+        onClose={() => setLockOpen(false)}
+        title={`Lock ${period}?`}
+        description="The figures become final — no more re-processing or adjustments — and employees can see their payslips. This cannot be undone."
+        confirmLabel={`Lock ${period}`}
+        loading={lockMut.isPending}
+        onConfirm={confirmLock}
+      />
 
       <Dialog open={paidOpen} onClose={() => setPaidOpen(false)} size="md">
         <DialogHeader>

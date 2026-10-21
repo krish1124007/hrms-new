@@ -22,6 +22,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { usePermissions } from '@/hooks/use-permissions';
 import { backupsApi, saveBlob, type BackupRow } from '@/lib/backups.api';
 import { cn } from '@/lib/utils';
+import { nextMonthEndRun } from './backup-schedule';
 
 const STATUS_CONFIG: Record<
   BackupRow['status'],
@@ -154,9 +155,13 @@ export default function BackupsPage(): ReactElement {
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
                 {schedule?.enabled
-                  ? `Runs automatically on the last day of every month at 23:50.${
+                  ? `Runs automatically late on the last day of every month.${
                       schedule.nextRun
-                        ? ` Next run: ${new Date(schedule.nextRun).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}.`
+                        ? ` Next run: ${nextMonthEndRun(schedule.nextRun).toLocaleString('en-IN', {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                            timeZone: 'Asia/Kolkata',
+                          })} IST.`
                         : ''
                     }`
                   : 'Database is not being backed up automatically. Enable to run a backup at the end of every month.'}

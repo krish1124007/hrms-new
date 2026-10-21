@@ -39,6 +39,8 @@ export interface Notice {
   isPinned: boolean;
   attachments: NoticeAttachment[];
   acknowledgements: NoticeAcknowledgement[];
+  /** Has the signed-in user acknowledged this notice? (Set by the list endpoint.) */
+  acknowledgedByMe?: boolean;
   createdAt: string;
   updatedAt: string;
 }

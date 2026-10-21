@@ -1,90 +1,71 @@
 import type { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import { z } from 'zod';
-import { LocationTrack } from '../models/location-track.model.js';
+import { LocationTrack, type ILocationGeo } from '../models/location-track.model.js';
 import { Employee } from '../models/employee.model.js';
-import { ValidationAppError } from '../lib/errors.js';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission } from '../lib/access.js';
-import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
+import { Visit } from '../models/visit.model.js';
+import { NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { idOf } from '../lib/access.js';
+import {
+  LIVE_WINDOW_MS,
+  assertCanSeeRep,
+  businessDayRange,
+  dateKeySchema,
+  employeeName,
+  openVisitSince,
+  recordLocationBatch,
+  trackingBatchSchema,
+  visibleRepIds,
+  visitPin,
+  type TrackingBatch,
+  type VisitLike,
+} from '../services/location-track.service.js';
 
-/** Field managers watch every rep; a rep can only see their own trail. */
-const MANAGE = 'field-sales.manage';
+/** Most fixes one trail returns — a day at the 30 s minimum interval is 2 880. */
+const TRAIL_MAX_POINTS = 5000;
 
-const pointSchema = z.object({
-  timestamp: z.coerce.date().optional(),
-  lat: z.coerce.number(),
-  lng: z.coerce.number(),
-  accuracy: z.coerce.number().optional(),
-  speed: z.coerce.number().optional(),
-  altitude: z.coerce.number().optional(),
-  heading: z.coerce.number().optional(),
-  activity: z.enum(['still', 'walking', 'running', 'in_vehicle']).optional(),
-  battery: z.coerce.number().optional(),
-  isCharging: z.boolean().optional(),
-  networkType: z.string().optional(),
-  isOffline: z.boolean().optional(),
+/** The one ingest schema, shared with `POST /attendance/tracking/batch`. */
+export const batchSchema = trackingBatchSchema;
+
+export const trailQuerySchema = z.object({
+  date: dateKeySchema.optional(),
 });
 
-export const batchSchema = z.object({
-  points: z.array(pointSchema).min(1).max(500),
-});
-
-export const historyQuerySchema = z.object({
-  date: z.coerce.date().optional(),
-});
-
+/**
+ * `POST /field/tracking/batch` (and `POST /attendance/tracking/batch`) —
+ * consented + clocked-in gate, store, broadcast; see
+ * `services/location-track.service.ts`. 201 `{ ingested }`.
+ */
 export async function ingestBatch(req: Request, res: Response): Promise<void> {
-  const body = req.body as z.infer<typeof batchSchema>;
-  const empId = await currentEmployeeId(req);
-  if (!empId) throw new ValidationAppError('Employee profile not found');
-
-  const docs = body.points.map((p) => ({
-    employeeId: empId,
-    timestamp: p.timestamp ?? new Date(),
-    location: {
-      type: 'Point' as const,
-      coordinates: [p.lng, p.lat] as [number, number],
-    },
-    accuracy: p.accuracy,
-    speed: p.speed,
-    altitude: p.altitude,
-    heading: p.heading,
-    activity: p.activity,
-    battery: p.battery,
-    isCharging: p.isCharging,
-    networkType: p.networkType,
-    isOffline: p.isOffline,
-    syncedAt: new Date(),
-  }));
-
-  await LocationTrack.insertMany(docs);
-
-  // Broadcast latest point to admin room
-  const tenantId = undefined;
-  const ns = getFieldTrackingNamespace();
-  if (ns && tenantId) {
-    const latest = body.points[body.points.length - 1];
-    ns.to(`tenant:${String(tenantId)}`).emit('location:update', {
-      employeeId: empId,
-      lat: latest.lat,
-      lng: latest.lng,
-      timestamp: latest.timestamp ?? new Date(),
-      activity: latest.activity,
-      battery: latest.battery,
-      speed: latest.speed,
-    });
-  }
-
-  res.status(201).json({ success: true, data: { ingested: docs.length } });
+  const body = req.body as TrackingBatch;
+  const ingested = await recordLocationBatch(req, body.points);
+  res.status(201).json({ success: true, data: { ingested } });
 }
 
+interface LatestFix {
+  _id: Types.ObjectId;
+  timestamp: Date;
+  location: ILocationGeo;
+  accuracy?: number;
+  speed?: number;
+  heading?: number;
+  battery?: number;
+}
+
+/**
+ * `GET /field/tracking/live` — each visible rep's newest fix of the last 2 h:
+ * `{ employeeId, employeeCode, name, avatar, lat, lng, accuracy, speed,
+ * heading, battery, recordedAt, onVisit: { visitId, clientId, clientName } | null }`.
+ */
 export async function liveTracking(req: Request, res: Response): Promise<void> {
-  // Return last known position per employee (today)
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const match: Record<string, unknown> = { timestamp: { $gte: start } };
-  // `null` (no employee record) matches nothing — employeeId is required.
-  if (!hasPermission(req.user, MANAGE)) match.employeeId = await currentEmployeeId(req);
-  const docs = await LocationTrack.aggregate([
+  const now = new Date();
+  const ids = await visibleRepIds(req);
+  const match: Record<string, unknown> = {
+    timestamp: { $gte: new Date(now.getTime() - LIVE_WINDOW_MS) },
+  };
+  if (ids) match.employeeId = { $in: ids };
+
+  const fixes = await LocationTrack.aggregate<LatestFix>([
     { $match: match },
     { $sort: { timestamp: -1 } },
     {
@@ -92,53 +73,125 @@ export async function liveTracking(req: Request, res: Response): Promise<void> {
         _id: '$employeeId',
         timestamp: { $first: '$timestamp' },
         location: { $first: '$location' },
-        battery: { $first: '$battery' },
-        activity: { $first: '$activity' },
+        accuracy: { $first: '$accuracy' },
         speed: { $first: '$speed' },
+        heading: { $first: '$heading' },
+        battery: { $first: '$battery' },
       },
     },
   ]);
-  // Populate employee names
-  const empIds = docs.map((d) => d._id);
-  const employees = await Employee.find({ _id: { $in: empIds } })
-    .select('firstName lastName employeeCode avatar')
-    .exec();
-  const empMap = new Map(employees.map((e) => [String(e._id), e]));
-  const enriched = docs.map((d) => ({
-    employeeId: d._id,
-    employee: empMap.get(String(d._id)),
-    timestamp: d.timestamp,
-    lng: d.location.coordinates[0],
-    lat: d.location.coordinates[1],
-    battery: d.battery,
-    activity: d.activity,
-    speed: d.speed,
-  }));
-  res.json({ success: true, data: enriched });
+  const repIds = fixes.map((f) => f._id);
+
+  const [employees, openVisits] = await Promise.all([
+    Employee.find({ _id: { $in: repIds } })
+      .select('firstName lastName profileImage employeeId')
+      .lean()
+      .exec(),
+    Visit.find({
+      employeeId: { $in: repIds },
+      'checkIn.time': { $gte: openVisitSince(now) },
+      'checkOut.time': null,
+      status: { $ne: 'cancelled' },
+    })
+      .sort({ 'checkIn.time': -1 })
+      .select('employeeId clientId checkIn')
+      .populate('clientId', 'name')
+      .lean()
+      .exec(),
+  ]);
+  const byId = new Map(employees.map((e) => [String(e._id), e]));
+  const visitOf = new Map<string, (typeof openVisits)[number]>();
+  for (const v of openVisits) {
+    const key = String(v.employeeId);
+    if (!visitOf.has(key)) visitOf.set(key, v); // newest first
+  }
+
+  const rows = fixes.flatMap((f) => {
+    const emp = byId.get(String(f._id));
+    if (!emp) return []; // employee since deleted
+    const visit = visitOf.get(String(f._id));
+    const client = visit?.clientId as unknown as { _id: Types.ObjectId; name?: string } | null;
+    return [
+      {
+        employeeId: String(f._id),
+        employeeCode: emp.employeeId ?? null,
+        name: employeeName(emp),
+        avatar: emp.profileImage ?? null,
+        lat: f.location.coordinates[1],
+        lng: f.location.coordinates[0],
+        accuracy: f.accuracy ?? null,
+        speed: f.speed ?? null,
+        heading: f.heading ?? null,
+        battery: f.battery ?? null,
+        recordedAt: f.timestamp,
+        onVisit: visit
+          ? {
+              visitId: String(visit._id),
+              clientId: idOf(client),
+              clientName: client?.name ?? null,
+            }
+          : null,
+      },
+    ];
+  });
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ success: true, data: rows });
 }
 
-export async function trackingHistory(req: Request, res: Response): Promise<void> {
+/**
+ * `GET /field/tracking/:employeeId/trail?date=YYYY-MM-DD` (also the older
+ * `GET /field/tracking/history/:employeeId`) — the rep's fixes on that IST
+ * day, oldest first, and that day's visits (by check-in time). Default: today.
+ */
+export async function trackingTrail(req: Request, res: Response): Promise<void> {
   const employeeId = String(req.params.employeeId);
-  await assertOwnOrPermission(req, employeeId, MANAGE);
-  const date = req.query.date ? new Date(String(req.query.date)) : new Date();
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
-  const docs = await LocationTrack.find({
-    employeeId,
-    timestamp: { $gte: start, $lte: end },
-  })
-    .sort({ timestamp: 1 })
+  if (!Types.ObjectId.isValid(employeeId) || String(new Types.ObjectId(employeeId)) !== employeeId) {
+    throw new ValidationAppError('Invalid employee id');
+  }
+  await assertCanSeeRep(req, employeeId);
+  const { date, from, to } = businessDayRange(
+    (req.query as z.infer<typeof trailQuerySchema>).date,
+  );
+
+  const employee = await Employee.findById(employeeId)
+    .select('firstName lastName profileImage')
     .lean()
     .exec();
-  const trail = docs.map((d) => ({
-    timestamp: d.timestamp,
-    lng: d.location.coordinates[0],
-    lat: d.location.coordinates[1],
-    speed: d.speed,
-    activity: d.activity,
-    battery: d.battery,
-  }));
-  res.json({ success: true, data: trail });
+  if (!employee) throw new NotFoundError('Employee not found');
+
+  const [fixes, visits] = await Promise.all([
+    LocationTrack.find({ employeeId, timestamp: { $gte: from, $lt: to } })
+      .sort({ timestamp: 1 })
+      .limit(TRAIL_MAX_POINTS + 1)
+      .select('timestamp location accuracy speed heading')
+      .lean()
+      .exec(),
+    Visit.find({ employeeId, 'checkIn.time': { $gte: from, $lt: to } })
+      .sort({ 'checkIn.time': 1 })
+      .select('employeeId clientId checkIn checkOut status purpose')
+      .populate('clientId', 'name location')
+      .lean()
+      .exec(),
+  ]);
+
+  const points = fixes.slice(0, TRAIL_MAX_POINTS);
+  res.json({
+    success: true,
+    data: {
+      employeeId,
+      name: employeeName(employee),
+      avatar: employee.profileImage ?? null,
+      date,
+      points: points.map((p) => ({
+        lat: p.location.coordinates[1],
+        lng: p.location.coordinates[0],
+        accuracy: p.accuracy ?? null,
+        speed: p.speed ?? null,
+        heading: p.heading ?? null,
+        recordedAt: p.timestamp,
+      })),
+      truncated: fixes.length > TRAIL_MAX_POINTS,
+      visits: visits.map((v) => visitPin(v as unknown as VisitLike)),
+    },
+  });
 }

@@ -43,7 +43,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function LeaveTypesPage(): ReactElement {
-  const { data, isLoading } = useLeaveTypes({ limit: 100 });
+  const { data, isLoading, error, refetch } = useLeaveTypes({ limit: 100 });
   const create = useCreateLeaveType();
   const update = useUpdateLeaveType();
   const remove = useDeleteLeaveType();
@@ -219,6 +219,8 @@ export default function LeaveTypesPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(lt) => lt._id}
         emptyTitle="No leave types"
         emptyDescription="Create leave types like casual, sick, earned to enable employees to apply"

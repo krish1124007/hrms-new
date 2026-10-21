@@ -80,9 +80,18 @@ export async function listNotices(req: Request, res: Response): Promise<void> {
     Notice.countDocuments(filter).exec(),
   ]);
 
+  // Whether the caller has acknowledged each notice — read off the
+  // acknowledgements already loaded with the page, so clients stop
+  // re-showing a notice the user has dismissed.
+  const me = req.user ? String(req.user._id) : null;
+  const data = notices.map((notice) => ({
+    ...notice,
+    acknowledgedByMe: me !== null && (notice.acknowledgements ?? []).some((ack) => String(ack.userId) === me),
+  }));
+
   res.json({
     success: true,
-    data: notices,
+    data,
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });
 }

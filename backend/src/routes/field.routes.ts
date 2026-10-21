@@ -13,6 +13,7 @@ import * as targets from '../controllers/field-targets.controller.js';
 import * as orders from '../controllers/field-orders.controller.js';
 import * as payments from '../controllers/field-payments.controller.js';
 import * as tracking from '../controllers/field-tracking.controller.js';
+import * as fieldMap from '../controllers/field-map.controller.js';
 import * as uploads from '../controllers/field-uploads.controller.js';
 import * as products from '../controllers/field-products.controller.js';
 import { fieldDashboard } from '../controllers/field-dashboard.controller.js';
@@ -89,7 +90,8 @@ router.get(
 router.get(
   '/clients/map',
   requirePermission('field-sales.view'),
-  asyncHandler(clients.clientsMap),
+  validate(fieldMap.clientsMapQuerySchema, 'query'),
+  asyncHandler(fieldMap.clientsMap),
 );
 router.post(
   '/clients/import',
@@ -137,6 +139,12 @@ router.get(
   '/visits/today',
   requirePermission('field-sales.view'),
   asyncHandler(visits.todayVisits),
+);
+router.get(
+  '/visits/map',
+  requirePermission('field-sales.view'),
+  validate(fieldMap.visitsMapQuerySchema, 'query'),
+  asyncHandler(fieldMap.visitsMap),
 );
 router.get(
   '/visits/timeline/:employeeId',
@@ -397,6 +405,8 @@ router.patch(
 );
 
 /* ── Live Tracking ── */
+// The one ingest (also mounted at POST /attendance/tracking/batch): only while
+// live tracking is on and the caller is clocked in.
 router.post(
   '/tracking/batch',
   requirePermission('field-sales.view'),
@@ -409,9 +419,17 @@ router.get(
   asyncHandler(tracking.liveTracking),
 );
 router.get(
+  '/tracking/:employeeId/trail',
+  requirePermission('field-sales.view'),
+  validate(tracking.trailQuerySchema, 'query'),
+  asyncHandler(tracking.trackingTrail),
+);
+// Older name for the trail; same response.
+router.get(
   '/tracking/history/:employeeId',
   requirePermission('field-sales.view'),
-  asyncHandler(tracking.trackingHistory),
+  validate(tracking.trailQuerySchema, 'query'),
+  asyncHandler(tracking.trackingTrail),
 );
 
 export default router;

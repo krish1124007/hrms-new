@@ -1,52 +1,55 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Command } from 'cmdk';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Building2,
-  Calendar,
-  Clock,
-  FileText,
-  LayoutDashboard,
-  Search,
-  Users,
-  Briefcase,
-  ClipboardList,
-  MapPin,
-} from 'lucide-react';
-import { visibleNavLeaves } from '@/config/navigation';
+import { Loader2, Search, User, type LucideIcon } from 'lucide-react';
+import { NAV_ACCESS, visibleNavLeaves } from '@/config/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePermissions } from '@/hooks/use-permissions';
+import { employeesApi } from '@/lib/systemcore.api';
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-interface SearchResult {
+interface PaletteEntry {
   id: string;
   label: string;
   description?: string;
-  category: string;
-  icon: typeof Search;
+  icon: LucideIcon;
+  /** Always an in-app path — entries without one are never built. */
   to: string;
 }
 
-const QUICK_ACTION_ICONS: Record<string, typeof Search> = {
-  Dashboard: LayoutDashboard,
-  Employees: Users,
-  Departments: Building2,
-  Attendance: Clock,
-  Leaves: Calendar,
-  Projects: Briefcase,
-  Documents: FileText,
-  Tasks: ClipboardList,
-  Locations: MapPin,
-};
-
 /** Shortcuts shown before the user types — only those they can open are listed. */
-const QUICK_LINKS = ['/dashboard', '/employees', '/attendance'];
+const QUICK_LINKS = ['/dashboard', '/employees', '/attendance', '/attendance/my', '/leaves'];
 
+/** People search starts at this many characters. */
+const MIN_PEOPLE_QUERY = 2;
+
+const GROUP_CLASS =
+  'mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground';
+const ITEM_CLASS =
+  'flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm aria-selected:bg-accent aria-selected:text-foreground';
+
+/** `value`, but only after it has stopped changing for `ms`. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
+/**
+ * ⌘K palette: the sidebar destinations this user can open, plus — for
+ * holders of `employees.view` only — a live employee search against
+ * `GET /employees?search=`. Nothing here is mock data, and every entry
+ * navigates to a route that exists.
+ */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): ReactElement | null {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -68,32 +71,49 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
 
   const roleSlug = useAuthStore((st) => st.user?.role?.slug);
   const { hasAny } = usePermissions();
+  const canSearchPeople = hasAny(NAV_ACCESS.employees);
 
   // Page results: exactly the sidebar destinations this user can see.
-  const pageResults = useMemo<SearchResult[]>(
+  const pageResults = useMemo<PaletteEntry[]>(
     () =>
-      visibleNavLeaves({ roleSlug, hasAny }).map(({ item, parentLabel }) => {
-        const iconKey = Object.keys(QUICK_ACTION_ICONS).find((k) =>
-          item.label.toLowerCase().includes(k.toLowerCase()),
-        );
-        return {
-          id: `page-${item.to}`,
-          label: item.label,
-          description: parentLabel,
-          category: 'Pages',
-          icon: iconKey ? QUICK_ACTION_ICONS[iconKey] : item.icon,
-          to: item.to,
-        };
-      }),
+      visibleNavLeaves({ roleSlug, hasAny }).map(({ item, parentLabel }) => ({
+        id: `page-${item.to}`,
+        label: item.label,
+        description: parentLabel,
+        icon: item.icon,
+        to: item.to,
+      })),
     [roleSlug, hasAny],
   );
 
   const quickLinks = useMemo(
     () =>
       QUICK_LINKS.map((to) => pageResults.find((r) => r.to === to)).filter(
-        (r): r is SearchResult => r !== undefined,
+        (r): r is PaletteEntry => r !== undefined,
       ),
     [pageResults],
+  );
+
+  const peopleQuery = useDebounced(query.trim(), 250);
+  const searchPeople = open && canSearchPeople && peopleQuery.length >= MIN_PEOPLE_QUERY;
+  const people = useQuery({
+    queryKey: ['command-palette', 'employees', peopleQuery],
+    queryFn: () => employeesApi.list({ search: peopleQuery, limit: 5, page: 1 }),
+    enabled: searchPeople,
+    staleTime: 30_000,
+  });
+  const peopleResults = useMemo<PaletteEntry[]>(
+    () =>
+      searchPeople
+        ? (people.data?.data ?? []).map((e) => ({
+            id: `employee-${e._id}`,
+            label: `${e.firstName} ${e.lastName}`,
+            description: [e.employeeId, e.designation?.name ?? e.email].filter(Boolean).join(' · '),
+            icon: User,
+            to: `/employees/${e._id}`,
+          }))
+        : [],
+    [people.data, searchPeople],
   );
 
   const handleSelect = (to: string): void => {
@@ -101,15 +121,24 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
     onOpenChange(false);
   };
 
-  // Group results by category
-  const grouped = useMemo(() => {
-    const groups: Record<string, SearchResult[]> = {};
-    for (const item of pageResults) {
-      if (!groups[item.category]) groups[item.category] = [];
-      groups[item.category].push(item);
-    }
-    return groups;
-  }, [pageResults]);
+  const renderEntry = (item: PaletteEntry, opts: { value: string; forceMount?: boolean }): ReactElement => (
+    <Command.Item
+      key={item.id}
+      value={opts.value}
+      forceMount={opts.forceMount}
+      data-to={item.to}
+      onSelect={() => handleSelect(item.to)}
+      className={ITEM_CLASS}
+    >
+      <item.icon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <span className="block truncate">{item.label}</span>
+        {item.description && (
+          <span className="block truncate text-xs text-muted-foreground">{item.description}</span>
+        )}
+      </div>
+    </Command.Item>
+  );
 
   return (
     <AnimatePresence>
@@ -137,9 +166,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
                   autoFocus
                   value={query}
                   onValueChange={setQuery}
-                  placeholder="Search pages..."
+                  placeholder={canSearchPeople ? 'Search pages and employees...' : 'Search pages...'}
                   className="flex h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 />
+                {people.isFetching && <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />}
                 <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-flex">
                   ESC
                 </kbd>
@@ -151,57 +181,30 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps): Rea
                 </Command.Empty>
 
                 {!query && quickLinks.length > 0 && (
-                  <Command.Group
-                    heading="Recent"
-                    className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground"
-                  >
-                    {quickLinks.map((item) => (
-                      <Command.Item
-                        key={`recent-${item.to}`}
-                        value={`recent ${item.to}`}
-                        onSelect={() => handleSelect(item.to)}
-                        className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm aria-selected:bg-accent aria-selected:text-foreground"
-                      >
-                        <item.icon className="size-4 text-muted-foreground" />
-                        {/* Section name ("Attendance") reads better than the leaf ("Dashboard"). */}
-                        <span>{item.description ?? item.label}</span>
-                        <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          Recent
-                        </span>
-                      </Command.Item>
-                    ))}
+                  <Command.Group heading="Quick links" className={GROUP_CLASS}>
+                    {quickLinks.map((item) =>
+                      renderEntry(
+                        // Section name ("Attendance") reads better than the leaf ("Dashboard").
+                        { ...item, id: `quick-${item.to}`, label: item.description ?? item.label, description: undefined },
+                        { value: `quick ${item.to}` },
+                      ),
+                    )}
                   </Command.Group>
                 )}
 
-                {Object.entries(grouped).map(([category, items]) => (
-                  <Command.Group
-                    key={category}
-                    heading={category}
-                    className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground"
-                  >
-                    {items.map((item) => (
-                      <Command.Item
-                        key={item.id}
-                        value={`${item.label} ${item.description ?? ''} ${item.category}`}
-                        onSelect={() => handleSelect(item.to)}
-                        className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm aria-selected:bg-accent aria-selected:text-foreground"
-                      >
-                        <item.icon className="size-4 shrink-0 text-muted-foreground" />
-                        <div className="min-w-0 flex-1">
-                          <span className="block truncate">{item.label}</span>
-                          {item.description && (
-                            <span className="block truncate text-xs text-muted-foreground">
-                              {item.description}
-                            </span>
-                          )}
-                        </div>
-                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {item.category}
-                        </span>
-                      </Command.Item>
-                    ))}
+                {peopleResults.length > 0 && (
+                  <Command.Group heading="Employees" className={GROUP_CLASS} forceMount>
+                    {/* The server already matched these (name, e-mail, ID…), so
+                        cmdk must not filter them out again. */}
+                    {peopleResults.map((item) => renderEntry(item, { value: item.id, forceMount: true }))}
                   </Command.Group>
-                ))}
+                )}
+
+                <Command.Group heading="Pages" className={GROUP_CLASS}>
+                  {pageResults.map((item) =>
+                    renderEntry(item, { value: `${item.label} ${item.description ?? ''} ${item.to}` }),
+                  )}
+                </Command.Group>
               </Command.List>
 
               <div className="flex items-center justify-between border-t border-border px-3 py-2 text-xs text-muted-foreground">

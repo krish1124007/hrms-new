@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as ctrl from '../controllers/attendance.controller.js';
 import * as res from '../controllers/attendance-resources.controller.js';
+import * as tracking from '../controllers/field-tracking.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
@@ -142,6 +143,13 @@ router.post(
 );
 
 // ---------- GEOFENCE ZONES ----------
+// The zones that apply to the caller — for anyone who checks in. Declared
+// before `/geofences/:id` so "mine" is not read as an id.
+router.get(
+  '/geofences/mine',
+  requirePermission('attendance.checkin'),
+  asyncHandler(ctrl.geofencesMine),
+);
 router.get(
   '/geofences',
   requirePermission('attendance.view'),
@@ -217,10 +225,12 @@ router.delete(
 );
 
 // ---------- LIVE TRACKING ----------
+// The same ingest as POST /field/tracking/batch (kept for the shipped mobile
+// app): only while live tracking is on and the caller is clocked in.
 router.post(
   '/tracking/batch',
-  validate(ctrl.trackingBatchSchema),
-  asyncHandler(ctrl.ingestLocationBatch),
+  validate(tracking.batchSchema),
+  asyncHandler(tracking.ingestBatch),
 );
 router.get(
   '/tracking/live',

@@ -30,7 +30,7 @@ export function idempotent(ttlSeconds = DEFAULT_TTL_SECONDS) {
     if (!key) return next();
 
     // Validate key format (UUID-ish)
-    if (!/^[A-Za-z0-9_\-]{8,64}$/.test(key)) {
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(key)) {
       res.status(400).json({
         success: false,
         error: { code: 'INVALID_IDEMPOTENCY_KEY', message: 'Idempotency-Key must be 8-64 alphanumeric chars' },

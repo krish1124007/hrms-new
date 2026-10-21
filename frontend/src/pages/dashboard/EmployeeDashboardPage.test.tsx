@@ -5,6 +5,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { attendanceApi, type Attendance } from '@/lib/attendance.api';
 import { expenseCategoriesApi, expenseClaimsApi } from '@/lib/expense-claims.api';
+import { noticesApi, type Notice } from '@/lib/notices.api';
+import { payrollApi, type PayrollRecord } from '@/lib/payroll.api';
 import EmployeeDashboardPage from './EmployeeDashboardPage';
 
 vi.mock('@/hooks/use-auth', () => ({
@@ -120,3 +122,88 @@ describe('EmployeeDashboardPage check-out', () => {
     await waitFor(() => expect(screen.queryByText(/submit today's expense to check out/i)).toBeNull());
   });
 });
+
+describe('EmployeeDashboardPage notice pop-up and payslip', () => {
+  const notice = {
+    _id: 'n1',
+    title: 'Office closed',
+    content: '<p>The office is <strong>closed</strong> on Friday.</p><script>window.__pwned = true</script>',
+    priority: 'normal',
+    departments: [],
+    postedBy: { _id: 'u9', firstName: 'HR', lastName: 'Team' },
+    isPinned: false,
+    attachments: [],
+    acknowledgements: [],
+    acknowledgedByMe: false,
+    createdAt: '2026-10-20T04:00:00.000Z',
+    updatedAt: '2026-10-20T04:00:00.000Z',
+  } as Notice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    today.mockResolvedValue({ success: true, data: null } as never);
+    my.mockResolvedValue({ success: true, data: [], pagination: { page: 1, limit: 31, total: 0, pages: 0 } } as never);
+  });
+
+  it('renders an HTML notice sanitised and keeps "Read later" across reloads', async () => {
+    vi.mocked(noticesApi.list).mockResolvedValue({
+      success: true,
+      data: [notice],
+      pagination: { page: 1, limit: 1, total: 1, pages: 1 },
+    });
+    const user = userEvent.setup();
+
+    const first = renderPage();
+    const dialogTitle = await screen.findByText('Office closed');
+    const closed = await screen.findByText('closed', { selector: 'strong' });
+    expect(closed).toBeInTheDocument();
+    expect(document.querySelector('script')).toBeNull();
+    expect((window as { __pwned?: boolean }).__pwned).toBeUndefined();
+    expect(dialogTitle).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /read later/i }));
+    await waitFor(() => expect(screen.queryByText('Office closed')).toBeNull());
+    first.unmount();
+
+    // A fresh page (new query cache, same session) does not pop it up again.
+    renderPage();
+    await waitFor(() => expect(noticesApi.list).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Office closed')).toBeNull();
+  });
+
+  it('does not pop up a notice the user already acknowledged', async () => {
+    vi.mocked(noticesApi.list).mockResolvedValue({
+      success: true,
+      data: [{ ...notice, acknowledgedByMe: true }],
+      pagination: { page: 1, limit: 1, total: 1, pages: 1 },
+    });
+    renderPage();
+    await waitFor(() => expect(noticesApi.list).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Office closed')).toBeNull();
+  });
+
+  it("names the latest payslip's month from its payroll cycle", async () => {
+    vi.mocked(noticesApi.list).mockResolvedValue({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 1, total: 0, pages: 0 },
+    });
+    vi.mocked(payrollApi.myPayslips).mockResolvedValue({
+      success: true,
+      data: [
+        {
+          _id: 'r1',
+          cycleId: { _id: 'c1', month: 9, year: 2026, status: 'paid' },
+          netSalary: 45000,
+          grossSalary: 50000,
+        } as PayrollRecord,
+      ],
+    });
+    renderPage();
+    expect(await screen.findByText('Sep 2026')).toBeInTheDocument();
+  });
+});
+

@@ -239,12 +239,20 @@ export function useEmployeeStats() {
   });
 }
 
-export function useEmployee(id: string | undefined, opts?: Partial<UseQueryOptions>) {
+/**
+ * One employee. `includeDeleted` also finds a soft-deleted record (the API
+ * honours it only for `employees.delete` holders) so it can be restored.
+ */
+export function useEmployee(
+  id: string | undefined,
+  opts?: Partial<UseQueryOptions> & { includeDeleted?: boolean },
+) {
+  const { includeDeleted, ...queryOpts } = opts ?? {};
   return useQuery({
-    queryKey: ['employees', id],
-    queryFn: () => employeesApi.get(id as string),
+    queryKey: ['employees', id, includeDeleted ? 'with-deleted' : 'live'],
+    queryFn: () => employeesApi.get(id as string, includeDeleted ? { includeDeleted: 1 } : undefined),
     enabled: !!id,
-    ...(opts as object),
+    ...(queryOpts as object),
   });
 }
 

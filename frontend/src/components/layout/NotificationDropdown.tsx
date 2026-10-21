@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Bell,
   CalendarCheck,
@@ -52,6 +53,7 @@ function timeAgo(iso: string): string {
 }
 
 export function NotificationDropdown(): ReactElement {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'all' | 'unread'>('all');
   const ref = useRef<HTMLDivElement>(null);
@@ -163,8 +165,10 @@ export function NotificationDropdown(): ReactElement {
                   if (!n.isRead) markRead.mutate(n._id);
                   if (n.link) {
                     setOpen(false);
-                    // Cross-router safe: link is an in-app path stored server-side.
-                    window.location.assign(n.link);
+                    // In-app paths route client-side (no reload, cache kept);
+                    // only http(s) links leave the app.
+                    if (n.link.startsWith('/') && !n.link.startsWith('//')) navigate(n.link);
+                    else if (/^https?:\/\//i.test(n.link)) window.location.assign(n.link);
                   }
                 };
                 return (

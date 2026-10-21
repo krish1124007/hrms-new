@@ -33,11 +33,11 @@ export function usePolicyStats() {
   return useQuery({ queryKey: ['policies', 'stats'], queryFn: () => hrPoliciesApi.stats() });
 }
 
-export function usePolicyAcknowledgements(id: string | undefined) {
+export function usePolicyAcknowledgements(id: string | undefined, enabled = true) {
   return useQuery({
     queryKey: ['policies', id, 'acknowledgements'],
     queryFn: () => hrPoliciesApi.acknowledgements(id as string),
-    enabled: !!id,
+    enabled: !!id && enabled,
   });
 }
 
@@ -129,7 +129,7 @@ export function useRestorePolicy() {
 export function useAcknowledgePolicy() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, employee, comment }: { id: string; employee: string; comment?: string }) =>
+    mutationFn: ({ id, employee, comment }: { id: string; employee?: string; comment?: string }) =>
       hrPoliciesApi.acknowledge(id, { employee, comment }),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['policies', v.id] });

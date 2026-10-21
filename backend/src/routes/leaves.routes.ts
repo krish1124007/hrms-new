@@ -74,7 +74,9 @@ router.get(
 );
 
 // ---------- Reports ----------
-router.get('/reports', requirePermission('leaves.view'), asyncHandler(ctrl.leaveReports));
+// Approvers only, scoped like the leave lists: a manager's reports cover their
+// direct reports and themselves, HR (`leaves.approve_all` / `leaves.update`) everybody.
+router.get('/reports', requirePermission('leaves.approve'), asyncHandler(ctrl.leaveReports));
 
 // ---------- Leave Requests ----------
 router.get('/requests/my', requirePermission('leaves.view'), asyncHandler(ctrl.myLeaveRequests));

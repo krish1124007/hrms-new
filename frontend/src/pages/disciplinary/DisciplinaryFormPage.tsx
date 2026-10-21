@@ -16,7 +16,7 @@ import {
   useDisciplinary,
   useUpdateDisciplinary,
 } from '@/hooks/use-disciplinary';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import {
   DISCIPLINARY_SEVERITIES,
   DISCIPLINARY_TYPES,
@@ -53,8 +53,14 @@ export default function DisciplinaryFormPage(): ReactElement {
   const { data: existing, isLoading: loadingCase } = useDisciplinary(id);
   const create = useCreateDisciplinary();
   const update = useUpdateDisciplinary();
-  const { data: empData } = useEmployees({ limit: 500 });
-  const employees = empData?.data ?? [];
+  // Only people who still work here — plus, on edit, the case's own employee
+  // so an unrelated edit never drops them from the form.
+  const { data: currentEmployees = [] } = useActiveEmployees();
+  const caseEmployee = existing?.data?.employee;
+  const employees =
+    caseEmployee && !currentEmployees.some((e) => e._id === caseEmployee._id)
+      ? [...currentEmployees, caseEmployee]
+      : currentEmployees;
 
   const {
     register,

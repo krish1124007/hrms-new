@@ -35,6 +35,25 @@ describe('ensureSystemRoles', () => {
     expect(manager.permissions).toEqual(expected);
   });
 
+  it('gives an existing hr_executive / hr_manager role expenses.config on the next run', async () => {
+    await ensureSystemRoles();
+    await Role.updateMany(
+      { slug: { $in: ['hr_executive', 'hr_manager'] } },
+      { $pull: { permissions: 'expenses.config' } },
+    );
+
+    const result = await ensureSystemRoles();
+
+    expect(result.refreshed).toBe(2);
+    for (const slug of ['hr_executive', 'hr_manager']) {
+      // eslint-disable-next-line no-await-in-loop
+      const role = await Role.findOne({ slug }).orFail().lean().exec();
+      expect({ slug, has: role.permissions.includes('expenses.config') }).toEqual({ slug, has: true });
+    }
+    const manager = await Role.findOne({ slug: 'manager' }).orFail().lean().exec();
+    expect(manager.permissions).not.toContain('expenses.config');
+  });
+
   it('leaves an existing user document byte-identical', async () => {
     const { user } = await createUser({ roleSlug: 'employee' });
     const snapshot = async (): Promise<string> =>

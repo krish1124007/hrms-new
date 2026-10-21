@@ -150,7 +150,6 @@ export const NAV_GROUPS: NavGroup[] = [
           { label: 'QR Codes', to: '/attendance/qr-codes', icon: HardDrive, module: 'attendance', permissions: P.attendanceConfig },
           { label: 'Allowed IPs', to: '/attendance/allowed-ips', icon: Shield, module: 'attendance', permissions: P.attendanceConfig },
           { label: 'Settings', to: '/attendance/settings', icon: Settings, module: 'attendance', permissions: P.attendanceConfig },
-          { label: 'Timesheets', to: '/timesheets', icon: Clock, module: 'attendance' },
         ],
       },
       {

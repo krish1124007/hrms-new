@@ -37,23 +37,7 @@ import {
 } from '@/hooks/use-disciplinary';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/axios';
-
-interface UserOption {
-  _id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-}
-
-function useUsersForEscalation() {
-  return useQuery({
-    queryKey: ['users', 'escalation-list'],
-    queryFn: async (): Promise<{ data: UserOption[] }> => {
-      const res = await api.get('/users', { params: { limit: 200 } });
-      return res.data;
-    },
-  });
-}
+import { usePermissions } from '@/hooks/use-permissions';
 import {
   DISCIPLINARY_SEVERITIES,
   DISCIPLINARY_TYPES,
@@ -72,6 +56,25 @@ const STATUS_VARIANT: Record<DisciplinaryStatus, 'default' | 'success' | 'warnin
   cancelled: 'secondary',
 };
 
+interface UserOption {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
+/** Escalation targets — loaded only when a manager opens the escalate dialog. */
+function useUsersForEscalation(enabled: boolean) {
+  return useQuery({
+    queryKey: ['users', 'escalation-list'],
+    queryFn: async (): Promise<{ data: UserOption[] }> => {
+      const res = await api.get('/users', { params: { limit: 100 } });
+      return res.data;
+    },
+    enabled,
+  });
+}
+
 const SEVERITY_VARIANT: Record<DisciplinarySeverity, 'success' | 'default' | 'warning' | 'destructive'> = {
   low: 'success',
   medium: 'default',
@@ -89,7 +92,15 @@ export default function DisciplinaryDetailPage(): ReactElement {
   const cancel = useCancelDisciplinary();
   const remove = useDeleteDisciplinary();
   const addComment = useAddDisciplinaryComment();
-  const { data: usersData } = useUsersForEscalation();
+  // The API gates every action here: acknowledging on `disciplinary.view`,
+  // everything else (escalate, close, cancel, edit, delete, comment) on
+  // `disciplinary.manage`. An employee viewing their own case gets neither.
+  const { has } = usePermissions();
+  const canManage = has('disciplinary.manage');
+  const canRecordAck = has('disciplinary.view');
+
+  const [escOpen, setEscOpen] = useState(false);
+  const { data: usersData } = useUsersForEscalation(canManage && escOpen);
   const users = usersData?.data ?? [];
 
   const [ackOpen, setAckOpen] = useState(false);
@@ -99,7 +110,6 @@ export default function DisciplinaryDetailPage(): ReactElement {
   const [resOutcome, setResOutcome] = useState<'resolved' | 'failed'>('resolved');
   const [resNotes, setResNotes] = useState('');
 
-  const [escOpen, setEscOpen] = useState(false);
   const [escTo, setEscTo] = useState('');
   const [escReason, setEscReason] = useState('');
 
@@ -134,7 +144,7 @@ export default function DisciplinaryDetailPage(): ReactElement {
     DISCIPLINARY_SEVERITIES.find((s) => s.value === action.severity)?.label ?? action.severity;
   const isClosed =
     action.status === 'resolved' || action.status === 'failed' || action.status === 'cancelled';
-  const canAcknowledge = action.status === 'open';
+  const canAcknowledge = canRecordAck && action.status === 'open';
 
   const handleAcknowledge = (): void => {
     acknowledge.mutate(
@@ -220,7 +230,7 @@ export default function DisciplinaryDetailPage(): ReactElement {
                 <CheckCircle2 className="size-4" /> Acknowledge
               </Button>
             )}
-            {!isClosed && (
+            {canManage && !isClosed && (
               <>
                 <Button size="sm" variant="outline" onClick={() => setEscOpen(true)}>
                   <ArrowUpRight className="size-4" /> Escalate
@@ -238,9 +248,11 @@ export default function DisciplinaryDetailPage(): ReactElement {
                 </Button>
               </>
             )}
-            <Button variant="outline" size="sm" onClick={handleDelete}>
-              <Trash2 className="size-4" /> Delete
-            </Button>
+            {canManage && (
+              <Button variant="outline" size="sm" onClick={handleDelete}>
+                <Trash2 className="size-4" /> Delete
+              </Button>
+            )}
           </div>
         }
       />
@@ -396,7 +408,7 @@ export default function DisciplinaryDetailPage(): ReactElement {
             })}
           </ul>
         )}
-        {!isClosed && (
+        {canManage && !isClosed && (
           <div className="flex gap-2">
             <Textarea
               rows={2}

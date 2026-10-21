@@ -50,7 +50,7 @@ import {
 import { useMyLeaveBalances } from '@/hooks/use-leaves';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '@/lib/dashboard.api';
-import { type Attendance } from '@/lib/attendance.api';
+import { type Attendance, type CheckInPayload } from '@/lib/attendance.api';
 import { payrollApi } from '@/lib/payroll.api';
 import { noticesApi, type Notice } from '@/lib/notices.api';
 import { useEffect } from 'react';
@@ -58,6 +58,7 @@ import { Megaphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { LocationPermissionDialog } from '@/components/common/LocationPermissionDialog';
 import { CheckoutExpenseDialog, isExpenseRequiredError } from '@/components/attendance/CheckoutExpenseDialog';
+import { RichText } from '@/components/common/RichText';
 
 function fmtTime(iso?: string): string {
   if (!iso) return '—';
@@ -95,6 +96,35 @@ function isLocationRequiredError(e: unknown): boolean {
   return err.response?.data?.error?.code === 'LOCATION_REQUIRED';
 }
 
+const READ_LATER_KEY = 'opencore.notices.read-later';
+
+/**
+ * Notices this user put off with "Read later" in this browser session. Kept
+ * in sessionStorage so the pop-up does not come back on every refetch or
+ * reload, but does on their next visit.
+ */
+function readLaterIds(userId: string | undefined): string[] {
+  if (!userId) return [];
+  try {
+    const raw = sessionStorage.getItem(`${READ_LATER_KEY}.${userId}`);
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberReadLater(userId: string | undefined, noticeId: string): void {
+  if (!userId) return;
+  try {
+    const ids = new Set(readLaterIds(userId));
+    ids.add(noticeId);
+    sessionStorage.setItem(`${READ_LATER_KEY}.${userId}`, JSON.stringify([...ids]));
+  } catch {
+    // Storage unavailable (private mode) — the notice may simply come back.
+  }
+}
+
 export default function EmployeeDashboardPage(): ReactElement {
   const { user } = useAuth();
   const today = new Date().toLocaleDateString(undefined, {
@@ -127,13 +157,18 @@ export default function EmployeeDashboardPage(): ReactElement {
 
   useEffect(() => {
     const latest = noticesQ.data?.data?.[0];
-    if (latest) {
-      const isAcknowledged = latest.acknowledgements?.some((a) => a.userId === user?._id);
-      if (!isAcknowledged) {
-        setActiveNotice(latest);
-      }
+    if (!latest) return;
+    const acknowledged =
+      latest.acknowledgedByMe ?? latest.acknowledgements?.some((a) => a.userId === user?._id) ?? false;
+    if (!acknowledged && !readLaterIds(user?._id).includes(latest._id)) {
+      setActiveNotice(latest);
     }
   }, [noticesQ.data, user?._id]);
+
+  const readNoticeLater = (): void => {
+    if (activeNotice) rememberReadLater(user?._id, activeNotice._id);
+    setActiveNotice(null);
+  };
 
   const acknowledgeNotice = useMutation({
     mutationFn: (id: string) => noticesApi.acknowledge(id),
@@ -151,7 +186,7 @@ export default function EmployeeDashboardPage(): ReactElement {
    * location help instead. Other errors are toasted by the mutation.
    */
   const submitCheckOut = async (known?: { lat: number; lng: number }): Promise<void> => {
-    const payload: any = { method: 'manual' };
+    const payload: CheckInPayload = { method: 'manual' };
     const res: LocationResult = known ? { ok: true, loc: known } : await getLocation();
     if (res.ok) payload.location = res.loc;
     try {
@@ -167,7 +202,7 @@ export default function EmployeeDashboardPage(): ReactElement {
   };
 
   const submitCheckIn = async (): Promise<void> => {
-    const payload: any = { method: 'manual' };
+    const payload: CheckInPayload = { method: 'manual' };
     const res = await getLocation();
 
     if (res.ok) {
@@ -176,7 +211,7 @@ export default function EmployeeDashboardPage(): ReactElement {
 
     try {
       await checkIn.mutateAsync(payload);
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (isLocationRequiredError(e)) {
         setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind: 'in' });
       }
@@ -197,7 +232,7 @@ export default function EmployeeDashboardPage(): ReactElement {
     toast.success('Location enabled');
     
     if (kind === 'in') {
-      const payload: any = { method: 'manual', location: res.loc };
+      const payload: CheckInPayload = { method: 'manual', location: res.loc };
       checkIn.mutate(payload);
     } else {
       void submitCheckOut(res.loc);
@@ -337,22 +372,22 @@ export default function EmployeeDashboardPage(): ReactElement {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
           label="Present"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.present}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.present}
           icon={UserCheck}
         />
         <StatCard
           label="Late"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.late}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.late}
           icon={Clock}
         />
         <StatCard
           label="Absent"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.absent}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.absent}
           icon={CalendarOff}
         />
         <StatCard
           label="Hours this month"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : fmtHours(summary.totalHours)}
+          value={monthQ.isLoading ? <InlineSkel /> : fmtHours(summary.totalHours)}
           icon={Activity}
         />
       </div>
@@ -377,7 +412,9 @@ export default function EmployeeDashboardPage(): ReactElement {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-foreground">
-                    {monthName((latestPayslip as any).month)} {(latestPayslip as any).year}
+                    {typeof latestPayslip.cycleId === 'object'
+                      ? `${monthName(latestPayslip.cycleId.month)} ${latestPayslip.cycleId.year}`
+                      : 'Latest'}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Net pay
@@ -519,11 +556,7 @@ export default function EmployeeDashboardPage(): ReactElement {
         checkingOut={checkOut.isPending}
       />
 
-      <Dialog
-        open={!!activeNotice}
-        onClose={() => setActiveNotice(null)}
-        size="md"
-      >
+      <Dialog open={!!activeNotice} onClose={readNoticeLater} size="md">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <div className="rounded-full bg-primary/10 p-2 text-primary">
@@ -533,11 +566,12 @@ export default function EmployeeDashboardPage(): ReactElement {
           </div>
         </DialogHeader>
         <DialogBody>
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-              {activeNotice?.content}
-            </p>
-          </div>
+          {/* Rendered like the notice board: HTML notices as (sanitised) HTML. */}
+          <RichText
+            source={activeNotice?.content ?? ''}
+            format="html"
+            className="text-sm leading-relaxed text-muted-foreground"
+          />
           {activeNotice?.attachments?.length ? (
             <div className="mt-4 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -561,11 +595,7 @@ export default function EmployeeDashboardPage(): ReactElement {
           ) : null}
         </DialogBody>
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => setActiveNotice(null)}
-            disabled={acknowledgeNotice.isPending}
-          >
+          <Button variant="outline" onClick={readNoticeLater} disabled={acknowledgeNotice.isPending}>
             Read later
           </Button>
           <Button

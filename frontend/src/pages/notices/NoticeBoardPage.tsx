@@ -33,8 +33,14 @@ import {
 } from '@/components/ui/dialog';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePermissions } from '@/hooks/use-permissions';
+import { useDepartments } from '@/hooks/use-systemcore';
+import { RichText } from '@/components/common/RichText';
 import { noticesApi, NOTICE_PRIORITIES, type Notice, type NoticePriority } from '@/lib/notices.api';
 import { formatRelative } from '@/lib/format';
+import { apiErrorMessage } from '@/lib/api-error';
+import { Pagination } from '@/components/ui/data-table';
+
+const PAGE_SIZE = 20;
 import { cn } from '@/lib/utils';
 
 const PRIORITY_STYLES: Record<NoticePriority, { border: string; icon: ReactElement; label: string }> = {
@@ -61,6 +67,8 @@ const createSchema = z.object({
   priority: z.enum(['normal', 'important', 'urgent']),
   isPinned: z.boolean(),
   expiresAt: z.string().optional(),
+  /** Empty = every employee. */
+  departments: z.array(z.string()),
 });
 type CreateValues = z.infer<typeof createSchema>;
 
@@ -74,9 +82,14 @@ export default function NoticeBoardPage(): ReactElement {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['notices', search],
-    queryFn: () => noticesApi.list(search ? { search } : {}),
+  // Paged on the server (the API's default page used to be all you saw). A
+  // new search starts again at page 1.
+  const [paging, setPaging] = useState({ search, page: 1 });
+  const page = paging.search === search ? paging.page : 1;
+  const setPage = (p: number): void => setPaging({ search, page: p });
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['notices', search, page],
+    queryFn: () => noticesApi.list({ ...(search ? { search } : {}), page, limit: PAGE_SIZE }),
   });
 
   const create = useMutation({
@@ -89,7 +102,7 @@ export default function NoticeBoardPage(): ReactElement {
       qc.invalidateQueries({ queryKey: ['notices'] });
       toast.success('Notice posted');
       setOpen(false);
-      reset({ priority: 'normal', isPinned: false, title: '', content: '', expiresAt: '' });
+      reset({ priority: 'normal', isPinned: false, title: '', content: '', expiresAt: '', departments: [] });
     },
     onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
       toast.error(err.response?.data?.error?.message ?? 'Failed to post notice');
@@ -116,11 +129,25 @@ export default function NoticeBoardPage(): ReactElement {
     register,
     handleSubmit,
     reset,
+    watch,
+    setValue,
     formState: { errors },
   } = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: { priority: 'normal', isPinned: false, title: '', content: '' },
+    defaultValues: { priority: 'normal', isPinned: false, title: '', content: '', departments: [] },
   });
+
+  // Department targeting — loaded only when the post form is open.
+  const { data: deptData } = useDepartments({ limit: 100 }, { enabled: canManage && open });
+  const departments = deptData?.data ?? [];
+  const chosenDepartments = watch('departments') ?? [];
+  const toggleDepartment = (id: string, on: boolean): void => {
+    setValue(
+      'departments',
+      on ? [...chosenDepartments, id] : chosenDepartments.filter((d) => d !== id),
+      { shouldDirty: true },
+    );
+  };
 
   const onSubmit = (values: CreateValues): void => create.mutate(values);
 
@@ -168,6 +195,11 @@ export default function NoticeBoardPage(): ReactElement {
             <Skeleton key={i} className="h-36 rounded-lg" />
           ))}
         </div>
+      ) : error ? (
+        <div className="max-w-3xl rounded-lg border border-dashed border-destructive/40 py-12 text-center text-sm">
+          <p className="font-medium text-foreground">Couldn't load notices</p>
+          <p className="mt-1 text-muted-foreground">{apiErrorMessage(error)}</p>
+        </div>
       ) : notices.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
           <Megaphone className="mb-3 size-12 text-muted-foreground" />
@@ -202,6 +234,7 @@ export default function NoticeBoardPage(): ReactElement {
               />
             </div>
           ))}
+          <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
         </div>
       )}
 
@@ -221,7 +254,7 @@ export default function NoticeBoardPage(): ReactElement {
               <Textarea
                 id="n-body"
                 rows={6}
-                placeholder="Write the announcement here. HTML is sanitized server-side."
+                placeholder="Write the announcement here. Basic HTML (bold, lists, links) is allowed."
                 {...register('content')}
               />
               {errors.content && (
@@ -242,6 +275,30 @@ export default function NoticeBoardPage(): ReactElement {
               <div>
                 <Label htmlFor="n-expires">Expires on</Label>
                 <Input id="n-expires" type="date" {...register('expiresAt')} />
+              </div>
+            </div>
+            <div>
+              <Label>Audience</Label>
+              <p className="mb-1.5 text-xs text-muted-foreground">
+                {chosenDepartments.length === 0
+                  ? 'Everyone — tick departments to limit who sees it.'
+                  : `Only ${chosenDepartments.length} selected department${chosenDepartments.length === 1 ? '' : 's'}.`}
+              </p>
+              <div className="grid max-h-36 grid-cols-2 gap-1.5 overflow-y-auto rounded-md border border-border p-2">
+                {departments.length === 0 ? (
+                  <p className="col-span-2 text-xs text-muted-foreground">No departments to choose from.</p>
+                ) : (
+                  departments.map((d) => (
+                    <label key={d._id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={chosenDepartments.includes(d._id)}
+                        onChange={(e) => toggleDepartment(d._id, e.target.checked)}
+                      />
+                      <span className="truncate">{d.name}</span>
+                    </label>
+                  ))
+                )}
               </div>
             </div>
             <label className="flex items-center gap-2 text-sm">
@@ -280,8 +337,9 @@ function NoticeCard({
   ackPending: boolean;
 }): ReactElement {
   const priority = PRIORITY_STYLES[notice.priority];
-  const hasRead = notice.acknowledgements.some((a) => a.userId === currentUserId);
-  const ackCount = notice.acknowledgements.length;
+  const hasRead =
+    notice.acknowledgedByMe ?? notice.acknowledgements?.some((a) => a.userId === currentUserId) ?? false;
+  const ackCount = notice.acknowledgements?.length ?? 0;
 
   return (
     <div
@@ -312,10 +370,7 @@ function NoticeCard({
               </Badge>
             )}
           </div>
-          <div
-            className="prose prose-sm max-w-none whitespace-pre-wrap text-sm text-muted-foreground"
-            dangerouslySetInnerHTML={{ __html: notice.content }}
-          />
+          <RichText source={notice.content} format="html" className="text-sm text-muted-foreground" />
         </div>
         {canManage && (
           <button

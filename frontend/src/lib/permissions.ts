@@ -46,33 +46,22 @@ export function isSuperAdmin(user: AuthUser | null): boolean {
   return collectPermissions(user).includes('*');
 }
 
-/** Get a human-readable role label with color class. */
+/**
+ * A role badge: the seeded roles (backend `role.model.ts`) get a colour of
+ * their own; custom roles show their name in a neutral badge.
+ */
 export function getRoleBadge(user: AuthUser | null): { label: string; className: string } {
-  const slug = user?.role?.slug ?? '';
-  // Platform super admin (env-var login — no tenant) uses a distinct badge
-  if (user?._id === 'platform') {
-    return { label: 'Platform Admin', className: 'bg-gradient-to-r from-indigo-500/15 to-purple-500/15 text-indigo-600 border-indigo-500/30' };
-  }
-  switch (slug) {
-    case 'super_admin':
-      return { label: 'Super Admin', className: 'bg-purple-500/10 text-purple-500 border-purple-500/20' };
+  switch (user?.role?.slug) {
     case 'admin':
       return { label: 'Admin', className: 'bg-blue-500/10 text-blue-500 border-blue-500/20' };
     case 'hr_manager':
-    case 'hr':
-      return { label: 'HR', className: 'bg-pink-500/10 text-pink-500 border-pink-500/20' };
+      return { label: 'HR Manager', className: 'bg-pink-500/10 text-pink-500 border-pink-500/20' };
+    case 'hr_executive':
+      return { label: 'HR Executive', className: 'bg-pink-500/10 text-pink-500 border-pink-500/20' };
     case 'manager':
       return { label: 'Manager', className: 'bg-amber-500/10 text-amber-500 border-amber-500/20' };
     case 'employee':
       return { label: 'Employee', className: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' };
-    case 'field_sales_rep':
-      return { label: 'Field Rep', className: 'bg-orange-500/10 text-orange-500 border-orange-500/20' };
-    case 'field_sales_manager':
-      return { label: 'Field Manager', className: 'bg-red-500/10 text-red-500 border-red-500/20' };
-    case 'accountant':
-      return { label: 'Accountant', className: 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20' };
-    case 'sales_executive':
-      return { label: 'Sales Exec', className: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20' };
     default:
       return { label: user?.role?.name ?? 'User', className: 'bg-muted text-muted-foreground border-border' };
   }

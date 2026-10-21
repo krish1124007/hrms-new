@@ -139,14 +139,6 @@ export async function nearbyClients(req: Request, res: Response): Promise<void> 
   res.json({ success: true, data: docs });
 }
 
-export async function clientsMap(_req: Request, res: Response): Promise<void> {
-  const docs = await Client.find({ location: { $exists: true, $ne: null } })
-    .select('name category status location address assignedTo')
-    .populate('assignedTo', 'firstName lastName')
-    .exec();
-  res.json({ success: true, data: docs });
-}
-
 /**
  * Field managers add any client; a rep (`field-sales.view`) adds a client
  * found in the field, which is assigned to them.

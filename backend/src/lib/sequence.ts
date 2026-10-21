@@ -24,6 +24,7 @@ const isDuplicateKey = (err: unknown): boolean =>
  * the counter; exactly one insert wins and everyone then increments it.
  */
 export async function nextSequence(key: string, seed?: () => Promise<number>): Promise<number> {
+  /* eslint-disable no-await-in-loop -- each attempt depends on the previous one */
   for (;;) {
     const bumped = await Counter.findOneAndUpdate({ _id: key }, { $inc: { seq: 1 } }, { new: true })
       .lean()
@@ -37,6 +38,7 @@ export async function nextSequence(key: string, seed?: () => Promise<number>): P
       // Someone else created it first — fine, increment theirs.
     }
   }
+  /* eslint-enable no-await-in-loop */
 }
 
 /** Escape a literal for use inside a RegExp. */
@@ -95,6 +97,7 @@ export async function createWithNumber<T>(
   numberField: string,
   attempts = 5,
 ): Promise<T> {
+  /* eslint-disable no-await-in-loop -- retry only after the previous attempt failed */
   for (let attempt = 1; ; attempt += 1) {
     const number = await nextNumber();
     try {
@@ -105,4 +108,5 @@ export async function createWithNumber<T>(
       if (!numberClash || attempt >= attempts) throw err;
     }
   }
+  /* eslint-enable no-await-in-loop */
 }

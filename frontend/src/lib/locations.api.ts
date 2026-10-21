@@ -36,6 +36,8 @@ export interface LocationInput {
   coordinates?: LocationCoordinates;
   phone?: string;
   manager?: string;
+  /** Replaces the whole list (`[]` clears it). */
+  employees?: string[];
   isActive?: boolean;
 }
 

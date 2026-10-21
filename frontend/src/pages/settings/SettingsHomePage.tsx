@@ -45,8 +45,8 @@ const GROUPS: SettingGroup[] = [
         anyOf: NAV_ACCESS.audit,
       },
       {
-        title: 'Privacy & Compliance',
-        description: 'Data retention, GDPR/DPDP requests, and consent records',
+        title: 'Privacy',
+        description: 'Your cookie choice, personal-data requests and privacy activity',
         href: '/settings/privacy',
         icon: ScrollText,
       },

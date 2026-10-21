@@ -1,9 +1,8 @@
-import i18n from '../i18n';
+import { BUSINESS_TIMEZONE, businessDayKey } from './business-day';
 
 /**
- * Locale-aware formatters. All use the browser's `Intl` so they honour
- * the active i18n language, plus the tenant's configured currency /
- * timezone (passed in from `useAuth().tenant.settings`).
+ * Formatters for the English-only UI: `en-IN` number grouping, INR by
+ * default, dates in the business timezone (IST).
  *
  * Always prefer these over hand-rolled `toLocaleString()` calls — they
  * make the locale source explicit, fall back gracefully, and give us a
@@ -11,8 +10,9 @@ import i18n from '../i18n';
  */
 
 function currentLocale(): string {
-  // i18next stores the resolved language, not the raw `navigator.language`
-  return i18n.resolvedLanguage ?? i18n.language ?? 'en';
+  // English-only UI with Indian digit grouping — never the browser's locale
+  // (an Arabic-locale browser would otherwise get Arabic-Indic digits).
+  return 'en-IN';
 }
 
 /* ─────────── Numbers ─────────── */
@@ -60,18 +60,37 @@ function toDate(d: DateInput): Date {
   return d instanceof Date ? d : new Date(d);
 }
 
+/**
+ * Dates are shown the Indian way (`21 Oct 2026`) on the business calendar
+ * (`Asia/Kolkata`), whatever the browser's own locale and timezone — a day
+ * label stored at IST midnight must not show as the day before.
+ */
+const DATE_LOCALE = 'en-IN';
+
+/** `YYYY-MM-DD` of the IST calendar day an instant (or stored day label) falls on. */
+export function toISTDateKey(d: DateInput): string {
+  return businessDayKey(d);
+}
+
+/** Today's IST calendar day, `YYYY-MM-DD` — right between 00:00 and 05:30 IST too. */
+export function todayIST(now: Date = new Date()): string {
+  return businessDayKey(now);
+}
+
 export function formatDate(
   d: DateInput,
   opts: Intl.DateTimeFormatOptions & { locale?: string; timezone?: string } = {},
 ): string {
   const { locale, timezone, ...rest } = opts;
-  return new Intl.DateTimeFormat(locale ?? currentLocale(), {
+  const date = toDate(d);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(locale ?? DATE_LOCALE, {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
-    ...(timezone ? { timeZone: timezone } : {}),
+    timeZone: timezone ?? BUSINESS_TIMEZONE,
     ...rest,
-  }).format(toDate(d));
+  }).format(date);
 }
 
 export function formatDateTime(

@@ -29,7 +29,13 @@ import { AppError, NotFoundError, ValidationAppError, ForbiddenError } from '../
 import { audit } from '../services/audit.service.js';
 import { getUserId } from '../lib/async-context.js';
 import { assertNotSelfApproval, currentEmployeeId, hasPermission } from '../lib/access.js';
-import { assertCanDecide, canSeeAll, directReportIds } from '../lib/approvals.js';
+import {
+  assertCanDecide,
+  canSeeAll,
+  directReportIds,
+  scopeFilter,
+  scopeFilterFor,
+} from '../lib/approvals.js';
 import { isDuplicateKey } from '../lib/leave-allocation.js';
 import { logger } from '../config/logger.js';
 import {
@@ -39,7 +45,6 @@ import {
   reportingManagerUserId,
 } from '../services/notification.service.js';
 import { LocationTrack } from '../models/location-track.model.js';
-import { getFieldTrackingNamespace } from '../sockets/field-tracking.socket.js';
 
 // ============================================================================
 // CONFIG
@@ -756,14 +761,15 @@ function describeArea(
 
 export async function listRecords(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof listRecordsSchema>;
-  const filter: Record<string, unknown> = {};
-  if (q.employeeId) filter.employeeId = new Types.ObjectId(q.employeeId);
+  // Whose rows: HR (`attendance.manage`) anybody's; a manager their direct
+  // reports' and their own — `?employeeId=` outside that matches nothing.
+  const filter: Record<string, unknown> = await scopeFilterFor(req, 'attendance', q.employeeId);
   if (q.status) filter.status = q.status;
   const dateFilter = dateRangeFilter(q);
   if (dateFilter) filter.date = dateFilter;
 
   let validEmpIds: string[] | null = null;
-  
+
   if (q.departmentId) {
     const deptEmps = await Employee.find({ department: q.departmentId }).distinct('_id');
     validEmpIds = deptEmps.map(id => id.toString());
@@ -787,15 +793,9 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
     }
   }
 
+  // Department / search narrow the scope above, never widen it.
   if (validEmpIds !== null) {
-    if (filter.employeeId) {
-      const targetStr = (filter.employeeId as Types.ObjectId).toString();
-      if (!validEmpIds.includes(targetStr)) {
-        filter.employeeId = new Types.ObjectId('000000000000000000000000');
-      }
-    } else {
-      filter.employeeId = { $in: validEmpIds.map(id => new Types.ObjectId(id)) };
-    }
+    filter.$and = [{ employeeId: { $in: validEmpIds.map((id) => new Types.ObjectId(id)) } }];
   }
 
   const result = await Attendance.paginate(filter, {
@@ -871,6 +871,19 @@ export async function myShift(_req: Request, res: Response): Promise<void> {
   res.json({ success: true, data: shift });
 }
 
+/**
+ * GET /attendance/geofences/mine — the zones the caller may check in through,
+ * for the self-service map and check-in screens (the admin list needs
+ * `attendance.view`). A zone is not assigned to anyone in particular: every
+ * active zone is company-wide and accepted by a geofence check-in from any
+ * employee, so that is exactly what applies to the caller. Same item shape as
+ * the admin list.
+ */
+export async function geofencesMine(_req: Request, res: Response): Promise<void> {
+  const zones = await GeofenceZone.find({ isActive: true }).sort('name').exec();
+  res.json({ success: true, data: zones });
+}
+
 export const monthlyQuerySchema = z.object({
   year: z.coerce.number().int(),
   month: z.coerce.number().int().min(1).max(12),
@@ -879,11 +892,19 @@ export const monthlyQuerySchema = z.object({
 
 export async function monthlyAttendance(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof monthlyQuerySchema>;
-  // `?employeeId=` is for HR looking at someone's month; everyone else always
-  // gets their own, whatever they pass.
+  // `?employeeId=` is for HR (anybody) and managers (their direct reports or
+  // themselves; anyone else is 403) looking at someone's month; everyone else
+  // always gets their own, whatever they pass.
   let employeeId: Types.ObjectId;
   if (q.employeeId && hasPermission(req.user, 'attendance.view')) {
-    employeeId = new Types.ObjectId(q.employeeId);
+    const scoped = (await scopeFilterFor(req, 'attendance', q.employeeId)).employeeId;
+    if (scoped instanceof Types.ObjectId) {
+      employeeId = scoped;
+    } else if (scoped === null) {
+      throw new ForbiddenError('No employee profile found for current user');
+    } else {
+      throw new AppError("You can only view your direct reports' attendance", 403, 'NOT_YOUR_REPORT');
+    }
   } else {
     const own = await currentEmployeeId(req);
     if (!own) throw new ForbiddenError('No employee profile found for current user');
@@ -1599,10 +1620,14 @@ export async function dashboardStats(req: Request, res: Response): Promise<void>
 
 export async function attendanceReport(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof reportQuerySchema>;
-  const filter: Record<string, unknown> = { date: { $gte: q.from, $lte: q.to } };
+  // HR reports on everybody; a manager on their direct reports and themselves.
+  const filter: Record<string, unknown> = {
+    ...(await scopeFilter(req, 'attendance')),
+    date: { $gte: q.from, $lte: q.to },
+  };
   if (q.departmentId) {
     const empIds = await Employee.find({ department: q.departmentId }).distinct('_id');
-    filter.employeeId = { $in: empIds };
+    filter.$and = [{ employeeId: { $in: empIds } }];
   }
   const records = await Attendance.find(filter)
     .populate('employeeId', 'firstName lastName employeeId department')
@@ -1616,90 +1641,19 @@ export async function attendanceReport(req: Request, res: Response): Promise<voi
 // LIVE TRACKING
 // ============================================================================
 
-export const trackingBatchSchema = z.object({
-  points: z.array(z.object({
-    timestamp: z.coerce.date().optional(),
-    lat: z.coerce.number(),
-    lng: z.coerce.number(),
-    accuracy: z.coerce.number().optional(),
-    speed: z.coerce.number().optional(),
-    altitude: z.coerce.number().optional(),
-    heading: z.coerce.number().optional(),
-    activity: z.enum(['still', 'walking', 'running', 'in_vehicle']).optional(),
-    battery: z.coerce.number().optional(),
-    isCharging: z.boolean().optional(),
-    networkType: z.string().optional(),
-    isOffline: z.boolean().optional(),
-  })).min(1).max(500),
-});
+// The location upload (`POST /attendance/tracking/batch`) is the field ingest:
+// `controllers/field-tracking.controller.ts` → `services/location-track.service.ts`
+// (one schema, one consented + clocked-in gate, one store and broadcast).
 
-export async function ingestLocationBatch(req: Request, res: Response): Promise<void> {
-  const body = req.body as z.infer<typeof trackingBatchSchema>;
-  const emp = await getCurrentEmployee();
-  if (!emp) throw new ValidationAppError('Employee profile not found');
-
-  // Admin master switch — when live tracking is turned off in the panel we
-  // accept the request but store nothing, so a stale mobile client can't
-  // keep writing location history.
-  const cfg = await AttendanceConfig.findOne({}).exec();
-  if (!cfg?.liveTracking?.enabled) {
-    res.status(200).json({ success: true, ignored: true, message: 'Live tracking disabled' });
-    return;
-  }
-
-  const today = startOfDay(new Date());
-  const att = await Attendance.findOne({ employeeId: emp.id, date: today }).exec();
-  if (!att || !att.checkIn?.time || att.checkOut?.time) {
-    res.status(200).json({ success: true, ignored: true, message: 'Not clocked in' });
-    return;
-  }
-
-  const docs = body.points.map((p) => ({
-    employeeId: emp.id,
-    timestamp: p.timestamp ?? new Date(),
-    location: {
-      type: 'Point' as const,
-      coordinates: [p.lng, p.lat] as [number, number],
-    },
-    accuracy: p.accuracy,
-    speed: p.speed,
-    altitude: p.altitude,
-    heading: p.heading,
-    activity: p.activity,
-    battery: p.battery,
-    isCharging: p.isCharging,
-    networkType: p.networkType,
-    isOffline: p.isOffline,
-    syncedAt: new Date(),
-  }));
-
-  await LocationTrack.insertMany(docs);
-
-  const ns = getFieldTrackingNamespace();
-  if (ns) {
-    const latest = body.points[body.points.length - 1];
-    // Broadast globally to all admins in this namespace
-    ns.emit('location:update', {
-      employeeId: emp.id,
-      lat: latest.lat,
-      lng: latest.lng,
-      timestamp: latest.timestamp ?? new Date(),
-      activity: latest.activity,
-      battery: latest.battery,
-      speed: latest.speed,
-    });
-  }
-
-  res.status(201).json({ success: true, data: { ingested: docs.length } });
-}
-
-export async function getLiveTracking(_req: Request, res: Response): Promise<void> {
+export async function getLiveTracking(req: Request, res: Response): Promise<void> {
   // Same day label as every other attendance query — with the old
   // server-local version this looked up *yesterday* between 00:00 and 05:30
   // IST and showed a stale set of "currently working" people.
   const start = startOfBusinessDay(new Date());
 
+  // HR sees everybody on the map; a manager their direct reports and themselves.
   const todayRecords = await Attendance.find({
+    ...(await scopeFilter(req, 'attendance')),
     date: start,
     'checkIn.time': { $exists: true },
     'checkOut.time': { $exists: false }

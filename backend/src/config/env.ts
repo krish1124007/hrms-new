@@ -68,6 +68,11 @@ const envSchema = z.object({
 
   COMPANY_NAME: z.string().default('Company'),
   COMPANY_EMAIL: z.string().optional(),
+  /** Contact address on the public privacy policy (GET /api/v1/privacy-policy); falls back to COMPANY_EMAIL. */
+  SUPPORT_EMAIL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().email('SUPPORT_EMAIL must be an e-mail address').optional(),
+  ),
   /**
    * The company's state: the seller state on GST invoices, and the Professional
    * Tax state of an employee with no state on file (payroll).
@@ -119,6 +124,17 @@ const envSchema = z.object({
     .string()
     .min(32, 'ENCRYPTION_KEY must be at least 32 characters')
     .default('dev_only_encryption_key_change_me_please_32_chars'),
+
+  /**
+   * Path to a Firebase service-account JSON (Firebase console → Project
+   * settings → Service accounts). Set: every in-app notification is also
+   * pushed through FCM to the user's registered phones. Unset or blank: push
+   * is a silent no-op.
+   */
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().optional(),
+  ),
 
   AGORA_APP_ID: z.string().optional(),
   AGORA_APP_CERTIFICATE: z.string().optional(),

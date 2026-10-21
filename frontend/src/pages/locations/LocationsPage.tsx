@@ -4,6 +4,7 @@ import {
   GitBranch,
   HardHat,
   MapPin,
+  Pencil,
   Plus,
   Search,
   Trash2,
@@ -25,10 +26,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useCreateLocation, useDeleteLocation, useLocations } from '@/hooks/use-locations';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import {
+  useCreateLocation,
+  useDeleteLocation,
+  useLocations,
+  useUpdateLocation,
+} from '@/hooks/use-locations';
 import { usePermissions } from '@/hooks/use-permissions';
-import type { Location, LocationType } from '@/lib/locations.api';
+import { locationsApi, type Location, type LocationType } from '@/lib/locations.api';
+import { EmployeeChecklist } from '@/components/employees/EmployeeChecklist';
 import { cn } from '@/lib/utils';
+import { apiErrorMessage } from '@/lib/api-error';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TYPE_CONFIG: Record<
   LocationType,
@@ -58,14 +69,33 @@ const TYPE_CONFIG: Record<
 
 export default function LocationsPage(): ReactElement {
   const [search, setSearch] = useState('');
-  const { data, isLoading } = useLocations({ limit: 100, search: search || undefined });
+  const { data, isLoading, error } = useLocations({ limit: 100, search: search || undefined });
   const createLocation = useCreateLocation();
   const deleteLocation = useDeleteLocation();
+  const updateLocation = useUpdateLocation();
+  const qc = useQueryClient();
+  const [deleting, setDeleting] = useState<Location | null>(null);
   // Anyone signed in can read locations; changing them is `locations.manage`.
   const { has } = usePermissions();
   const canManage = has('locations.manage');
 
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Location | null>(null);
+  const [isActive, setIsActive] = useState(true);
+  const [assigning, setAssigning] = useState<Location | null>(null);
+  const [assignIds, setAssignIds] = useState<string[]>([]);
+  const assign = useMutation({
+    // The assign endpoint needs at least one id; clearing the list is a plain update.
+    mutationFn: ({ id, employeeIds }: { id: string; employeeIds: string[] }) =>
+      employeeIds.length > 0
+        ? locationsApi.assignEmployees(id, employeeIds)
+        : locationsApi.update(id, { employees: [] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['locations'] });
+      toast.success('Employees updated');
+      setAssigning(null);
+    },
+  });
   const [name, setName] = useState('');
   const [type, setType] = useState<LocationType>('office');
   const [address, setAddress] = useState('');
@@ -80,6 +110,25 @@ export default function LocationsPage(): ReactElement {
     setPhone('');
     setLat('');
     setLng('');
+    setEditing(null);
+    setIsActive(true);
+  };
+
+  const openEdit = (loc: Location): void => {
+    setEditing(loc);
+    setName(loc.name);
+    setType(loc.type);
+    setAddress(loc.address);
+    setPhone(loc.phone ?? '');
+    setLat(loc.coordinates ? String(loc.coordinates.lat) : '');
+    setLng(loc.coordinates ? String(loc.coordinates.lng) : '');
+    setIsActive(loc.isActive);
+    setOpen(true);
+  };
+
+  const openAssign = (loc: Location): void => {
+    setAssigning(loc);
+    setAssignIds((loc.employees ?? []).map(String));
   };
 
   const submit = (): void => {
@@ -87,21 +136,15 @@ export default function LocationsPage(): ReactElement {
       lat && lng && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lng))
         ? { lat: Number(lat), lng: Number(lng) }
         : undefined;
-    createLocation.mutate(
-      {
-        name,
-        type,
-        address,
-        phone: phone || undefined,
-        coordinates,
+    const input = { name, type, address, phone: phone || undefined, coordinates };
+    const done = {
+      onSuccess: () => {
+        setOpen(false);
+        reset();
       },
-      {
-        onSuccess: () => {
-          setOpen(false);
-          reset();
-        },
-      },
-    );
+    };
+    if (editing) updateLocation.mutate({ id: editing._id, input: { ...input, isActive } }, done);
+    else createLocation.mutate(input, done);
   };
 
   const useCurrentLocation = (): void => {
@@ -124,7 +167,12 @@ export default function LocationsPage(): ReactElement {
         description="Manage offices, branches, warehouses, and field sites"
         actions={
           canManage ? (
-            <Button onClick={() => setOpen(true)}>
+            <Button
+              onClick={() => {
+                reset();
+                setOpen(true);
+              }}
+            >
               <Plus className="mr-2 size-4" />
               Add Location
             </Button>
@@ -148,6 +196,11 @@ export default function LocationsPage(): ReactElement {
             <Skeleton key={i} className="h-44 rounded-lg" />
           ))}
         </div>
+      ) : error ? (
+        <div className="rounded-lg border border-dashed border-destructive/40 py-12 text-center text-sm">
+          <p className="font-medium text-foreground">Couldn't load locations</p>
+          <p className="mt-1 text-muted-foreground">{apiErrorMessage(error)}</p>
+        </div>
       ) : total === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
           <MapPin className="mb-3 size-12 text-muted-foreground" />
@@ -156,7 +209,14 @@ export default function LocationsPage(): ReactElement {
             Add your offices, branches, warehouses, and field sites
           </p>
           {canManage && (
-            <Button variant="outline" className="mt-4 gap-2" onClick={() => setOpen(true)}>
+            <Button
+              variant="outline"
+              className="mt-4 gap-2"
+              onClick={() => {
+                reset();
+                setOpen(true);
+              }}
+            >
               <Plus className="size-4" />
               Add Location
             </Button>
@@ -192,7 +252,7 @@ export default function LocationsPage(): ReactElement {
                     </Badge>
                     {canManage && (
                       <button
-                        onClick={() => deleteLocation.mutate(loc._id)}
+                        onClick={() => setDeleting(loc)}
                         className="rounded p-1.5 text-destructive hover:bg-destructive/10"
                         title="Delete location"
                       >
@@ -228,6 +288,17 @@ export default function LocationsPage(): ReactElement {
                     </p>
                   ) : null}
                 </div>
+
+                {canManage && (
+                  <div className="mt-3 flex gap-2 border-t border-border pt-3">
+                    <Button size="sm" variant="outline" onClick={() => openEdit(loc)}>
+                      <Pencil className="size-3.5" /> Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openAssign(loc)}>
+                      <Users className="size-3.5" /> Employees
+                    </Button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -236,7 +307,7 @@ export default function LocationsPage(): ReactElement {
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
         <DialogHeader>
-          <DialogTitle>Add location</DialogTitle>
+          <DialogTitle>{editing ? 'Edit location' : 'Add location'}</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div>
@@ -274,16 +345,59 @@ export default function LocationsPage(): ReactElement {
             <MapPin className="mr-2 size-4" />
             Use current location
           </Button>
+          {editing && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+              Active
+            </label>
+          )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} loading={createLocation.isPending} disabled={!valid(canSubmit)}>
-            Create
+          <Button
+            onClick={submit}
+            loading={createLocation.isPending || updateLocation.isPending}
+            disabled={!valid(canSubmit)}
+          >
+            {editing ? 'Save' : 'Create'}
           </Button>
         </DialogFooter>
       </Dialog>
+
+      <Dialog open={!!assigning} onClose={() => setAssigning(null)} size="md">
+        <DialogHeader>
+          <DialogTitle>Employees at {assigning?.name}</DialogTitle>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <p className="text-sm text-muted-foreground">Tick everyone based at this location.</p>
+          {assigning && <EmployeeChecklist value={assignIds} onChange={setAssignIds} />}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setAssigning(null)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => assigning && assign.mutate({ id: assigning._id, employeeIds: assignIds })}
+            loading={assign.isPending}
+          >
+            Save
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete location"
+        description={`Delete "${deleting?.name ?? ''}"? It is removed for everyone and can't be restored from the app.`}
+        confirmLabel="Delete location"
+        loading={deleteLocation.isPending}
+        onConfirm={() => {
+          if (deleting) deleteLocation.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
+      />
     </div>
   );
 }

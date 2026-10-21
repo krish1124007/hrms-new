@@ -292,16 +292,13 @@ describe('ownership', () => {
     const pay = await collect(A, { clientId, amount: 50 });
     expect(pay.status).toBe(201);
 
-    for (const path of [
-      `/visits/${visit.body.data._id}`,
-      `/orders/${order._id}`,
-      `/payments/${pay.body.data._id}`,
-    ]) {
-      expect((await request(app).get(`/api/v1/field${path}`).set(auth(B.token))).status).toBe(403);
-      expect(
-        (await request(app).patch(`/api/v1/field${path}`).set(auth(B.token)).send({ notes: 'mine now' })).status,
-      ).toBe(403);
-    }
+    const paths = [`/visits/${visit.body.data._id}`, `/orders/${order._id}`, `/payments/${pay.body.data._id}`];
+    const reads = await Promise.all(paths.map((p) => request(app).get(`/api/v1/field${p}`).set(auth(B.token))));
+    expect(reads.map((r) => r.status)).toEqual([403, 403, 403]);
+    const writes = await Promise.all(
+      paths.map((p) => request(app).patch(`/api/v1/field${p}`).set(auth(B.token)).send({ notes: 'mine now' })),
+    );
+    expect(writes.map((r) => r.status)).toEqual([403, 403, 403]);
     expect((await checkOut(B, visit.body.data._id)).status).toBe(403);
     expect((await setStatus(B, order._id, 'cancelled')).status).toBe(403);
     expect((await Visit.findById(visit.body.data._id).lean())?.notes).toBeUndefined();
@@ -828,8 +825,10 @@ describe('list endpoints and clients', () => {
   });
 
   it('my orders, payments and tasks are paginated', async () => {
-    for (const path of ['/orders/my', '/payments/my', '/tasks/my']) {
-      const res = await request(app).get(`/api/v1/field${path}`).set(auth(A.token));
+    const results = await Promise.all(
+      ['/orders/my', '/payments/my', '/tasks/my'].map((p) => request(app).get(`/api/v1/field${p}`).set(auth(A.token))),
+    );
+    for (const res of results) {
       expect(res.status).toBe(200);
       expect(res.body.pagination).toMatchObject({ page: 1 });
     }

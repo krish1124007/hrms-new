@@ -13,39 +13,26 @@ import { Button } from '@/components/ui/button';
 import { useImportEmployees } from '@/hooks/use-systemcore';
 import type { EmployeeImportResult } from '@/lib/systemcore.api';
 import { toast } from 'sonner';
+import {
+  IMPORT_COLUMNS,
+  parseEmployeeSheet,
+  templateRows,
+  type ReadyRow,
+  type SkippedRow,
+} from './employee-import';
 
 interface EmployeeImportModalProps {
   open: boolean;
   onClose: () => void;
 }
 
-interface ParsedRow {
-  firstName: string;
-  lastName: string;
-  email: string;
-  joiningDate: string;
-  phone?: string;
-  dateOfBirth?: string;
-  gender?: string;
-  departmentName?: string;
-  designationName?: string;
-  status?: string;
-  /** Needed for an exit status (resigned / terminated / inactive). */
-  exitDate?: string;
-  employmentType?: string;
-  workLocation?: string;
-  bankName?: string;
-  accountNumber?: string;
-  ifscCode?: string;
-  emergencyContactName?: string;
-  emergencyContactPhone?: string;
-  rawRow: Record<string, any>;
-}
-
 export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps): ReactElement {
   const [file, setFile] = useState<File | null>(null);
-  const [previewRows, setPreviewRows] = useState<ParsedRow[]>([]);
+  const [readyRows, setReadyRows] = useState<ReadyRow[]>([]);
+  const [skippedRows, setSkippedRows] = useState<SkippedRow[]>([]);
   const [importResult, setImportResult] = useState<EmployeeImportResult | null>(null);
+  /** Spreadsheet row of each submitted row — the API numbers rows by position in the request. */
+  const [submittedSheetRows, setSubmittedSheetRows] = useState<number[]>([]);
 
   const importMutation = useImportEmployees();
 
@@ -61,70 +48,12 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
       try {
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' });
-
-        const parsed: ParsedRow[] = data.map((row) => {
-          const keys = Object.keys(row);
-          const findKey = (pattern: RegExp) => keys.find((k) => pattern.test(k.trim()));
-
-          const firstNameKey = findKey(/first.*name|^fname$/i);
-          const lastNameKey = findKey(/last.*name|^lname$/i);
-          const emailKey = findKey(/employee.*mail|mail.*id|email|employee.*email|^mail$/i);
-          const joiningDateKey = findKey(/joining.*date|join.*date|^date.*joined$/i);
-          const phoneKey = findKey(/phone|mobile|contact/i);
-          const dobKey = findKey(/date.*of.*birth|^dob$/i);
-          const genderKey = findKey(/^gender$/i);
-          const departmentKey = findKey(/^department$/i);
-          const designationKey = findKey(/^designation$/i);
-          const statusKey = findKey(/^status$/i);
-          const exitDateKey = findKey(/exit.*date|last.*working.*day|relieving.*date/i);
-          const employmentTypeKey = findKey(/employment.*type/i);
-          const workLocationKey = findKey(/work.*location/i);
-          const bankNameKey = findKey(/bank.*name/i);
-          const accNumberKey = findKey(/account.*number|^a\/c.*no/i);
-          const ifscKey = findKey(/ifsc/i);
-          const emContactNameKey = findKey(/emergency.*contact.*name/i);
-          const emContactPhoneKey = findKey(/emergency.*contact.*phone|emergency.*phone/i);
-
-          const parseDate = (rawDate: any) => {
-            if (!rawDate) return '';
-            if (typeof rawDate === 'number') {
-              const date = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
-              return date.toISOString().slice(0, 10);
-            }
-            return new Date(rawDate).toISOString().slice(0, 10);
-          };
-
-          const formattedDate = parseDate(row[joiningDateKey ?? '']);
-          const formattedDob = parseDate(row[dobKey ?? '']);
-
-          return {
-            firstName: String(row[firstNameKey ?? ''] ?? '').trim(),
-            lastName: String(row[lastNameKey ?? ''] ?? '').trim(),
-            email: String(row[emailKey ?? ''] ?? '').trim(),
-            joiningDate: formattedDate,
-            phone: String(row[phoneKey ?? ''] ?? '').trim(),
-            dateOfBirth: formattedDob,
-            gender: String(row[genderKey ?? ''] ?? '').trim().toLowerCase(),
-            departmentName: String(row[departmentKey ?? ''] ?? '').trim(),
-            designationName: String(row[designationKey ?? ''] ?? '').trim(),
-            status: String(row[statusKey ?? ''] ?? '').trim().toLowerCase(),
-            exitDate: parseDate(row[exitDateKey ?? '']),
-            employmentType: String(row[employmentTypeKey ?? ''] ?? '').trim().toLowerCase(),
-            workLocation: String(row[workLocationKey ?? ''] ?? '').trim(),
-            bankName: String(row[bankNameKey ?? ''] ?? '').trim(),
-            accountNumber: String(row[accNumberKey ?? ''] ?? '').trim(),
-            ifscCode: String(row[ifscKey ?? ''] ?? '').trim(),
-            emergencyContactName: String(row[emContactNameKey ?? ''] ?? '').trim(),
-            emergencyContactPhone: String(row[emContactPhoneKey ?? ''] ?? '').trim(),
-            rawRow: row,
-          };
-        });
-
-        setPreviewRows(parsed.filter((r) => r.firstName && r.lastName && r.email && r.joiningDate));
-      } catch (err) {
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+        const { ready, skipped } = parseEmployeeSheet(data);
+        setReadyRows(ready);
+        setSkippedRows(skipped);
+      } catch {
         toast.error('Failed to parse Excel file. Please check file format.');
       }
     };
@@ -132,67 +61,23 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
   };
 
   const handleDownloadTemplate = () => {
-    const templateData = [
-      {
-        'First Name': 'John',
-        'Last Name': 'Doe',
-        'Email': 'john.doe@example.com',
-        'Joining Date': '2024-01-15',
-        'Phone': '1234567890',
-      },
-      {
-        'First Name': 'Jane',
-        'Last Name': 'Smith',
-        'Email': 'jane.smith@example.com',
-        'Joining Date': '2024-02-01',
-        'Phone': '0987654321',
-      },
-    ];
-
-    const ws = XLSX.utils.json_to_sheet(templateData);
+    const ws = XLSX.utils.json_to_sheet(templateRows(), { header: IMPORT_COLUMNS.map((c) => c.header) });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Employees');
     XLSX.writeFile(wb, 'employee_import_template.xlsx');
   };
 
   const handleSubmit = () => {
-    if (previewRows.length === 0) {
+    if (readyRows.length === 0) {
       toast.error('No valid rows to import');
       return;
     }
-
-    const payload = previewRows.map((r) => {
-      const p: any = {
-        firstName: r.firstName,
-        lastName: r.lastName,
-        email: r.email,
-        joiningDate: r.joiningDate,
-        phone: r.phone,
-      };
-      if (r.dateOfBirth) p.dateOfBirth = r.dateOfBirth;
-      if (r.gender) p.gender = r.gender;
-      if (r.departmentName) p.departmentName = r.departmentName;
-      if (r.designationName) p.designationName = r.designationName;
-      if (r.status) p.status = r.status;
-      if (r.exitDate) p.exitDate = r.exitDate;
-      if (r.employmentType) p.employmentType = r.employmentType;
-      if (r.workLocation) p.workLocation = r.workLocation;
-      if (r.bankName || r.accountNumber || r.ifscCode) {
-        p.bankDetails = {
-          bankName: r.bankName,
-          accountNumber: r.accountNumber,
-          ifscCode: r.ifscCode,
-        };
-      }
-      if (r.emergencyContactName || r.emergencyContactPhone) {
-        p.emergencyContact = {
-          name: r.emergencyContactName,
-          phone: r.emergencyContactPhone,
-        };
-      }
-      return p;
-    });
-
+    setSubmittedSheetRows(readyRows.map((r) => r.sheetRow));
+    // The import row also takes `departmentName` / `designationName` / `status`
+    // / `exitDate` / `employeeId`, which the create-employee input type lacks.
+    const payload = readyRows.map((r) => r.payload) as unknown as Parameters<
+      typeof importMutation.mutate
+    >[0];
     importMutation.mutate(payload, {
       onSuccess: (res) => {
         setImportResult(res.data);
@@ -202,9 +87,16 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
 
   const handleReset = () => {
     setFile(null);
-    setPreviewRows([]);
+    setReadyRows([]);
+    setSkippedRows([]);
     setImportResult(null);
+    setSubmittedSheetRows([]);
   };
+
+  // Rows the server did not create or update, with their spreadsheet row.
+  const serverProblems = (importResult?.rows ?? [])
+    .filter((r) => r.status === 'skipped' || r.status === 'error')
+    .map((r) => ({ ...r, sheetRow: submittedSheetRows[r.row - 1] }));
 
   return (
     <Dialog open={open} onClose={onClose} size="xl">
@@ -214,21 +106,32 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
           Import Employees from Excel
         </DialogTitle>
         <DialogDescription>
-          Upload an Excel sheet (.xlsx, .xls, .csv) containing employee details.
+          Upload an Excel sheet (.xlsx, .xls, .csv) containing employee details. A row whose e-mail
+          belongs to an existing employee updates that employee.
         </DialogDescription>
       </DialogHeader>
 
       <DialogBody className="space-y-4 max-h-[70vh] overflow-y-auto">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">
-          <div>
-            <p className="font-medium text-foreground">Excel Column Format Required:</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              First Name | Last Name | Email | Joining Date | Phone (Optional)
-            </p>
+        <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="font-medium text-foreground">Columns (first row = headers)</p>
+            <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
+              <Download className="size-4" /> Download Sample Excel Template
+            </Button>
           </div>
-          <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
-            <Download className="size-4" /> Download Sample Excel Template
-          </Button>
+          <ul className="grid gap-x-6 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
+            {IMPORT_COLUMNS.map((c) => (
+              <li key={c.header}>
+                <span className="font-medium text-foreground">{c.header}</span>
+                {c.required ? <span className="text-destructive"> *</span> : null}
+                {c.note ? ` — ${c.note}` : ''}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            * required. A row missing a required column, or with a date that cannot be read, is not
+            imported — it is listed below with the reason.
+          </p>
         </div>
 
         {!importResult ? (
@@ -243,15 +146,33 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
                 type="file"
                 accept=".xlsx, .xls, .csv"
                 onChange={handleFileChange}
+                aria-label="Employee spreadsheet"
                 className="mt-3 cursor-pointer text-xs file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-primary-foreground hover:file:bg-primary/90"
               />
             </div>
 
-            {previewRows.length > 0 && (
+            {skippedRows.length > 0 && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                  <AlertCircle className="size-4" />
+                  {skippedRows.length} row{skippedRows.length === 1 ? '' : 's'} will not be imported:
+                </div>
+                <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-amber-800 dark:text-amber-300">
+                  {skippedRows.map((r) => (
+                    <li key={r.sheetRow}>
+                      Row {r.sheetRow}
+                      {r.email ? ` (${r.email})` : ''}: {r.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {readyRows.length > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Preview Data ({previewRows.length} Valid Rows Detected)
+                    Preview ({readyRows.length} row{readyRows.length === 1 ? '' : 's'} ready to import)
                   </h4>
                   <Button variant="ghost" size="sm" onClick={handleReset} className="h-7 text-xs">
                     Clear File
@@ -261,31 +182,33 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
                   <table className="w-full text-left text-xs">
                     <thead className="sticky top-0 bg-muted/90 backdrop-blur-sm border-b border-border font-medium text-muted-foreground">
                       <tr>
-                        <th className="p-2 font-medium">#</th>
+                        <th className="p-2 font-medium">Row</th>
                         <th className="p-2 font-medium">First Name</th>
                         <th className="p-2 font-medium">Last Name</th>
                         <th className="p-2 font-medium">Email</th>
                         <th className="p-2 font-medium">Joining Date</th>
-                        <th className="p-2 font-medium">Phone</th>
+                        <th className="p-2 font-medium">Department</th>
+                        <th className="p-2 font-medium">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {previewRows.slice(0, 50).map((row, idx) => (
-                        <tr key={idx} className="hover:bg-muted/30">
-                          <td className="p-2 text-muted-foreground">{idx + 1}</td>
-                          <td className="p-2 font-medium">{row.firstName}</td>
-                          <td className="p-2 font-medium">{row.lastName}</td>
-                          <td className="p-2 font-mono text-primary">{row.email}</td>
-                          <td className="p-2 font-mono">{row.joiningDate}</td>
-                          <td className="p-2 font-mono">{row.phone || '—'}</td>
+                      {readyRows.slice(0, 50).map(({ sheetRow, payload }) => (
+                        <tr key={sheetRow} className="hover:bg-muted/30">
+                          <td className="p-2 text-muted-foreground">{sheetRow}</td>
+                          <td className="p-2 font-medium">{payload.firstName}</td>
+                          <td className="p-2 font-medium">{payload.lastName}</td>
+                          <td className="p-2 font-mono text-primary">{payload.email}</td>
+                          <td className="p-2 font-mono">{payload.joiningDate}</td>
+                          <td className="p-2">{payload.departmentName || '—'}</td>
+                          <td className="p-2">{payload.status || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                {previewRows.length > 50 && (
+                {readyRows.length > 50 && (
                   <p className="text-xs text-muted-foreground text-center">
-                    Showing first 50 rows of {previewRows.length} total rows.
+                    Showing first 50 rows of {readyRows.length}.
                   </p>
                 )}
               </div>
@@ -300,20 +223,28 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
                 <p className="text-xs mt-0.5">
                   {importResult.created} created · {importResult.updated ?? 0} updated ·{' '}
                   {importResult.skipped ?? 0} skipped · {importResult.errors ?? 0} with errors
+                  {skippedRows.length > 0 ? ` · ${skippedRows.length} not sent (see below)` : ''}
                 </p>
               </div>
             </div>
 
-            {importResult.failed.length > 0 && (
+            {(serverProblems.length > 0 || skippedRows.length > 0) && (
               <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-destructive font-semibold text-xs">
                   <AlertCircle className="size-4" />
-                  Skipped or failed rows ({importResult.failed.length}):
+                  Rows not imported ({serverProblems.length + skippedRows.length}):
                 </div>
                 <ul className="text-xs space-y-1 max-h-40 overflow-y-auto text-destructive/90">
-                  {importResult.failed.map((err, i) => (
-                    <li key={i}>
-                      [{err.email}] {err.reason}
+                  {skippedRows.map((r) => (
+                    <li key={`c-${r.sheetRow}`}>
+                      Row {r.sheetRow}
+                      {r.email ? ` (${r.email})` : ''}: {r.reason}
+                    </li>
+                  ))}
+                  {serverProblems.map((r) => (
+                    <li key={`s-${r.row}`}>
+                      {r.sheetRow ? `Row ${r.sheetRow}` : `Entry ${r.row}`}
+                      {r.email ? ` (${r.email})` : ''}: {r.message}
                     </li>
                   ))}
                 </ul>
@@ -331,7 +262,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
             </Button>
             <Button
               onClick={handleSubmit}
-              disabled={!file || previewRows.length === 0 || importMutation.isPending}
+              disabled={!file || readyRows.length === 0 || importMutation.isPending}
             >
               {importMutation.isPending ? (
                 <>
@@ -339,7 +270,7 @@ export function EmployeeImportModal({ open, onClose }: EmployeeImportModalProps)
                 </>
               ) : (
                 <>
-                  <Upload className="size-4" /> Import {previewRows.length} Employees
+                  <Upload className="size-4" /> Import {readyRows.length} Employees
                 </>
               )}
             </Button>

@@ -27,6 +27,7 @@ import type {
   StatutoryType,
   SalaryComponentInput,
 } from '@/lib/payroll.api';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TYPE_LABEL: Record<ComponentType, string> = {
   earning: 'Earning',
@@ -34,7 +35,14 @@ const TYPE_LABEL: Record<ComponentType, string> = {
   employer_contribution: 'Employer',
 };
 
-interface FormState extends SalaryComponentInput {}
+/**
+ * Marks an earning as part of the PF wage (backend `statutoryBase`). When no
+ * component is flagged, payroll goes by the name (Basic / Dearness / DA).
+ */
+type StatutoryBase = 'basic' | 'da';
+type WithStatutoryBase = { statutoryBase?: StatutoryBase | null };
+
+type FormState = SalaryComponentInput & WithStatutoryBase;
 
 const blank: FormState = {
   name: '',
@@ -44,15 +52,17 @@ const blank: FormState = {
   defaultValue: 0,
   isTaxable: false,
   isStatutory: false,
+  statutoryBase: null,
   order: 0,
   isActive: true,
 };
 
 export default function SalaryComponentsPage(): ReactElement {
-  const { data, isLoading } = useSalaryComponents({ limit: 200 });
+  const { data, isLoading, error, refetch } = useSalaryComponents({ limit: 200 });
   const create = useCreateComponent();
   const update = useUpdateComponent();
   const remove = useDeleteComponent();
+  const [deleting, setDeleting] = useState<SalaryComponent | null>(null);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -75,6 +85,7 @@ export default function SalaryComponentsPage(): ReactElement {
       isTaxable: c.isTaxable,
       isStatutory: c.isStatutory,
       statutoryType: c.statutoryType,
+      statutoryBase: (c as SalaryComponent & WithStatutoryBase).statutoryBase ?? null,
       order: c.order,
       isActive: c.isActive,
     });
@@ -82,13 +93,19 @@ export default function SalaryComponentsPage(): ReactElement {
   };
 
   const submit = (): void => {
+    // Only a non-statutory earning can be part of the PF wage.
+    const input: FormState = {
+      ...form,
+      statutoryBase:
+        form.type === 'earning' && !form.isStatutory ? (form.statutoryBase ?? null) : null,
+    };
     if (editingId) {
       update.mutate(
-        { id: editingId, input: form },
+        { id: editingId, input },
         { onSuccess: () => setOpen(false) },
       );
     } else {
-      create.mutate(form, { onSuccess: () => setOpen(false) });
+      create.mutate(input, { onSuccess: () => setOpen(false) });
     }
   };
 
@@ -151,8 +168,10 @@ export default function SalaryComponentsPage(): ReactElement {
             <Pencil className="size-4" />
           </button>
           <button
-            onClick={() => remove.mutate(r._id)}
+            onClick={() => setDeleting(r)}
             className="rounded p-1.5 text-destructive hover:bg-destructive/10"
+            title="Delete component"
+            aria-label={`Delete component ${r.name}`}
           >
             <Trash2 className="size-4" />
           </button>
@@ -183,9 +202,23 @@ export default function SalaryComponentsPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No salary components"
         emptyDescription="Create one to start building salary structures"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title="Delete salary component"
+        description={`Delete "${deleting?.name ?? ''}" (${deleting?.code ?? ''})? Check the salary structures that use it first — this can't be undone from the app.`}
+        confirmLabel="Delete component"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) });
+        }}
       />
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
@@ -250,6 +283,29 @@ export default function SalaryComponentsPage(): ReactElement {
               onChange={(e) => setForm({ ...form, defaultValue: Number(e.target.value) })}
             />
           </div>
+          {form.type === 'earning' && !form.isStatutory && (
+            <div>
+              <Label htmlFor="statutoryBase">PF wage</Label>
+              <Select
+                id="statutoryBase"
+                value={form.statutoryBase ?? ''}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    statutoryBase: (e.target.value || null) as StatutoryBase | null,
+                  })
+                }
+              >
+                <option value="">Not flagged (decided by name)</option>
+                <option value="basic">Basic</option>
+                <option value="da">Dearness allowance (DA)</option>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                PF is calculated on the earnings flagged Basic or DA. If no component is flagged,
+                components named Basic, Dearness or DA are used.
+              </p>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

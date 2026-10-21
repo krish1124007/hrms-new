@@ -73,6 +73,8 @@ export interface IEmployee extends Document {
   firstName: string;
   lastName: string;
   email: string;
+  /** The employee's own address — kept up to date by them through `PATCH /employees/me`. */
+  personalEmail?: string;
   phone?: string;
   dateOfBirth?: Date;
   gender?: Gender;
@@ -223,6 +225,7 @@ const employeeSchema = new Schema<IEmployee>({
   firstName: { type: String, required: true, trim: true },
   lastName: { type: String, required: true, trim: true },
   email: { type: String, required: true, lowercase: true, trim: true },
+  personalEmail: { type: String, lowercase: true, trim: true },
   phone: String,
   dateOfBirth: Date,
   gender: { type: String, enum: ['male', 'female', 'other'] },
