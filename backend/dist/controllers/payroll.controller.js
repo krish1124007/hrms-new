@@ -40,6 +40,11 @@ export const componentSchema = z.object({
         'tds',
     ])
         .optional(),
+    /**
+     * PF wage: `basic` / `da` — part of it; `none` — never part of it; null —
+     * decided by the component's name (Basic / Dearness / DA).
+     */
+    statutoryBase: z.enum(['basic', 'da', 'none']).nullable().optional(),
     order: z.coerce.number().default(0),
     isActive: z.boolean().default(true),
 });

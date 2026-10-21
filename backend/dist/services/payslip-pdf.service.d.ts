@@ -34,6 +34,9 @@ export interface YtdTotals {
     deductions: number;
     net: number;
 }
+export declare function inr(amount: number): string;
+/** Convert a number to Indian-style English words (whole rupees). */
+export declare function numberToIndianWords(n: number): string;
 export declare function generatePayslipPdf(record: IPayrollRecord, cycle: IPayrollCycle, employee: IEmployee, tenant: CompanyInfo, ytd: YtdTotals): Promise<string>;
 export {};
 //# sourceMappingURL=payslip-pdf.service.d.ts.map

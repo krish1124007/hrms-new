@@ -299,8 +299,8 @@ export declare function endBreak(_req: Request, res: Response): Promise<void>;
 export declare const listRecordsSchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
     limit: z.ZodDefault<z.ZodNumber>;
-    employeeId: z.ZodOptional<z.ZodString>;
-    departmentId: z.ZodOptional<z.ZodString>;
+    employeeId: z.ZodEffects<z.ZodOptional<z.ZodString>, string | undefined, unknown>;
+    departmentId: z.ZodEffects<z.ZodOptional<z.ZodString>, string | undefined, unknown>;
     search: z.ZodOptional<z.ZodString>;
     status: z.ZodOptional<z.ZodEnum<["present", "absent", "half_day", "late", "on_leave", "holiday", "weekend"]>>;
     from: z.ZodOptional<z.ZodDate>;
@@ -321,8 +321,8 @@ export declare const listRecordsSchema: z.ZodObject<{
     page?: number | undefined;
     limit?: number | undefined;
     search?: string | undefined;
-    departmentId?: string | undefined;
-    employeeId?: string | undefined;
+    departmentId?: unknown;
+    employeeId?: unknown;
     month?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;
@@ -331,6 +331,15 @@ export declare function listRecords(req: Request, res: Response): Promise<void>;
 export declare function myAttendance(req: Request, res: Response): Promise<void>;
 export declare function todayAttendance(_req: Request, res: Response): Promise<void>;
 export declare function myShift(_req: Request, res: Response): Promise<void>;
+/**
+ * GET /attendance/geofences/mine — the zones the caller may check in through,
+ * for the self-service map and check-in screens (the admin list needs
+ * `attendance.view`). A zone is not assigned to anyone in particular: every
+ * active zone is company-wide and accepted by a geofence check-in from any
+ * employee, so that is exactly what applies to the caller. Same item shape as
+ * the admin list.
+ */
+export declare function geofencesMine(_req: Request, res: Response): Promise<void>;
 export declare const monthlyQuerySchema: z.ZodObject<{
     year: z.ZodNumber;
     month: z.ZodNumber;
@@ -473,78 +482,5 @@ export declare const reportQuerySchema: z.ZodObject<{
 }>;
 export declare function dashboardStats(req: Request, res: Response): Promise<void>;
 export declare function attendanceReport(req: Request, res: Response): Promise<void>;
-export declare const trackingBatchSchema: z.ZodObject<{
-    points: z.ZodArray<z.ZodObject<{
-        timestamp: z.ZodOptional<z.ZodDate>;
-        lat: z.ZodNumber;
-        lng: z.ZodNumber;
-        accuracy: z.ZodOptional<z.ZodNumber>;
-        speed: z.ZodOptional<z.ZodNumber>;
-        altitude: z.ZodOptional<z.ZodNumber>;
-        heading: z.ZodOptional<z.ZodNumber>;
-        activity: z.ZodOptional<z.ZodEnum<["still", "walking", "running", "in_vehicle"]>>;
-        battery: z.ZodOptional<z.ZodNumber>;
-        isCharging: z.ZodOptional<z.ZodBoolean>;
-        networkType: z.ZodOptional<z.ZodString>;
-        isOffline: z.ZodOptional<z.ZodBoolean>;
-    }, "strip", z.ZodTypeAny, {
-        lat: number;
-        lng: number;
-        accuracy?: number | undefined;
-        timestamp?: Date | undefined;
-        speed?: number | undefined;
-        altitude?: number | undefined;
-        heading?: number | undefined;
-        activity?: "still" | "walking" | "running" | "in_vehicle" | undefined;
-        battery?: number | undefined;
-        isCharging?: boolean | undefined;
-        networkType?: string | undefined;
-        isOffline?: boolean | undefined;
-    }, {
-        lat: number;
-        lng: number;
-        accuracy?: number | undefined;
-        timestamp?: Date | undefined;
-        speed?: number | undefined;
-        altitude?: number | undefined;
-        heading?: number | undefined;
-        activity?: "still" | "walking" | "running" | "in_vehicle" | undefined;
-        battery?: number | undefined;
-        isCharging?: boolean | undefined;
-        networkType?: string | undefined;
-        isOffline?: boolean | undefined;
-    }>, "many">;
-}, "strip", z.ZodTypeAny, {
-    points: {
-        lat: number;
-        lng: number;
-        accuracy?: number | undefined;
-        timestamp?: Date | undefined;
-        speed?: number | undefined;
-        altitude?: number | undefined;
-        heading?: number | undefined;
-        activity?: "still" | "walking" | "running" | "in_vehicle" | undefined;
-        battery?: number | undefined;
-        isCharging?: boolean | undefined;
-        networkType?: string | undefined;
-        isOffline?: boolean | undefined;
-    }[];
-}, {
-    points: {
-        lat: number;
-        lng: number;
-        accuracy?: number | undefined;
-        timestamp?: Date | undefined;
-        speed?: number | undefined;
-        altitude?: number | undefined;
-        heading?: number | undefined;
-        activity?: "still" | "walking" | "running" | "in_vehicle" | undefined;
-        battery?: number | undefined;
-        isCharging?: boolean | undefined;
-        networkType?: string | undefined;
-        isOffline?: boolean | undefined;
-    }[];
-}>;
-export declare function ingestLocationBatch(req: Request, res: Response): Promise<void>;
-export declare function getLiveTracking(_req: Request, res: Response): Promise<void>;
+export declare function getLiveTracking(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=attendance.controller.d.ts.map

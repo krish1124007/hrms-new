@@ -10,16 +10,16 @@ export declare const createTemplateSchema: z.ZodObject<{
     template: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
 }, "strip", z.ZodTypeAny, {
     name: string;
-    fields: string[];
     layout: "horizontal" | "vertical";
+    fields: string[];
     backgroundColor: string;
     textColor: string;
     logo?: string | undefined;
     template?: Record<string, unknown> | undefined;
 }, {
     name: string;
-    fields?: string[] | undefined;
     layout?: "horizontal" | "vertical" | undefined;
+    fields?: string[] | undefined;
     backgroundColor?: string | undefined;
     textColor?: string | undefined;
     logo?: string | undefined;
@@ -35,16 +35,16 @@ export declare const updateTemplateSchema: z.ZodObject<{
     template: z.ZodOptional<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>>;
 }, "strip", z.ZodTypeAny, {
     name?: string | undefined;
-    fields?: string[] | undefined;
     layout?: "horizontal" | "vertical" | undefined;
+    fields?: string[] | undefined;
     backgroundColor?: string | undefined;
     textColor?: string | undefined;
     logo?: string | undefined;
     template?: Record<string, unknown> | undefined;
 }, {
     name?: string | undefined;
-    fields?: string[] | undefined;
     layout?: "horizontal" | "vertical" | undefined;
+    fields?: string[] | undefined;
     backgroundColor?: string | undefined;
     textColor?: string | undefined;
     logo?: string | undefined;

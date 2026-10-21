@@ -76,6 +76,7 @@ const employeeSchema = new Schema({
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
     email: { type: String, required: true, lowercase: true, trim: true },
+    personalEmail: { type: String, lowercase: true, trim: true },
     phone: String,
     dateOfBirth: Date,
     gender: { type: String, enum: ['male', 'female', 'other'] },

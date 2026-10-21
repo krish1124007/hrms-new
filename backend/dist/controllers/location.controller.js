@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Location } from '../models/location.model.js';
 import { NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 // ---------- Validation Schemas ----------
 export const createLocationSchema = z.object({
@@ -29,8 +30,8 @@ export async function listLocations(req, res) {
     const filter = { deletedAt: null };
     if (q.search) {
         filter.$or = [
-            { name: { $regex: q.search, $options: 'i' } },
-            { address: { $regex: q.search, $options: 'i' } },
+            { name: containsInsensitive(q.search) },
+            { address: containsInsensitive(q.search) },
         ];
     }
     if (q.type)

@@ -36,10 +36,10 @@ export async function testEmail(req, res) {
     }
     const ok = await sendMail({
         to,
-        subject: 'DD HRMS — test email',
+        subject: 'D-HRMS — test email',
         html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="color: #132446; margin: 0 0 12px;">Test email from DD HRMS</h2>
+        <h2 style="color: #132446; margin: 0 0 12px;">Test email from D-HRMS</h2>
         <p style="color: #555; line-height: 1.5;">
           If you're seeing this, your SMTP configuration is working. Forgot-password
           emails, user invites, and other system notifications will be sent via this
@@ -50,7 +50,7 @@ export async function testEmail(req, res) {
         </p>
       </div>
     `,
-        text: `DD HRMS test email — sent at ${new Date().toISOString()} via ${verify.kind}.`,
+        text: `D-HRMS test email — sent at ${new Date().toISOString()} via ${verify.kind}.`,
     });
     if (!ok) {
         res.status(500).json({

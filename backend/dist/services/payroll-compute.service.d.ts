@@ -9,7 +9,10 @@
  *   earnings      the salary structure's components, or the employee's
  *                 basic / HRA / DA / allowance — each × days paid / days in
  *                 the month
- *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS
+ *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS;
+ *                 PF is on the structure components that are PF wages — each
+ *                 by its own `statutoryBase` flag (basic / da yes, none no),
+ *                 else by its name (Basic / DA) — else the salary basic + DA
  *   loans/claims  the EMIs due in the month and the approved claims not yet
  *                 reimbursed — except what another record holds (counted
  *                 and not settled yet; see "Items held by a payroll record")
@@ -21,8 +24,9 @@
  *
  * The full-month gross is basic + HRA + DA + special allowance from the
  * salary components (or the structure's earnings) — never the stored
- * `salary.grossSalary`, which the employee pre-save hook also adds the CSV
- * import's `otherAllowances` stash (PF, CTC, net pay …) into.
+ * `salary.grossSalary`, which the employee pre-save hook also adds every
+ * `otherAllowances` entry into (old CSV imports parked PF, CTC, net pay … there;
+ * scripts/fix-salary-stash.ts removes them).
  *
  * Days are business-day labels (UTC midnight of the IST calendar date), the
  * `Attendance.date` convention; other dates (joining, exit, leave, due dates)

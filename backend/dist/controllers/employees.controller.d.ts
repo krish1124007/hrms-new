@@ -5,6 +5,7 @@ export declare const createEmployeeSchema: z.ZodObject<{
     firstName: z.ZodString;
     lastName: z.ZodString;
     email: z.ZodString;
+    personalEmail: z.ZodOptional<z.ZodString>;
     phone: z.ZodOptional<z.ZodString>;
     dateOfBirth: z.ZodOptional<z.ZodDate>;
     gender: z.ZodOptional<z.ZodEnum<["male", "female", "other"]>>;
@@ -190,6 +191,7 @@ export declare const createEmployeeSchema: z.ZodObject<{
         } | undefined;
     } | undefined;
     phone?: string | undefined;
+    personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
     gender?: "male" | "female" | "other" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
@@ -251,6 +253,7 @@ export declare const createEmployeeSchema: z.ZodObject<{
         } | undefined;
     } | undefined;
     phone?: string | undefined;
+    personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
     gender?: "male" | "female" | "other" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
@@ -292,6 +295,7 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     firstName: z.ZodOptional<z.ZodString>;
     lastName: z.ZodOptional<z.ZodString>;
     email: z.ZodOptional<z.ZodString>;
+    personalEmail: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     phone: z.ZodOptional<z.ZodOptional<z.ZodString>>;
     dateOfBirth: z.ZodOptional<z.ZodOptional<z.ZodDate>>;
     gender: z.ZodOptional<z.ZodOptional<z.ZodEnum<["male", "female", "other"]>>>;
@@ -470,6 +474,7 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     firstName?: string | undefined;
     lastName?: string | undefined;
     phone?: string | undefined;
+    personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
     gender?: "male" | "female" | "other" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
@@ -531,6 +536,7 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     firstName?: string | undefined;
     lastName?: string | undefined;
     phone?: string | undefined;
+    personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
     gender?: "male" | "female" | "other" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
@@ -609,6 +615,8 @@ export declare const listQuerySchema: z.ZodObject<{
     designation: z.ZodOptional<z.ZodString>;
     status: z.ZodOptional<z.ZodEnum<["active", "inactive", "terminated", "resigned", "onNotice"]>>;
     sort: z.ZodOptional<z.ZodString>;
+    /** `1` / `true`: soft-deleted employees too — honoured for `employees.delete` holders only. */
+    includeDeleted: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     page: number;
     limit: number;
@@ -617,6 +625,7 @@ export declare const listQuerySchema: z.ZodObject<{
     search?: string | undefined;
     department?: string | undefined;
     designation?: string | undefined;
+    includeDeleted?: string | undefined;
 }, {
     status?: "active" | "inactive" | "terminated" | "resigned" | "onNotice" | undefined;
     sort?: string | undefined;
@@ -625,11 +634,199 @@ export declare const listQuerySchema: z.ZodObject<{
     search?: string | undefined;
     department?: string | undefined;
     designation?: string | undefined;
+    includeDeleted?: string | undefined;
 }>;
 export declare function listEmployees(req: Request, res: Response): Promise<void>;
 export declare function employeeStats(_req: Request, res: Response): Promise<void>;
 export declare function createEmployee(req: Request, res: Response): Promise<void>;
 export declare function getEmployee(req: Request, res: Response): Promise<void>;
+/** GET /employees/me — any logged-in user's own employee profile. */
+export declare function getMyProfile(req: Request, res: Response): Promise<void>;
+/**
+ * What an employee may change about themselves: contact details only. Strict —
+ * any other key (salary, department, status…) is a 400, never silently dropped.
+ * An empty string clears `phone`, `personalEmail` or `avatar`.
+ */
+export declare const updateSelfSchema: z.ZodObject<{
+    phone: z.ZodOptional<z.ZodString>;
+    personalEmail: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"">, z.ZodString]>>;
+    address: z.ZodOptional<z.ZodObject<{
+        current: z.ZodOptional<z.ZodObject<{
+            line1: z.ZodOptional<z.ZodString>;
+            line2: z.ZodOptional<z.ZodString>;
+            city: z.ZodOptional<z.ZodString>;
+            state: z.ZodOptional<z.ZodString>;
+            country: z.ZodOptional<z.ZodString>;
+            zip: z.ZodOptional<z.ZodString>;
+        }, "strict", z.ZodTypeAny, {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        }, {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        }>>;
+        permanent: z.ZodOptional<z.ZodObject<{
+            line1: z.ZodOptional<z.ZodString>;
+            line2: z.ZodOptional<z.ZodString>;
+            city: z.ZodOptional<z.ZodString>;
+            state: z.ZodOptional<z.ZodString>;
+            country: z.ZodOptional<z.ZodString>;
+            zip: z.ZodOptional<z.ZodString>;
+        }, "strict", z.ZodTypeAny, {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        }, {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        }>>;
+    }, "strict", z.ZodTypeAny, {
+        current?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+        permanent?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+    }, {
+        current?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+        permanent?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+    }>>;
+    emergencyContact: z.ZodOptional<z.ZodObject<{
+        name: z.ZodOptional<z.ZodString>;
+        relation: z.ZodOptional<z.ZodString>;
+        phone: z.ZodOptional<z.ZodString>;
+    }, "strict", z.ZodTypeAny, {
+        name?: string | undefined;
+        relation?: string | undefined;
+        phone?: string | undefined;
+    }, {
+        name?: string | undefined;
+        relation?: string | undefined;
+        phone?: string | undefined;
+    }>>;
+    avatar: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"">, z.ZodString]>>;
+}, "strict", z.ZodTypeAny, {
+    address?: {
+        current?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+        permanent?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+    } | undefined;
+    avatar?: string | undefined;
+    phone?: string | undefined;
+    personalEmail?: string | undefined;
+    emergencyContact?: {
+        name?: string | undefined;
+        relation?: string | undefined;
+        phone?: string | undefined;
+    } | undefined;
+}, {
+    address?: {
+        current?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+        permanent?: {
+            country?: string | undefined;
+            state?: string | undefined;
+            line1?: string | undefined;
+            line2?: string | undefined;
+            city?: string | undefined;
+            zip?: string | undefined;
+        } | undefined;
+    } | undefined;
+    avatar?: string | undefined;
+    phone?: string | undefined;
+    personalEmail?: string | undefined;
+    emergencyContact?: {
+        name?: string | undefined;
+        relation?: string | undefined;
+        phone?: string | undefined;
+    } | undefined;
+}>;
+/**
+ * PATCH /employees/me — the caller updates their own contact details. The
+ * given part of the address / emergency contact is merged into what is
+ * stored; a new avatar is mirrored to the login so the app header matches.
+ */
+export declare function updateMyProfile(req: Request, res: Response): Promise<void>;
+export declare const directoryQuerySchema: z.ZodObject<{
+    page: z.ZodDefault<z.ZodNumber>;
+    limit: z.ZodDefault<z.ZodNumber>;
+    search: z.ZodOptional<z.ZodString>;
+    department: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    page: number;
+    limit: number;
+    search?: string | undefined;
+    department?: string | undefined;
+}, {
+    page?: number | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    department?: string | undefined;
+}>;
+/** GET /employees/directory — employed colleagues, searchable by name, e-mail or Employee ID. */
+export declare function listDirectory(req: Request, res: Response): Promise<void>;
+/** GET /employees/directory/stats — headcount of employed people, in total and per department. */
+export declare function directoryStats(_req: Request, res: Response): Promise<void>;
+/** GET /employees/directory/:id — one employed colleague; 404 for anyone who has left or was deleted. */
+export declare function getDirectoryEntry(req: Request, res: Response): Promise<void>;
 export declare function updateEmployee(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployee(req: Request, res: Response): Promise<void>;
 /**
@@ -661,7 +858,8 @@ export interface StatusChange {
 }
 export declare function addEmployeeDocument(req: Request, res: Response): Promise<void>;
 export declare function deleteEmployeeDocument(req: Request, res: Response): Promise<void>;
-export declare function exportEmployees(_req: Request, res: Response): Promise<void>;
+/** CSV of work details (no pay fields) — of everybody for HR / payroll, else of the caller and their reports. */
+export declare function exportEmployees(req: Request, res: Response): Promise<void>;
 /** One row of an import, as reported back (`row` is 1-based, in payload order). */
 export interface ImportRowResult {
     row: number;

@@ -52,8 +52,8 @@ export declare const updateTaskSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
-    title?: string | undefined;
     dueDate?: Date | undefined;
+    title?: string | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;
@@ -64,8 +64,8 @@ export declare const updateTaskSchema: z.ZodObject<{
 }, {
     status?: "done" | "in_progress" | "todo" | "in_review" | undefined;
     description?: string | undefined;
-    title?: string | undefined;
     dueDate?: Date | undefined;
+    title?: string | undefined;
     priority?: "low" | "medium" | "high" | "critical" | undefined;
     estimatedHours?: number | undefined;
     milestoneId?: string | undefined;

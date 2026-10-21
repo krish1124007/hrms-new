@@ -33,8 +33,6 @@ export * from './sales-target.model.js';
 export * from './product-order.model.js';
 export * from './payment-collection.model.js';
 export * from './location-track.model.js';
-export * from './channel.model.js';
-export * from './message.model.js';
 export * from './notice.model.js';
 export * from './location.model.js';
 export * from './document.model.js';

@@ -1,5 +1,16 @@
 /** SystemSetting key for the monthly auto-backup toggle (applied at boot by index.ts). */
 export declare const MONTHLY_BACKUP_SETTING = "backup.monthlyEnabled";
+/** The monthly backup's time of day, business timezone (IST): last day of the month at this time. */
+export declare const MONTHLY_BACKUP_TIME = "23:50";
+/** True when `now` falls on the last calendar day of its business-timezone (IST) month. */
+export declare function isLastBusinessDayOfMonth(now?: Date): boolean;
+/**
+ * When the monthly backup really runs next: the last day of the current IST
+ * month at MONTHLY_BACKUP_TIME IST, or — once that has passed — the last day
+ * of the next month. (The queue wakes on each of the 28th–31st and only the
+ * last day goes ahead, so the queue's own "next" is often not the run.)
+ */
+export declare function nextMonthlyBackupRun(now?: Date): Date;
 /** Absolute BACKUP_DIR. */
 export declare function backupRoot(): string;
 /** Where backups were written before they moved out of the upload root. */

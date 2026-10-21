@@ -28,14 +28,14 @@ export declare const updateMilestoneSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     status?: "pending" | "completed" | undefined;
     description?: string | undefined;
-    title?: string | undefined;
     dueDate?: Date | undefined;
+    title?: string | undefined;
     order?: number | undefined;
 }, {
     status?: "pending" | "completed" | undefined;
     description?: string | undefined;
-    title?: string | undefined;
     dueDate?: Date | undefined;
+    title?: string | undefined;
     order?: number | undefined;
 }>;
 export declare function listMilestones(req: Request, res: Response): Promise<void>;

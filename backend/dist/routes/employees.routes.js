@@ -6,6 +6,17 @@ import { validate } from '../middleware/validate.middleware.js';
 import { asyncHandler } from '../lib/async-handler.js';
 const router = Router();
 router.use(authMiddleware);
+// ---------- Self-service: any logged-in user ----------
+// Declared before `/:id` so "me" and "directory" are never read as an id.
+// Own profile (no salary / bank); a user without an employee record gets 404
+// NO_EMPLOYEE_PROFILE.
+router.get('/me', asyncHandler(ctrl.getMyProfile));
+router.patch('/me', validate(ctrl.updateSelfSchema), asyncHandler(ctrl.updateMyProfile));
+// Colleagues still employed — work contact details only.
+router.get('/directory', validate(ctrl.directoryQuerySchema, 'query'), asyncHandler(ctrl.listDirectory));
+router.get('/directory/stats', asyncHandler(ctrl.directoryStats));
+router.get('/directory/:id', asyncHandler(ctrl.getDirectoryEntry));
+// ---------- HR ----------
 router.get('/', requirePermission('employees.view'), validate(ctrl.listQuerySchema, 'query'), asyncHandler(ctrl.listEmployees));
 router.get('/stats', requirePermission('employees.view'), asyncHandler(ctrl.employeeStats));
 router.get('/birthdays', requirePermission('employees.view'), asyncHandler(ctrl.upcomingBirthdays));

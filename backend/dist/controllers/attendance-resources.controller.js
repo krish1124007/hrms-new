@@ -5,6 +5,7 @@ import { GeofenceZone } from '../models/geofence-zone.model.js';
 import { QRCode } from '../models/qr-code.model.js';
 import { AllowedIP } from '../models/allowed-ip.model.js';
 import { NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 // ============================================================================
 // SITES
@@ -27,7 +28,7 @@ export async function listSites(req, res) {
     const q = req.query;
     const filter = {};
     if (q.search)
-        filter.name = { $regex: q.search, $options: 'i' };
+        filter.name = containsInsensitive(q.search);
     const result = await AttendanceSite.paginate(filter, { page: q.page, limit: q.limit, sort: 'name' });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
@@ -103,7 +104,7 @@ export async function listGeofences(req, res) {
     const q = req.query;
     const filter = {};
     if (q.search)
-        filter.name = { $regex: q.search, $options: 'i' };
+        filter.name = containsInsensitive(q.search);
     const result = await GeofenceZone.paginate(filter, { page: q.page, limit: q.limit, sort: 'name' });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }

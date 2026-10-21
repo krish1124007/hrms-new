@@ -4,6 +4,7 @@ import { DocumentModel as DocumentRecord } from '../models/document.model.js';
 import { NotFoundError, ValidationAppError, UnauthorizedError, ForbiddenError, } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { saveFile, deleteFile } from '../lib/local-storage.js';
+import { containsInsensitive } from '../lib/regex.js';
 // Roles that bypass per-user visibility — HR/admin need to see every document
 // for compliance, payroll, and offboarding workflows.
 const PRIVILEGED_ROLES = new Set(['admin', 'hr_manager', 'hr_executive']);
@@ -74,7 +75,7 @@ export async function listDocuments(req, res) {
     if (q.folder)
         filter.folder = normaliseFolder(q.folder);
     if (q.search)
-        filter.name = { $regex: q.search, $options: 'i' };
+        filter.name = containsInsensitive(q.search);
     const [docs, total] = await Promise.all([
         DocumentRecord.find(filter)
             .sort({ createdAt: -1 })

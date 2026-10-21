@@ -30,5 +30,7 @@ paymentCollectionSchema.index({ receiptNumber: 1 }, { unique: true });
 paymentCollectionSchema.index({ employeeId: 1, collectedAt: -1 });
 paymentCollectionSchema.index({ clientId: 1, collectedAt: -1 });
 paymentCollectionSchema.index({ status: 1 });
+// The order's payments (allocation checks, ledger recompute). Production: migration 20261021000003.
+paymentCollectionSchema.index({ orderId: 1 });
 export const PaymentCollection = model('PaymentCollection', paymentCollectionSchema);
 //# sourceMappingURL=payment-collection.model.js.map

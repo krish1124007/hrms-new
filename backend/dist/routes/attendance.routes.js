@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as ctrl from '../controllers/attendance.controller.js';
 import * as res from '../controllers/attendance-resources.controller.js';
+import * as tracking from '../controllers/field-tracking.controller.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { validate } from '../middleware/validate.middleware.js';
@@ -41,6 +42,9 @@ router.patch('/sites/:id', requirePermission('attendance.config'), validate(res.
 router.delete('/sites/:id', requirePermission('attendance.config'), asyncHandler(res.deleteSite));
 router.post('/sites/:id/assign', requirePermission('attendance.config'), validate(res.assignEmployeesSchema), asyncHandler(res.assignEmployees));
 // ---------- GEOFENCE ZONES ----------
+// The zones that apply to the caller — for anyone who checks in. Declared
+// before `/geofences/:id` so "mine" is not read as an id.
+router.get('/geofences/mine', requirePermission('attendance.checkin'), asyncHandler(ctrl.geofencesMine));
 router.get('/geofences', requirePermission('attendance.view'), validate(res.listSchema, 'query'), asyncHandler(res.listGeofences));
 router.post('/geofences', requirePermission('attendance.config'), validate(res.createGeofenceSchema), asyncHandler(res.createGeofence));
 router.get('/geofences/:id', requirePermission('attendance.view'), asyncHandler(res.getGeofence));
@@ -57,7 +61,11 @@ router.post('/allowed-ips', requirePermission('attendance.config'), validate(res
 router.patch('/allowed-ips/:id', requirePermission('attendance.config'), validate(res.updateAllowedIPSchema), asyncHandler(res.updateAllowedIP));
 router.delete('/allowed-ips/:id', requirePermission('attendance.config'), asyncHandler(res.deleteAllowedIP));
 // ---------- LIVE TRACKING ----------
-router.post('/tracking/batch', validate(ctrl.trackingBatchSchema), asyncHandler(ctrl.ingestLocationBatch));
+// The same ingest as POST /field/tracking/batch (kept for the shipped mobile
+// app, which polls it for every user): stored only for field staff, while
+// live tracking is on and the caller is clocked in — otherwise 200
+// `{ ignored: true }`, never an error.
+router.post('/tracking/batch', validate(tracking.batchSchema), asyncHandler(tracking.ingestLegacyBatch));
 router.get('/tracking/live', requirePermission('attendance.view'), asyncHandler(ctrl.getLiveTracking));
 export default router;
 //# sourceMappingURL=attendance.routes.js.map

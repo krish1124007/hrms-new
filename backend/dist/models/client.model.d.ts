@@ -31,7 +31,9 @@ export interface IClient extends Document {
     assignedTo?: Types.ObjectId;
     territory?: string;
     lastVisitDate?: Date;
+    /** Ledger figures — recomputed from orders/payments (services/field-ledger.service.ts), never written by clients. */
     totalOrders: number;
+    totalOrderValue: number;
     totalPayments: number;
     outstandingAmount: number;
     notes: IClientNote[];

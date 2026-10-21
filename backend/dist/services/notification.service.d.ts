@@ -17,8 +17,8 @@ export interface CreateNotificationParams {
     metadata?: Record<string, unknown>;
 }
 /**
- * Persists a notification record. In the future this can also push via
- * Socket.io and/or Firebase Cloud Messaging.
+ * Persists a notification record and delivers it live: to the user's open
+ * sockets (web) and, through FCM, to their registered phones. Never throws.
  */
 export declare function createNotification(params: CreateNotificationParams): Promise<void>;
 /**

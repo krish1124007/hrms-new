@@ -3,6 +3,7 @@ import { Attendance } from '../models/attendance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { getUserId } from '../lib/async-context.js';
 import { ForbiddenError } from '../lib/errors.js';
+import { hasPermission } from '../lib/access.js';
 import { endOfBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
 /**
  * GET /api/v1/team/overview
@@ -51,24 +52,27 @@ function mapStatus(att) {
             return att.checkIn?.time ? 'present' : 'not_checked_in';
     }
 }
-export async function teamOverview(_req, res) {
+export async function teamOverview(req, res) {
     const userId = getUserId();
     if (!userId)
         throw new ForbiddenError('Not authenticated');
-    // Find the manager's own employee record. Some users (super-admins,
-    // owners) don't have one — in that case we fall back to "every active
-    // employee" so the screen still has data.
+    // Find the manager's own employee record. Some users (the seeded admin)
+    // don't have one: HR (`attendance.manage`) then sees every active employee
+    // so the screen still has data; anyone else has no team.
     const me = await Employee.findOne({ userId }).lean().exec();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const reportFilter = me
-        ? { reportingManager: me._id }
-        : { status: 'active' };
-    const reports = await Employee
-        .find(reportFilter)
-        .select('firstName lastName profileImage designation status userId')
-        .populate('designation', 'name')
-        .lean()
-        .exec();
+    let reportFilter = null;
+    if (me)
+        reportFilter = { reportingManager: me._id };
+    else if (hasPermission(req.user, 'attendance.manage'))
+        reportFilter = { status: 'active' };
+    const reports = reportFilter
+        ? await Employee.find(reportFilter)
+            .select('firstName lastName profileImage designation status userId')
+            .populate('designation', 'name')
+            .lean()
+            .exec()
+        : [];
     const reportIds = reports.map((r) => r._id);
     if (reportIds.length === 0) {
         // Empty team — return a complete shape so the mobile screen renders

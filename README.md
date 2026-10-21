@@ -132,6 +132,7 @@ committed, so the server deploys with `git pull` and builds nothing. Rebuild the
 with `cd backend && npm run clean && npm run build` and `cd frontend && npm run clean && npm run build`,
 then commit them.
 Deploying Phase 2 (attendance, leave, payroll, approvals) adds its own steps: [Phase 2 — HR logic](docs/deploy-checklist.md#phase-2--hr-logic-attendance-leave-payroll-approvals).
+Deploying Phases 3–6 (field sales and maps, migrations, push, mobile release) adds its own steps: [Phases 3–6](docs/deploy-checklist.md#phases-36--web-ux-field-sales--maps-mobile-hygiene).
 
 Anywhere else: the two folders are independent — deploy each wherever you want.
 

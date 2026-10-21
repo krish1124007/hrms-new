@@ -101,7 +101,7 @@ const COLOR = {
     cardBg: '#f8fafc',
     white: '#ffffff',
 };
-function inr(amount) {
+export function inr(amount) {
     // PDFKit's bundled Helvetica does not include the ₹ glyph (renders as ¹).
     // "Rs." is universally readable on every PDF viewer.
     return `Rs. ${Number(amount || 0).toLocaleString('en-IN', {
@@ -110,7 +110,7 @@ function inr(amount) {
     })}`;
 }
 /** Convert a number to Indian-style English words (whole rupees). */
-function numberToIndianWords(n) {
+export function numberToIndianWords(n) {
     const ones = [
         '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
         'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
@@ -137,8 +137,10 @@ function numberToIndianWords(n) {
     const thousand = Math.floor((num % 1_00_000) / 1_000);
     const hundred = num % 1_000;
     const parts = [];
+    // 100 crore and up: the crore count is itself a number in words
+    // (1,50,00,00,000 → "One Hundred Fifty Crore").
     if (crore)
-        parts.push(`${below100(crore)} Crore`);
+        parts.push(`${crore < 100 ? below100(crore) : numberToIndianWords(crore)} Crore`);
     if (lakh)
         parts.push(`${below100(lakh)} Lakh`);
     if (thousand)

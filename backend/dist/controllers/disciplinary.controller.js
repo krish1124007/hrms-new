@@ -3,6 +3,7 @@ import { DisciplinaryAction } from '../models/disciplinary-action.model.js';
 import { Employee } from '../models/employee.model.js';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationAppError, } from '../lib/errors.js';
 import { getUserId } from '../lib/async-context.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 // Permission helper — true when the caller has the manager-level permissions
 // (admin/HR/manager). Non-privileged employees can still read their own case
@@ -129,7 +130,7 @@ export async function list(req, res) {
     if (q.employee)
         filter.employee = q.employee;
     if (q.search) {
-        const re = new RegExp(q.search, 'i');
+        const re = containsInsensitive(q.search);
         filter.$or = [{ caseNumber: re }, { title: re }];
     }
     const result = await DisciplinaryAction.paginate(filter, {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Designation } from '../models/designation.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 export const createDesignationSchema = z.object({
     name: z.string().min(1),
@@ -24,7 +25,7 @@ export async function listDesignations(req, res) {
     if (q.department)
         filter.department = q.department;
     if (q.search)
-        filter.name = { $regex: q.search, $options: 'i' };
+        filter.name = containsInsensitive(q.search);
     const result = await Designation.paginate(filter, {
         page: q.page,
         limit: q.limit,

@@ -23,6 +23,10 @@ once the new code is running, not before.
 file: [Phase 2 — HR logic](#phase-2--hr-logic-attendance-leave-payroll-approvals). On a server that
 already runs Phase 1, do only that section.
 
+**Phases 3–6** (web UX, field sales and maps, mobile app, hygiene) follow it:
+[Phases 3–6](#phases-36--web-ux-field-sales--maps-mobile-hygiene). On a server that already runs
+Phase 2, do only that section.
+
 Before you start, note the commit you are on, for rollback (section 10):
 
 ```bash
@@ -829,3 +833,425 @@ Section 10's warning about undoing the rollback before the next `git pull` appli
   holiday index only refuses a second live copy of the same holiday).
 - **`.env` and `TZ`** can stay: the previous version ignores the new entries and already computes the
   attendance day in IST.
+
+---
+
+## Phases 3–6 — web UX, field sales + maps, mobile, hygiene
+
+For deploying the `phases-3-6` work on the same server, once sections 1–10 and the Phase 2 section are
+in place. Paths and the `mongosh hrms` database name are as above; use the name from `MONGODB_URI` if
+it is not `hrms`.
+
+What changes: the Field Sales module is back on the web (catalogue-priced orders with GST, payment
+receipts, visits, tasks, targets) with a live map, daily trails and a client map; field money follows
+fixed rules (orders `pending → confirmed → delivered`, payments `collected → verified → deposited`, no
+self-approval, idempotent creates, ledgers recomputed from the rows); managers see only their direct
+reports; push notifications to the phone app; Projects/Timesheets and the language switcher are gone.
+The database gets three migrations (`migrate-mongo`) and two one-off scripts.
+
+**Prerequisite:** `phases-3-6` is merged into the branch the server tracks and pushed. Note the commit
+you are on, for rollback (step G):
+
+```bash
+cd /var/www/hrms-new && git rev-parse --short HEAD
+```
+
+Order: **A → B → C → D**, then tell people what changed (E) and verify (F). The mobile release (H)
+comes after the backend is live: the new app needs this backend. The app installed on phones today was
+not tested against it (for example, marking a `collected` payment deposited now answers 409: a manager
+verifies first).
+
+### A. Before you deploy: data checks
+
+Run these on the server before the `git pull`. They only read, except where a fix is shown.
+
+1. **Migrations already applied.** `migrate-mongo` (a regular dependency, so already installed) keeps
+   its record in the `changelog` collection. Before the pull, call it directly: the old
+   `npm run migrate:*` scripts look for `migrate-mongo-config.js` and fail with
+   `Cannot find module …/migrate-mongo-config.js` (the file is `.cjs`; this release fixes the scripts):
+
+   ```bash
+   cd /var/www/hrms-new/backend && npx migrate-mongo status -f migrate-mongo-config.cjs
+   ```
+
+   It lists `20260422000001-baseline.cjs` and `20260729000001-saturday-working-day.cjs` (the three new ones
+   arrive with the pull). Because the scripts never worked, most likely both say `PENDING`. The baseline does
+   nothing. **`saturday-working-day`** will run in step C unless you stop it: it adds Saturday to every
+   shift whose `workDays` are exactly Monday–Friday (the week-off rule, Sunday plus the 4th Saturday, is
+   applied in code). Ask HR. If those shifts must stay Monday–Friday, record it as applied without
+   running it:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.changelog.insertOne({ fileName: "20260729000001-saturday-working-day.cjs", appliedAt: new Date(), migrationBlock: Date.now() })'
+   ```
+
+   The status command then shows its `appliedAt`, and step C skips it.
+
+2. **Duplicates that stop the index migration.** Migration `20261021000003` builds unique indexes on order
+   numbers, receipt numbers, live product SKUs and monthly targets. If any duplicate exists it stops
+   **before changing anything** and lists them. See them now:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     const dup = (c, key, match) => db.getCollection(c).aggregate([
+       { $match: match || {} },
+       { $group: { _id: key, n: { $sum: 1 }, ids: { $push: "$_id" } } },
+       { $match: { n: { $gt: 1 } } }]).toArray();
+     printjson({
+       orderNumbers: dup("productorders", "$orderNumber"),
+       receiptNumbers: dup("paymentcollections", "$receiptNumber"),
+       liveSkus: dup("products", "$sku", { isDeleted: false }),
+       targets: dup("salestargets", { e: "$employeeId", y: "$period.year", m: "$period.month", t: "$type" }),
+     })'
+   ```
+
+   All four must be `[]`. Money records are never merged or renamed automatically: give the extra order
+   or receipt its own number (for example `db.productorders.updateOne({ _id: ObjectId("…") }, { $set: { orderNumber: "<number>-B" } })`),
+   and for targets keep one per employee, month and type. Deleted rows count too (the indexes cover
+   them), except for SKUs.
+
+3. **Open visits.** The same migration closes every visit still `in_progress` from an earlier day
+   (check-out at the start of the next day, marked `metadata.autoClosed`), and of several open today
+   per rep keeps the newest. Nothing to fix; note the count for the field managers:
+
+   ```bash
+   mongosh hrms --quiet --eval 'print(db.visits.countDocuments({ status: "in_progress" }), "visits in progress")'
+   ```
+
+4. **Client locations.** The migration also builds the `location_2dsphere` index on `clients` (the
+   client map and "clients near me" need it). One stored location that is not a valid point (for example
+   `{ type: "Point", coordinates: [] }`) makes that build fail with `Can't extract geo keys`; the migration
+   then stops half-way (re-running it after the fix is safe). See the indexes and count the bad ones:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     const bad = { location: { $exists: true }, $or: [
+       { "location.type": { $ne: "Point" } },
+       { "location.coordinates.1": { $exists: false } },
+       { "location.coordinates.0": { $not: { $gte: -180, $lte: 180 } } },
+       { "location.coordinates.1": { $not: { $gte: -90, $lte: 90 } } } ] };
+     print(db.clients.getIndexes().map(i => i.name).join(", "));
+     print(db.clients.countDocuments(bad), "clients with an unusable location");
+     db.clients.find(bad, { name: 1, location: 1 }).forEach(printjson)'
+   ```
+
+   If the count is not 0, remove those pins (they could not be shown on a map anyway; re-pin the clients
+   on the web later). This writes, so run it only after reading the list:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     const bad = { location: { $exists: true }, $or: [
+       { "location.type": { $ne: "Point" } },
+       { "location.coordinates.1": { $exists: false } },
+       { "location.coordinates.0": { $not: { $gte: -180, $lte: 180 } } },
+       { "location.coordinates.1": { $not: { $gte: -90, $lte: 90 } } } ] };
+     printjson(db.clients.updateMany(bad, { $unset: { location: "" } }).modifiedCount)'
+   ```
+
+5. **Legacy draft orders.** Migration `20261021000002` turns every `draft` order into `confirmed` (they
+   were counted as sales before; this keeps balances and targets as they are):
+
+   ```bash
+   mongosh hrms --quiet --eval 'print(db.productorders.countDocuments({ status: "draft" }), "draft orders")'
+   ```
+
+6. **Who is field staff.** Only employees flagged *Field staff* are tracked and shown on the live map,
+   and only people holding `field-sales.view` (role or custom permission) see the Field Sales module. No
+   seeded role except HR Manager has it (`field-sales.view` + `field-sales.manage`). List both:
+
+   ```bash
+   mongosh hrms --quiet --eval '
+     db.employees.find({ isFieldStaff: true, isDeleted: { $ne: true } }, { employeeId: 1, firstName: 1, lastName: 1 }).forEach(printjson);
+     print("-- roles with field-sales:");
+     db.roles.find({ permissions: /^field-sales\./ }, { slug: 1, permissions: 1 }).forEach((r) => printjson({ slug: r.slug, field: r.permissions.filter((p) => p.startsWith("field-sales")) }));
+     print("-- users with field-sales in customPermissions:", db.users.countDocuments({ customPermissions: /^field-sales\./ }))'
+   ```
+
+   Fix the flags in step D.4.
+
+### B. Configuration
+
+**Backend `.env`** (`/var/www/hrms-new/backend/.env`). These are new since Phase 2 (`backend/src/config/env.ts`):
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | e.g. `/etc/dhrms/firebase-service-account.json` | Push notifications to the phone app. Unset or blank: push is off and everything else works. The file is the JSON from Firebase console → Project settings → Service accounts → *Generate new private key*, of **the same Firebase project** as the app's `google-services.json` / `GoogleService-Info.plist` (step H). Keep it outside the repository, `chmod 600`, owned by the user pm2 runs as. An unreadable or invalid file is logged once (`push: could not initialise Firebase — push notifications are off`) and the API keeps running. |
+| `SUPPORT_EMAIL` | the support address | Contact on the public privacy policy (`/api/v1/privacy-policy`, linked from the store listings); unset, `COMPANY_EMAIL` is shown. It must be a valid address: an invalid value stops the API at start (`SUPPORT_EMAIL must be an e-mail address`). Use the same address as the app's `supportEmail` (step H). |
+| `FIELD_VISIT_RADIUS_M` | `300` (the default) | A visit check-in farther than this many metres from the client's pin is flagged "away from client". It is never refused. |
+
+Also check these existing ones:
+
+| Variable | Notes |
+| --- | --- |
+| `COMPANY_NAME` | Printed on payslips (section 3) and now in the header of every payment receipt PDF. Unset it reads `Company`. (ID cards take the name from the web build, *Dharmesh Deshani Group of Companies*, not from `.env`.) |
+| `MEILISEARCH_HOST`, `MEILISEARCH_API_KEY` | Leave unset unless Meilisearch is installed (section 3). Search no longer slows anything down: each call gives up after 500 ms, after 3 failures Meilisearch is skipped for 60 s, and saving a record never waits for it. Without it only `GET /api/v1/search` answers empty results; neither the web app nor the phone app calls it (list searches run in MongoDB). |
+| `CORS_ORIGIN` | `https://hrms.ddipl.org`. Also the allowed origin of the live-map socket. |
+
+```dotenv
+SUPPORT_EMAIL=…
+FIELD_VISIT_RADIUS_M=300
+# only once the service-account file is on the server:
+# FIREBASE_SERVICE_ACCOUNT_PATH=/etc/dhrms/firebase-service-account.json
+```
+
+**Web build settings.** The web app reads its settings when it is built, not on the server, so the
+committed `frontend/dist` already contains them. This release was built with `frontend/.env` holding
+only `VITE_API_URL=https://hrms.ddipl.org/api/v1`, so everything else has its default:
+
+| Variable | Built with | Effect |
+| --- | --- | --- |
+| `VITE_MAP_TILE_URL` (+ `VITE_MAP_TILE_ATTRIBUTION`) | default: `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png` | Browsers load map tiles from openstreetmap.org. Fine for a handful of users; for heavy use point it at a tile provider. |
+| `VITE_GEOCODE_URL` | empty | Address search ("find on map") is hidden on geofences and client locations; "Use my current location" and coordinates remain. Nothing is sent to a third-party geocoder. |
+| `VITE_SUPPORT_EMAIL` | default `info@dharmeshdeshani.com` | Shown on the Support page. |
+| `VITE_SUPPORT_PHONE` | default `+91 92130 17921` | Shown on the Support page. |
+| `VITE_SOCKET_URL` | unset → the origin of `VITE_API_URL`, `https://hrms.ddipl.org` | Where the live map's socket connects (path `/socket.io/`, below). |
+| `VITE_SENTRY_DSN` | unset | Error reporting off. |
+
+To change one: put it in `frontend/.env.production` on the build machine, run
+`cd frontend && npm run clean && npm run build` and commit `frontend/dist`.
+
+**nginx: the live map's socket.** The live map gets positions over socket.io at `/socket.io/` on the
+site's own origin. nginx proxies only `/api/v1/` so far, so the socket cannot connect and the map falls
+back to polling every 30 seconds (it still works, the badge says "Polling every 30 s"). For real-time
+updates, add this to the `443` server block, next to `location ^~ /api/v1/` (`^~` so no regex
+`location` can capture it):
+
+```nginx
+location ^~ /socket.io/ {
+    proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Then `nginx -t && systemctl reload nginx` (take a copy first, as in section 1).
+
+### C. Pull, install, seed, migrate, restart
+
+```bash
+cd /var/www/hrms-new && git checkout -- backend/package-lock.json && git pull && cd backend && npm ci --omit=dev
+node dist/scripts/seed.js
+npm run migrate:up
+npm run migrate:status
+pm2 restart all
+```
+
+- **Seed.** Refreshes the system roles: HR Executive and HR Manager gain `expenses.config` (expense
+  categories). On a server that already ran the Phase 2 seed expect
+  `Roles: 0 created, 2 refreshed; retired permissions stripped from 0 custom role(s) and 0 user(s)`.
+  Custom roles are not touched (step D.6).
+- **Migrations.** `npm run migrate:up` runs `migrate-mongo up -f migrate-mongo-config.cjs` (the scripts
+  now name the config file). It works on the server: `migrate-mongo` is a regular dependency, so
+  `npm ci --omit=dev` installs it (unlike `tsx`). Run it from `backend/`: the config takes `MONGODB_URI`
+  from `backend/.env` and runs the files in `backend/migrations/` (committed source; they are not part
+  of `dist`). It applies every pending migration in order (including A.1's, unless you marked it) and
+  stops at the first failure; applied ones are recorded in `changelog` and never run twice. The new ones:
+  - `20261021000001-location-track-received-at`: location history now expires 90 days after the server
+    received it (it used to key on the phone's clock). Backfills `receivedAt` and swaps the TTL index.
+  - `20261021000002-legacy-draft-orders-confirmed`: prints `legacy draft orders → confirmed: N`; the
+    orders are stamped `metadata.migratedFromDraft`.
+  - `20261021000003-field-production-indexes`: prints `field indexes: N duplicate push token(s) removed,
+    N open visit(s) closed`, then builds the field and push-device indexes (`autoIndex` is off in
+    production, so nothing else builds them).
+
+  Each prints `MIGRATED UP: <file>`. If `…field-production-indexes` stops on duplicates (A.2) it says
+  `nothing was changed` and lists them; after a bad client location (A.4) it stops at the index build.
+  Fix the data and run `npm run migrate:up` again: the earlier migrations stay applied and this one is
+  safe to repeat. You can restart the API meanwhile (the code makes the same checks itself; the indexes
+  back them up), but finish it the same day. `npm run migrate:status` must then show an `Applied At`
+  date for every file, none `PENDING`.
+- **Restart.** `pm2 restart all` keeps the environment saved in Phase 2 step C. Check it still has `TZ`:
+  `tr '\0' '\n' < /proc/$(pm2 pid backend)/environ | grep '^TZ='` → `TZ=Asia/Kolkata`. Then
+  `pm2 logs backend --lines 30 --nostream` shows `API listening on http://127.0.0.1:4000`.
+
+### D. Once, after the deploy
+
+1. **Client ledgers.** Client balances used to be added up on create and never corrected, so existing
+   ones are wrong until recomputed from the orders and payments. Run it after `migrate:up`. Dry run first,
+   it prints each order and client whose figures change; read it, then apply:
+
+   ```bash
+   cd /var/www/hrms-new/backend
+   node dist/scripts/recompute-field-ledgers.js
+   node dist/scripts/recompute-field-ledgers.js --apply
+   ```
+
+   Running it again is harmless (an up-to-date record is not listed).
+
+2. **Salary stash.** Older imports stored statutory figures (PF, ESI, PT, net, CTC) inside
+   `salary.otherAllowances`, which inflated `grossSalary`. Dry run, review the list with HR, then apply:
+
+   ```bash
+   node dist/scripts/fix-salary-stash.js
+   node dist/scripts/fix-salary-stash.js --apply
+   ```
+
+   It prints one line per employee (removed keys, `grossSalary before → after`). Payroll does not read
+   `grossSalary`, but employee screens and exports do.
+
+3. **Former drafts.** Tell the field managers that old draft orders are now *confirmed* and count as
+   sales; they cancel any that were abandoned (Field Sales → Orders). List them:
+
+   ```bash
+   mongosh hrms --quiet --eval 'db.productorders.find({ "metadata.migratedFromDraft": true }, { orderNumber: 1, totalAmount: 1, createdAt: 1 }).forEach(printjson)'
+   ```
+
+4. **Field staff and live tracking.**
+   - Tick *Field staff* on every field rep's employee record (Employees → Edit). Only flagged employees
+     are tracked and appear on the live map, trails and the attendance live view; the app tracks a phone
+     only when its user is flagged.
+   - Reps need `field-sales.view` and field managers `field-sales.manage`, through a custom role (for
+     example *Field Sales Rep* = the Employee permissions + `field-sales.view`) or the user's own
+     permissions. The Live Map and Products pages need `field-sales.manage`. (A flagged employee
+     without `field-sales.view` is still tracked through the app's attendance upload, but sees no field
+     screens.)
+   - Live tracking is a company switch (off unless someone turned it on): Attendance → Settings →
+     *Live location tracking*, with the upload interval. Points are accepted only while the rep is
+     clocked in.
+
+5. **Product catalogue.** Orders are priced only from the catalogue (price, GST rate per product), so
+   create the products before reps book orders: Field Sales → Products (`field-sales.manage`).
+
+6. **Custom roles.**
+   - Expense categories now need `expenses.config` (before: `expenses.approve`). Grant it to any custom
+     role that maintains categories. Find the candidates:
+
+     ```bash
+     mongosh hrms --quiet --eval 'db.roles.find({ isSystem: { $ne: true }, permissions: "expenses.approve" }, { slug: 1, permissions: 1 }).forEach(printjson)'
+     ```
+
+   - The `*.approve_all` rule of Phase 2 step E.3 still applies.
+   - Tell whoever administers custom roles: a holder of `employees.view` without `employees.update` or
+     `payroll.process` now sees only their own record and their **direct reports'**, and never salary,
+     bank details, statutory IDs or documents. Another employee's record answers 403. HR-like custom
+     roles need `employees.update` (or `payroll.process`) to see everyone.
+
+### E. What changes for users (tell HR and the field managers)
+
+- **Managers** see only their direct reports: employee records (no salary or bank details), the
+  attendance dashboard, records and reports, live locations. Set *Reporting manager* on employees
+  (Phase 2 step A.6).
+- **Employee directory** (phone app): colleagues' phone numbers are no longer shown (name, e-mail,
+  department, designation remain).
+- **Field orders:** booked from the product catalogue (create products first, D.5); the server prices
+  them (GST per line). New orders start `pending`; a field manager confirms and delivers; **nobody
+  confirms or delivers their own order**, not even a manager. A rep cancels only their own pending
+  order without payments. New numbers look like `ORD-2026-00001` / `RCPT-2026-00001`; old rows keep
+  theirs.
+- **Field payments:** `collected` → `verified` (a field manager) → `deposited` (the rep or a manager); a
+  manager can mark a payment bounced and take a bounce back. A rep may date a collection at most 7 days
+  back. Each payment has a receipt PDF. Bounced payments and cancelled orders no longer count in
+  totals, dashboards or revenue. Old drafts are now confirmed (D.3).
+- **Visits:** one open visit per rep; a check-in far from the client's pin, or without GPS, is
+  flagged, never refused. Check-out notes are kept apart from check-in notes.
+- **Targets** are computed from the orders and visits each time (amount targets include GST).
+- **Maps:** Live Map (field managers), daily Trails and a Client Map under Field Sales.
+- **New on the web:** the Field Sales menu (Dashboard, Clients, Visits, Orders, Collections, Products,
+  Tasks, Targets, Live Map, Trails, Client Map); ID cards come from the server (signed QR); employee
+  export and an actions menu; restore deleted employees (*Include deleted*); holiday import; notices
+  can target departments; "I acknowledge" on HR policies (only HR sees who acknowledged); profile
+  photo upload (the photo is also kept in the uploader's Documents, and replacing it leaves the old one
+  there); the PF wage setting per salary component (*Auto (by name) / Basic / DA / Excluded*).
+- **Gone:** Projects and Timesheets (hidden; their data stays), the language switcher (English only,
+  Indian date and number formats, IST).
+- **Cookie banner** asks again once (consent version 2).
+- **Phone app:** push notifications once step H ships; the new app version requires this backend.
+
+### F. Verify
+
+From your own machine:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://hrms.ddipl.org/api/v1/health                  # 200
+curl -s 'https://hrms.ddipl.org/socket.io/?EIO=4&transport=polling' | head -c 40; echo          # 0{"sid":…  (HTML here = the nginx socket block is missing)
+curl -s --http1.1 -m 5 -o /dev/null -w '%{http_code}\n' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  'https://hrms.ddipl.org/socket.io/?EIO=4&transport=websocket'                                  # 101, then it waits out the 5 s (exit 28 is fine)
+curl -s 'https://hrms.ddipl.org/api/v1/privacy-policy' | grep -o 'mailto:[^"]*' | head -1       # your SUPPORT_EMAIL
+```
+
+On the server:
+
+```bash
+cd /var/www/hrms-new/backend
+npm run migrate:status                                                       # no PENDING
+mongosh hrms --quiet --eval 'print(db.productorders.countDocuments({ status: "draft" }))'   # 0
+mongosh hrms --quiet --eval 'print(db.visits.getIndexes().map(i => i.name))'                # includes one_open_visit_per_employee
+pm2 status                                                                   # backend online, restarts not climbing
+```
+
+In the browser, signed in as an admin: the Field Sales menu is there; Products opens; the **Live Map**
+badge says *Live* (with *Polling every 30 s* the socket block is missing or wrong). With a field rep:
+clock in on the phone with live tracking on; within one upload interval the rep appears on the Live
+Map. Book one real order and payment as usual and open its receipt (a PDF).
+
+If `FIREBASE_SERVICE_ACCOUNT_PATH` is set, after the first notification
+`pm2 logs backend --lines 200 --nostream | grep 'push:'` shows `push: Firebase Cloud Messaging configured`.
+
+### G. Rollback
+
+As section 10: the previous commit's `dist/` (the SHA you noted at the top of this section), then restart:
+
+```bash
+cd /var/www/hrms-new
+git checkout <previous sha> -- backend/dist frontend/dist
+pm2 restart all
+```
+
+Section 10's warning about undoing the rollback before the next `git pull` applies unchanged. The
+rollback leaves `backend/migrations/` at the new version, so the `down` steps below can still run
+(`npm run migrate:down` reverts the **last** applied migration only; run it once per migration, newest
+first). What stays, and what to do:
+
+- **`20261021000003` (indexes):** the one-open-visit index makes the previous version answer 500 when
+  a rep checks in to a second visit while one is open (it used to allow that). For more than a short
+  rollback, run `npm run migrate:down` once (from `backend/`): it drops `one_open_visit_per_employee`,
+  `checkIn.time_-1`, the three product indexes and `paymentcollections.orderId_1`, and reopens the
+  visits it closed. The order-number, receipt-number, target, push-device, client-location and
+  location-track indexes stay; they are harmless to the previous version. Rolling forward is
+  `npm run migrate:up` again.
+- **`20261021000002` (drafts):** safe to leave; the previous version reads `confirmed` orders as before.
+  Its `down` turns only the stamped orders still `confirmed` back into `draft`. Orders created after
+  the deploy are `pending`, a status the previous version does not know.
+- **`20261021000001` (location TTL):** safe to leave. Points the previous version writes carry no
+  `receivedAt`, so the TTL never expires them, and rolling forward does not re-run this migration.
+  After rolling forward, backfill them once:
+  `mongosh hrms --eval 'db.locationtracks.updateMany({ receivedAt: { $exists: false } }, [{ $set: { receivedAt: "$timestamp" } }])'`.
+- **Data is not rolled back:** recomputed ledgers, the salary clean-up, the seed's `expenses.config`
+  and closed visits stay; all harmless to the previous version.
+- **`.env` and nginx** can stay: the previous version ignores the new keys, and the socket block only
+  serves what is there.
+- **Phones:** the new app needs this backend (payment statuses, `checkOut.notes`). Do not roll back
+  the backend while the new app is in use, or roll it back only briefly.
+
+### H. Mobile release (`dhrms-iosfinal/`)
+
+The app is a separate git repository (`dhrms-iosfinal/`, ignored by this one); its `ios/` and
+`android/` folders and the release keystore are not on this machine. Ship the **backend first**.
+
+1. Restore `ios/` and `android/` and the Android release keystore from the other machine.
+2. Firebase, from the project whose service account the backend uses (B):
+   - `android/app/google-services.json` (+ the google-services Gradle plugin);
+   - `ios/…/GoogleService-Info.plist`, with the push capability and the **APNs key uploaded to
+     Firebase**;
+   - Android 13+: `<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>` in the
+     manifest;
+   - iOS `AppDelegate`: call `[FIRApp configure]` only when `GoogleService-Info.plist` exists (native
+     code, not guarded from JS; the JS side already runs without Firebase, push simply stays off).
+3. Bump the version in `package.json` (`0.1.2` now; the app shows it in Settings), `app.json` and the
+   native projects (`versionCode`/`versionName`, `CFBundleShortVersionString`/`CFBundleVersion`). Set the
+   device display name to *D-HRMS* if it differs.
+4. Confirm the support address: `app.json` `supportEmail` is the placeholder `support@ddipl.org`; set it
+   to the real address, the same as `SUPPORT_EMAIL` (B).
+5. Store listing text: `dhrms-iosfinal/store/` (`appstore/*`, `playstore/*`, rules in `store/README.md`).
+6. Check before building: `npm run type-check` (0 errors) and `npx jest` (all pass), then try it on a
+   device: it has only been type-checked and unit-tested, never run on a phone.
+7. Not done, native follow-ups: background location (tracking is foreground-only), an in-app map
+   (`react-native-maps`; "Clients near me" is a distance list with directions), opening/saving the
+   receipt PDF (`react-native-blob-util` or `react-native-fs`; the app shares the receipt as text),
+   keeping the MMKV encryption key in Keychain/Keystore (`react-native-keychain`; it sits in a
+   separate MMKV file), and the reset-password deep link.

@@ -22,7 +22,9 @@ router.patch('/balances/:id/adjust', requirePermission('leaves.update'), validat
 router.post('/balances/reset', requirePermission('leaves.update'), validate(ctrl.resetBalanceSchema), asyncHandler(ctrl.resetLeaveBalances));
 router.get('/balances', requirePermission('leaves.view'), validate(ctrl.balanceQuerySchema, 'query'), asyncHandler(ctrl.listLeaveBalances));
 // ---------- Reports ----------
-router.get('/reports', requirePermission('leaves.view'), asyncHandler(ctrl.leaveReports));
+// Approvers only, scoped like the leave lists: a manager's reports cover their
+// direct reports and themselves, HR (`leaves.approve_all` / `leaves.update`) everybody.
+router.get('/reports', requirePermission('leaves.approve'), asyncHandler(ctrl.leaveReports));
 // ---------- Leave Requests ----------
 router.get('/requests/my', requirePermission('leaves.view'), asyncHandler(ctrl.myLeaveRequests));
 router.get('/requests/team', requirePermission('leaves.view'), asyncHandler(ctrl.teamLeaveRequests));

@@ -62,6 +62,7 @@ export const PERMISSIONS_BY_MODULE = {
         'expenses.delete',
         'expenses.approve',
         'expenses.approve_all',
+        'expenses.config',
     ],
     overtime: ['overtime.view', 'overtime.approve', 'overtime.approve_all'],
     assets: ['assets.view', 'assets.manage'],

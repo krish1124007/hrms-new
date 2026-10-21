@@ -1,5 +1,5 @@
 /**
- * DD HRMS — Comprehensive OpenAPI 3.0 path definitions.
+ * D-HRMS — OpenAPI 3.0 path definitions.
  *
  * Organised by tag / module.  Every path is relative to the server URL
  * configured in swagger.ts (`/api/v1`).
@@ -611,7 +611,7 @@ export const swaggerPaths = {
         get: {
             tags: ['Attendance'],
             summary: 'Get attendance configuration',
-            description: 'Returns the tenant-level attendance settings (methods, geofence radius, etc.).',
+            description: 'Returns the company-wide attendance settings (methods, geofence radius, etc.).',
             responses: { ...res200('Attendance config'), ...{ 401: errResponses[401] } },
         },
         put: {
@@ -1153,70 +1153,6 @@ export const swaggerPaths = {
     '/expense-claims/requests/{id}/reject': { patch: { tags: ['Expense Claims'], summary: 'Reject claim', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } }, responses: { ...res200('Rejected') } } },
     '/expense-claims/requests/{id}/reimburse': { patch: { tags: ['Expense Claims'], summary: 'Mark claim as reimbursed', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { transactionRef: { type: 'string' }, paidOn: { type: 'string', format: 'date' } } } } } }, responses: { ...res200('Reimbursed') } } },
     /* ================================================================
-     * CRM
-     * ================================================================ */
-    // Customers
-    '/crm/customers': {
-        get: { tags: ['CRM'], summary: 'List customers', parameters: [...paginationParams], responses: { ...resList('Customers', ref('Customer')) } },
-        post: { tags: ['CRM'], summary: 'Create customer', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'email'], properties: { name: { type: 'string' }, email: { type: 'string', format: 'email' }, phone: { type: 'string' }, company: { type: 'string' } } } } } }, responses: { ...res201('Customer created', ref('Customer')) } },
-    },
-    '/crm/customers/{id}': {
-        get: { tags: ['CRM'], summary: 'Get customer', parameters: [idParam()], responses: { ...res200('Customer', ref('Customer')) } },
-        patch: { tags: ['CRM'], summary: 'Update customer', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['CRM'], summary: 'Delete customer', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Leads
-    '/crm/leads': {
-        get: { tags: ['CRM'], summary: 'List leads', parameters: [...paginationParams], responses: { ...resList('Leads', ref('Lead')) } },
-        post: { tags: ['CRM'], summary: 'Create lead', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, source: { type: 'string' }, assignedTo: { type: 'string' } } } } } }, responses: { ...res201('Lead created', ref('Lead')) } },
-    },
-    '/crm/leads/stats': { get: { tags: ['CRM'], summary: 'Lead statistics', responses: { ...res200('Lead stats') } } },
-    '/crm/leads/{id}': {
-        get: { tags: ['CRM'], summary: 'Get lead', parameters: [idParam()], responses: { ...res200('Lead', ref('Lead')) } },
-        patch: { tags: ['CRM'], summary: 'Update lead', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['CRM'], summary: 'Delete lead', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/crm/leads/{id}/score': { patch: { tags: ['CRM'], summary: 'Update lead score', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['score'], properties: { score: { type: 'integer' } } } } } }, responses: { ...res200('Score updated') } } },
-    '/crm/leads/{id}/convert': { patch: { tags: ['CRM'], summary: 'Convert lead to customer/deal', parameters: [idParam()], responses: { ...res200('Lead converted') } } },
-    // Deals
-    '/crm/deals': {
-        get: { tags: ['CRM'], summary: 'List deals', parameters: [...paginationParams], responses: { ...resList('Deals', ref('Deal')) } },
-        post: { tags: ['CRM'], summary: 'Create deal', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'value', 'pipelineId', 'stage'], properties: { title: { type: 'string' }, value: { type: 'number' }, currency: { type: 'string' }, pipelineId: { type: 'string' }, stage: { type: 'string' }, customerId: { type: 'string' }, expectedCloseDate: { type: 'string', format: 'date' } } } } } }, responses: { ...res201('Deal created', ref('Deal')) } },
-    },
-    '/crm/deals/pipeline': { get: { tags: ['CRM'], summary: 'Get pipeline view (kanban)', responses: { ...res200('Pipeline view') } } },
-    '/crm/deals/forecast': { get: { tags: ['CRM'], summary: 'Get sales forecast', responses: { ...res200('Forecast data') } } },
-    '/crm/deals/reorder': { patch: { tags: ['CRM'], summary: 'Reorder deals in pipeline', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Reordered') } } },
-    '/crm/deals/{id}': {
-        get: { tags: ['CRM'], summary: 'Get deal', parameters: [idParam()], responses: { ...res200('Deal', ref('Deal')) } },
-        patch: { tags: ['CRM'], summary: 'Update deal', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['CRM'], summary: 'Delete deal', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/crm/deals/{id}/stage': { patch: { tags: ['CRM'], summary: 'Update deal stage', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['stage'], properties: { stage: { type: 'string' } } } } } }, responses: { ...res200('Stage updated') } } },
-    // Activities
-    '/crm/activities': {
-        get: { tags: ['CRM'], summary: 'List activities', parameters: [...paginationParams], responses: { ...resList('Activities', { type: 'object' }) } },
-        post: { tags: ['CRM'], summary: 'Create activity', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['type', 'subject'], properties: { type: { type: 'string', enum: ['call', 'email', 'meeting', 'task'] }, subject: { type: 'string' }, relatedTo: { type: 'string' }, relatedId: { type: 'string' }, dueDate: { type: 'string', format: 'date-time' } } } } } }, responses: { ...res201('Activity created') } },
-    },
-    '/crm/activities/upcoming': { get: { tags: ['CRM'], summary: 'Upcoming activities', responses: { ...res200('Upcoming') } } },
-    '/crm/activities/overdue': { get: { tags: ['CRM'], summary: 'Overdue activities', responses: { ...res200('Overdue') } } },
-    '/crm/activities/{id}': {
-        get: { tags: ['CRM'], summary: 'Get activity', parameters: [idParam()], responses: { ...res200('Activity') } },
-        patch: { tags: ['CRM'], summary: 'Update activity', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['CRM'], summary: 'Delete activity', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Pipelines
-    '/crm/pipelines': {
-        get: { tags: ['CRM'], summary: 'List pipelines', responses: { ...resList('Pipelines', { type: 'object' }) } },
-        post: { tags: ['CRM'], summary: 'Create pipeline', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'stages'], properties: { name: { type: 'string' }, stages: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, probability: { type: 'number' } } } } } } } } }, responses: { ...res201('Pipeline created') } },
-    },
-    '/crm/pipelines/{id}': {
-        get: { tags: ['CRM'], summary: 'Get pipeline', parameters: [idParam()], responses: { ...res200('Pipeline') } },
-        patch: { tags: ['CRM'], summary: 'Update pipeline', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['CRM'], summary: 'Delete pipeline', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Analytics
-    '/crm/analytics': { get: { tags: ['CRM'], summary: 'CRM analytics dashboard', responses: { ...res200('Analytics data') } } },
-    /* ================================================================
      * PROJECTS
      * ================================================================ */
     '/projects': {
@@ -1271,103 +1207,6 @@ export const swaggerPaths = {
      * ================================================================ */
     '/timesheets/my': { get: { tags: ['Timesheets'], summary: 'Get my timesheets', responses: { ...res200('My timesheets') } } },
     '/timesheets/weekly': { get: { tags: ['Timesheets'], summary: 'Get weekly timesheet view', responses: { ...res200('Weekly timesheet') } } },
-    /* ================================================================
-     * ACCOUNTING
-     * ================================================================ */
-    // Accounts
-    '/accounting/accounts': {
-        get: { tags: ['Accounting'], summary: 'List chart of accounts', parameters: [...paginationParams], responses: { ...resList('Accounts', ref('Account')) } },
-        post: { tags: ['Accounting'], summary: 'Create account', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'code', 'type'], properties: { name: { type: 'string' }, code: { type: 'string' }, type: { type: 'string', enum: ['asset', 'liability', 'equity', 'income', 'expense'] }, parentId: { type: 'string' } } } } } }, responses: { ...res201('Account created', ref('Account')) } },
-    },
-    '/accounting/accounts/tree': { get: { tags: ['Accounting'], summary: 'Get account hierarchy tree', responses: { ...res200('Account tree') } } },
-    '/accounting/accounts/balances': { get: { tags: ['Accounting'], summary: 'Get account balances', responses: { ...res200('Account balances') } } },
-    '/accounting/accounts/{id}': {
-        get: { tags: ['Accounting'], summary: 'Get account', parameters: [idParam()], responses: { ...res200('Account', ref('Account')) } },
-        patch: { tags: ['Accounting'], summary: 'Update account', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Accounting'], summary: 'Delete account', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Journal Entries
-    '/accounting/journal-entries': {
-        get: { tags: ['Accounting'], summary: 'List journal entries', parameters: [...paginationParams], responses: { ...resList('Journal entries', { type: 'object' }) } },
-        post: { tags: ['Accounting'], summary: 'Create journal entry', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['date', 'lines'], properties: { date: { type: 'string', format: 'date' }, reference: { type: 'string' }, memo: { type: 'string' }, lines: { type: 'array', items: { type: 'object', properties: { accountId: { type: 'string' }, debit: { type: 'number' }, credit: { type: 'number' }, description: { type: 'string' } } } } } } } } }, responses: { ...res201('Entry created') } },
-    },
-    '/accounting/journal-entries/{id}': {
-        get: { tags: ['Accounting'], summary: 'Get journal entry', parameters: [idParam()], responses: { ...res200('Journal entry') } },
-        patch: { tags: ['Accounting'], summary: 'Update journal entry', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    },
-    '/accounting/journal-entries/{id}/post': { post: { tags: ['Accounting'], summary: 'Post journal entry', parameters: [idParam()], responses: { ...res200('Posted') } } },
-    '/accounting/journal-entries/{id}/void': { post: { tags: ['Accounting'], summary: 'Void journal entry', parameters: [idParam()], responses: { ...res200('Voided') } } },
-    // Income
-    '/accounting/income': {
-        get: { tags: ['Accounting'], summary: 'List income records', parameters: [...paginationParams], responses: { ...resList('Income', { type: 'object' }) } },
-        post: { tags: ['Accounting'], summary: 'Create income', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['accountId', 'amount', 'date'], properties: { accountId: { type: 'string' }, amount: { type: 'number' }, date: { type: 'string', format: 'date' }, description: { type: 'string' }, customerId: { type: 'string' } } } } } }, responses: { ...res201('Income created') } },
-    },
-    '/accounting/income/summary': { get: { tags: ['Accounting'], summary: 'Income summary', responses: { ...res200('Summary') } } },
-    '/accounting/income/{id}': {
-        get: { tags: ['Accounting'], summary: 'Get income', parameters: [idParam()], responses: { ...res200('Income') } },
-        patch: { tags: ['Accounting'], summary: 'Update income', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Accounting'], summary: 'Delete income', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Expenses
-    '/accounting/expenses': {
-        get: { tags: ['Accounting'], summary: 'List expense records', parameters: [...paginationParams], responses: { ...resList('Expenses', { type: 'object' }) } },
-        post: { tags: ['Accounting'], summary: 'Create expense', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['accountId', 'amount', 'date'], properties: { accountId: { type: 'string' }, amount: { type: 'number' }, date: { type: 'string', format: 'date' }, description: { type: 'string' }, vendorName: { type: 'string' } } } } } }, responses: { ...res201('Expense created') } },
-    },
-    '/accounting/expenses/summary': { get: { tags: ['Accounting'], summary: 'Expense summary', responses: { ...res200('Summary') } } },
-    '/accounting/expenses/{id}': {
-        get: { tags: ['Accounting'], summary: 'Get expense', parameters: [idParam()], responses: { ...res200('Expense') } },
-        patch: { tags: ['Accounting'], summary: 'Update expense', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Accounting'], summary: 'Delete expense', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Reports
-    '/accounting/reports/profit-loss': { get: { tags: ['Accounting'], summary: 'Profit & Loss report', responses: { ...res200('P&L report') } } },
-    '/accounting/reports/balance-sheet': { get: { tags: ['Accounting'], summary: 'Balance Sheet report', responses: { ...res200('Balance sheet') } } },
-    '/accounting/reports/cash-flow': { get: { tags: ['Accounting'], summary: 'Cash Flow report', responses: { ...res200('Cash flow') } } },
-    '/accounting/reports/trial-balance': { get: { tags: ['Accounting'], summary: 'Trial Balance report', responses: { ...res200('Trial balance') } } },
-    /* ================================================================
-     * INVENTORY
-     * ================================================================ */
-    // Products
-    '/inventory/products': {
-        get: { tags: ['Inventory'], summary: 'List products', parameters: [...paginationParams], responses: { ...resList('Products', { type: 'object' }) } },
-        post: { tags: ['Inventory'], summary: 'Create product', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'sku'], properties: { name: { type: 'string' }, sku: { type: 'string' }, description: { type: 'string' }, price: { type: 'number' }, unit: { type: 'string' } } } } } }, responses: { ...res201('Product created') } },
-    },
-    '/inventory/products/{id}': {
-        get: { tags: ['Inventory'], summary: 'Get product', parameters: [idParam()], responses: { ...res200('Product') } },
-        patch: { tags: ['Inventory'], summary: 'Update product', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Inventory'], summary: 'Delete product', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Warehouses
-    '/inventory/warehouses': {
-        get: { tags: ['Inventory'], summary: 'List warehouses', parameters: [...paginationParams], responses: { ...resList('Warehouses', { type: 'object' }) } },
-        post: { tags: ['Inventory'], summary: 'Create warehouse', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, address: { type: 'string' } } } } } }, responses: { ...res201('Warehouse created') } },
-    },
-    '/inventory/warehouses/{id}': {
-        get: { tags: ['Inventory'], summary: 'Get warehouse', parameters: [idParam()], responses: { ...res200('Warehouse') } },
-        patch: { tags: ['Inventory'], summary: 'Update warehouse', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Inventory'], summary: 'Delete warehouse', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/inventory/warehouses/{id}/stock': { get: { tags: ['Inventory'], summary: 'Get warehouse stock levels', parameters: [idParam()], responses: { ...res200('Stock levels') } } },
-    // Stock
-    '/inventory/stock': { get: { tags: ['Inventory'], summary: 'List stock across warehouses', parameters: [...paginationParams], responses: { ...resList('Stock', { type: 'object' }) } } },
-    '/inventory/stock/low-stock': { get: { tags: ['Inventory'], summary: 'Get low-stock alerts', responses: { ...res200('Low stock items') } } },
-    '/inventory/stock/adjustment': { post: { tags: ['Inventory'], summary: 'Create stock adjustment', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['productId', 'warehouseId', 'quantity', 'reason'], properties: { productId: { type: 'string' }, warehouseId: { type: 'string' }, quantity: { type: 'number' }, reason: { type: 'string' } } } } } }, responses: { ...res201('Adjustment created') } } },
-    // Transfers
-    '/inventory/transfers': {
-        get: { tags: ['Inventory'], summary: 'List stock transfers', parameters: [...paginationParams], responses: { ...resList('Transfers', { type: 'object' }) } },
-        post: { tags: ['Inventory'], summary: 'Create stock transfer', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['fromWarehouseId', 'toWarehouseId', 'items'], properties: { fromWarehouseId: { type: 'string' }, toWarehouseId: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { productId: { type: 'string' }, quantity: { type: 'number' } } } } } } } } }, responses: { ...res201('Transfer created') } },
-    },
-    '/inventory/transfers/{id}': {
-        get: { tags: ['Inventory'], summary: 'Get transfer', parameters: [idParam()], responses: { ...res200('Transfer') } },
-        patch: { tags: ['Inventory'], summary: 'Update transfer', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Inventory'], summary: 'Delete transfer', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/inventory/transfers/{id}/dispatch': { patch: { tags: ['Inventory'], summary: 'Dispatch transfer', parameters: [idParam()], responses: { ...res200('Dispatched') } } },
-    '/inventory/transfers/{id}/receive': { patch: { tags: ['Inventory'], summary: 'Receive transfer', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { receivedItems: { type: 'array', items: { type: 'object', properties: { productId: { type: 'string' }, receivedQuantity: { type: 'number' } } } } } } } } }, responses: { ...res200('Received') } } },
-    // Movements & Reports
-    '/inventory/movements': { get: { tags: ['Inventory'], summary: 'List stock movements', parameters: [...paginationParams], responses: { ...resList('Movements', { type: 'object' }) } } },
-    '/inventory/reports/valuation': { get: { tags: ['Inventory'], summary: 'Stock valuation report', responses: { ...res200('Valuation report') } } },
-    '/inventory/reports/movement': { get: { tags: ['Inventory'], summary: 'Stock movement report', responses: { ...res200('Movement report') } } },
     /* ================================================================
      * FIELD SALES
      * ================================================================ */
@@ -1459,83 +1298,6 @@ export const swaggerPaths = {
     '/field/tracking/live': { get: { tags: ['Field Sales'], summary: 'Get live locations of field employees', responses: { ...res200('Live locations') } } },
     '/field/tracking/history/{employeeId}': { get: { tags: ['Field Sales'], summary: 'Get tracking history', parameters: [idParam('employeeId', 'Employee ID')], responses: { ...res200('Tracking history') } } },
     /* ================================================================
-     * AI
-     * ================================================================ */
-    // Providers
-    '/ai/providers': {
-        get: { tags: ['AI'], summary: 'List AI providers', responses: { ...resList('Providers', { type: 'object' }) } },
-        post: { tags: ['AI'], summary: 'Add AI provider', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'type', 'apiKey'], properties: { name: { type: 'string' }, type: { type: 'string', enum: ['openai', 'gemini', 'ollama'] }, apiKey: { type: 'string' }, baseUrl: { type: 'string' }, models: { type: 'array', items: { type: 'string' } } } } } } }, responses: { ...res201('Provider added') } },
-    },
-    '/ai/providers/test': { post: { tags: ['AI'], summary: 'Test AI provider connection', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['type', 'apiKey'], properties: { type: { type: 'string' }, apiKey: { type: 'string' }, baseUrl: { type: 'string' } } } } } }, responses: { ...res200('Connection test result') } } },
-    '/ai/providers/{id}': {
-        patch: { tags: ['AI'], summary: 'Update AI provider', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['AI'], summary: 'Delete AI provider', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    // Chat
-    '/ai/chat/conversations': {
-        get: { tags: ['AI'], summary: 'List AI conversations', responses: { ...resList('Conversations', { type: 'object' }) } },
-    },
-    '/ai/chat/conversations/{id}': {
-        get: { tags: ['AI'], summary: 'Get AI conversation', parameters: [idParam()], responses: { ...res200('Conversation with messages') } },
-        delete: { tags: ['AI'], summary: 'Delete AI conversation', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/ai/chat/message': {
-        post: { tags: ['AI'], summary: 'Send message to AI', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['message'], properties: { message: { type: 'string' }, conversationId: { type: 'string' }, model: { type: 'string' } } } } } }, responses: { ...res200('AI response') } },
-    },
-    // Assistants
-    '/ai/reporting/query': { post: { tags: ['AI'], summary: 'AI reporting query', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } } }, responses: { ...res200('Report result') } } },
-    '/ai/hr-assistant/query': { post: { tags: ['AI'], summary: 'HR AI assistant', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } } }, responses: { ...res200('HR assistant response') } } },
-    '/ai/finance-assistant/query': { post: { tags: ['AI'], summary: 'Finance AI assistant', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } } }, responses: { ...res200('Finance assistant response') } } },
-    '/ai/sales-assistant/query': { post: { tags: ['AI'], summary: 'Sales AI assistant', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } } }, responses: { ...res200('Sales assistant response') } } },
-    // Document AI
-    '/ai/document/extract': { post: { tags: ['AI'], summary: 'Extract data from document', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['documentUrl'], properties: { documentUrl: { type: 'string' }, extractionType: { type: 'string' } } } } } }, responses: { ...res200('Extracted data') } } },
-    '/ai/document/classify': { post: { tags: ['AI'], summary: 'Classify document', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['documentUrl'], properties: { documentUrl: { type: 'string' } } } } } }, responses: { ...res200('Classification result') } } },
-    '/ai/auto-description/generate': { post: { tags: ['AI'], summary: 'Generate description with AI', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['context'], properties: { context: { type: 'string' }, type: { type: 'string' } } } } } }, responses: { ...res200('Generated description') } } },
-    // Usage
-    '/ai/usage/dashboard': { get: { tags: ['AI'], summary: 'AI usage dashboard', responses: { ...res200('Usage stats') } } },
-    '/ai/usage/by-user': { get: { tags: ['AI'], summary: 'AI usage by user', responses: { ...res200('Per-user usage') } } },
-    '/ai/usage/logs': { get: { tags: ['AI'], summary: 'AI usage logs', responses: { ...resList('Usage logs', { type: 'object' }) } } },
-    '/ai/budget': {
-        get: { tags: ['AI'], summary: 'Get AI budget', responses: { ...res200('Budget') } },
-        patch: { tags: ['AI'], summary: 'Update AI budget', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { monthlyLimit: { type: 'number' }, alertThreshold: { type: 'number' } } } } } }, responses: { ...res200('Budget updated') } },
-    },
-    /* ================================================================
-     * CHAT (Real-time messaging)
-     * ================================================================ */
-    '/chat/channels': {
-        get: { tags: ['Chat'], summary: 'Get my channels', responses: { ...resList('Channels', { type: 'object' }) } },
-        post: { tags: ['Chat'], summary: 'Create channel', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'type'], properties: { name: { type: 'string' }, type: { type: 'string', enum: ['group', 'direct'] }, memberIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { ...res201('Channel created') } },
-    },
-    '/chat/channels/direct/{userId}': { get: { tags: ['Chat'], summary: 'Get or create direct channel', parameters: [idParam('userId', 'User ID')], responses: { ...res200('Direct channel') } } },
-    '/chat/channels/{id}': {
-        get: { tags: ['Chat'], summary: 'Get channel', parameters: [idParam()], responses: { ...res200('Channel') } },
-        patch: { tags: ['Chat'], summary: 'Update channel', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' } } } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Chat'], summary: 'Delete channel', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/chat/channels/{id}/members': { post: { tags: ['Chat'], summary: 'Add member to channel', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['userId'], properties: { userId: { type: 'string' } } } } } }, responses: { ...res201('Member added') } } },
-    '/chat/channels/{id}/members/{userId}': { delete: { tags: ['Chat'], summary: 'Remove member', parameters: [idParam(), idParam('userId', 'User ID')], responses: { ...res200('Member removed') } } },
-    '/chat/channels/{id}/messages': {
-        get: { tags: ['Chat'], summary: 'Get messages', parameters: [idParam(), { name: 'before', in: 'query', schema: { type: 'string' }, description: 'Cursor for pagination' }, { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } }], responses: { ...resList('Messages', { type: 'object' }) } },
-        post: { tags: ['Chat'], summary: 'Send message', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' }, attachments: { type: 'array', items: { type: 'string' } } } } } } }, responses: { ...res201('Message sent') } },
-    },
-    '/chat/messages/{id}': {
-        patch: { tags: ['Chat'], summary: 'Edit message', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } } } } }, responses: { ...res200('Message edited') } },
-        delete: { tags: ['Chat'], summary: 'Delete message', parameters: [idParam()], responses: { ...res200('Message deleted') } },
-    },
-    '/chat/messages/{id}/reactions': {
-        post: { tags: ['Chat'], summary: 'Add reaction', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['emoji'], properties: { emoji: { type: 'string', example: '👍' } } } } } }, responses: { ...res201('Reaction added') } },
-        delete: { tags: ['Chat'], summary: 'Remove reaction', parameters: [idParam()], responses: { ...res200('Reaction removed') } },
-    },
-    '/chat/messages/{id}/read': { post: { tags: ['Chat'], summary: 'Mark message as read', parameters: [idParam()], responses: { ...res200('Marked') } } },
-    '/chat/search': { get: { tags: ['Chat'], summary: 'Search messages', parameters: [{ name: 'q', in: 'query', required: true, schema: { type: 'string' } }], responses: { ...resList('Search results', { type: 'object' }) } } },
-    /* ================================================================
-     * CALLS
-     * ================================================================ */
-    '/calls/token': { post: { tags: ['Calls'], summary: 'Generate call token', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['channelName'], properties: { channelName: { type: 'string' }, role: { type: 'string', enum: ['publisher', 'subscriber'] } } } } } }, responses: { ...res200('Token generated') } } },
-    '/calls/initiate': { post: { tags: ['Calls'], summary: 'Initiate call', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['targetUserId', 'type'], properties: { targetUserId: { type: 'string' }, type: { type: 'string', enum: ['voice', 'video'] } } } } } }, responses: { ...res201('Call initiated') } } },
-    '/calls/{id}/status': { patch: { tags: ['Calls'], summary: 'Update call status', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['ringing', 'answered', 'ended', 'missed', 'rejected'] } } } } } }, responses: { ...res200('Status updated') } } },
-    '/calls/history': { get: { tags: ['Calls'], summary: 'Get call history', parameters: [...paginationParams], responses: { ...resList('Call history', { type: 'object' }) } } },
-    /* ================================================================
      * DOCUMENTS
      * ================================================================ */
     '/documents': {
@@ -1550,20 +1312,6 @@ export const swaggerPaths = {
     '/documents/{id}/share': { post: { tags: ['Documents'], summary: 'Share document', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['userIds'], properties: { userIds: { type: 'array', items: { type: 'string' } }, permission: { type: 'string', enum: ['view', 'edit'] } } } } } }, responses: { ...res200('Shared') } } },
     '/documents/{id}/versions': { get: { tags: ['Documents'], summary: 'Get document versions', parameters: [idParam()], responses: { ...resList('Versions', { type: 'object' }) } } },
     /* ================================================================
-     * FORMS
-     * ================================================================ */
-    '/forms': {
-        get: { tags: ['Forms'], summary: 'List forms', responses: { ...resList('Forms', { type: 'object' }) } },
-        post: { tags: ['Forms'], summary: 'Create form', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'fields'], properties: { title: { type: 'string' }, description: { type: 'string' }, fields: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, type: { type: 'string', enum: ['text', 'number', 'email', 'select', 'checkbox', 'date', 'file'] }, required: { type: 'boolean' }, options: { type: 'array', items: { type: 'string' } } } } } } } } } }, responses: { ...res201('Form created') } },
-    },
-    '/forms/{id}': {
-        get: { tags: ['Forms'], summary: 'Get form', parameters: [idParam()], responses: { ...res200('Form') } },
-        patch: { tags: ['Forms'], summary: 'Update form', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Forms'], summary: 'Delete form', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/forms/{id}/submissions': { get: { tags: ['Forms'], summary: 'List form submissions', parameters: [idParam(), ...paginationParams], responses: { ...resList('Submissions', { type: 'object' }) } } },
-    '/forms/{id}/submit': { post: { tags: ['Forms'], summary: 'Submit form', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['data'], properties: { data: { type: 'object', description: 'Key-value pairs matching form field IDs' } } } } } }, responses: { ...res201('Form submitted') } } },
-    /* ================================================================
      * CALENDAR
      * ================================================================ */
     '/calendar/events': {
@@ -1575,19 +1323,6 @@ export const swaggerPaths = {
         patch: { tags: ['Calendar'], summary: 'Update event', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
         delete: { tags: ['Calendar'], summary: 'Delete event', parameters: [idParam()], responses: { ...res200('Deleted') } },
     },
-    /* ================================================================
-     * NOTES
-     * ================================================================ */
-    '/notes': {
-        get: { tags: ['Notes'], summary: 'List notes', responses: { ...resList('Notes', { type: 'object' }) } },
-        post: { tags: ['Notes'], summary: 'Create note', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, content: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, color: { type: 'string' } } } } } }, responses: { ...res201('Note created') } },
-    },
-    '/notes/{id}': {
-        get: { tags: ['Notes'], summary: 'Get note', parameters: [idParam()], responses: { ...res200('Note') } },
-        patch: { tags: ['Notes'], summary: 'Update note', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-        delete: { tags: ['Notes'], summary: 'Delete note', parameters: [idParam()], responses: { ...res200('Deleted') } },
-    },
-    '/notes/{id}/pin': { patch: { tags: ['Notes'], summary: 'Toggle pin status', parameters: [idParam()], responses: { ...res200('Pin toggled') } } },
     /* ================================================================
      * NOTICES
      * ================================================================ */

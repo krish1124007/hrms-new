@@ -2,39 +2,51 @@ import { Visit } from '../models/visit.model.js';
 import { ProductOrder } from '../models/product-order.model.js';
 import { PaymentCollection } from '../models/payment-collection.model.js';
 import { FieldTask } from '../models/field-task.model.js';
-export async function fieldDashboard(_req, res) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    const [visitsToday, tasksCompleted, ordersAgg, paymentsAgg, recent] = await Promise.all([
-        Visit.countDocuments({ createdAt: { $gte: start, $lte: end } }),
-        FieldTask.countDocuments({
-            completedAt: { $gte: start, $lte: end },
-            status: 'completed',
-        }),
+import { fieldScope } from '../lib/field-access.js';
+import { businessDayWindow } from '../lib/field-utils.js';
+/**
+ * Today's (IST) field activity over the reps the caller can see: a field
+ * manager sees everyone, a team lead themselves plus their direct reports, a
+ * rep only themselves.
+ */
+export async function fieldDashboard(req, res) {
+    const { start, end } = businessDayWindow();
+    const range = { $gte: start, $lt: end };
+    const byEmployee = await fieldScope(req);
+    const byAssignee = await fieldScope(req, undefined, 'assignedTo');
+    const visitsToday = {
+        ...byEmployee,
+        $or: [{ 'checkIn.time': range }, { 'checkIn.time': null, createdAt: range }],
+    };
+    const live = { isDeleted: { $ne: true } };
+    const [visitCount, tasksCompleted, ordersAgg, paymentsAgg, recent] = await Promise.all([
+        Visit.countDocuments(visitsToday),
+        FieldTask.countDocuments({ ...byAssignee, completedAt: range, status: 'completed' }),
+        // A cancelled order was not a sale; a bounced cheque was not a collection.
         ProductOrder.aggregate([
-            { $match: { createdAt: { $gte: start, $lte: end } } },
+            { $match: { ...byEmployee, ...live, createdAt: range, status: { $ne: 'cancelled' } } },
             { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
         ]),
         PaymentCollection.aggregate([
-            { $match: { collectedAt: { $gte: start, $lte: end } } },
+            { $match: { ...byEmployee, ...live, collectedAt: range, status: { $ne: 'bounced' } } },
             { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
         ]),
-        Visit.find({ createdAt: { $gte: start, $lte: end } })
+        Visit.find(visitsToday)
             .populate('clientId', 'name')
             .populate('employeeId', 'firstName lastName')
             .sort({ createdAt: -1 })
             .limit(15)
             .exec(),
     ]);
+    const strip = (row) => ({ count: row?.count ?? 0, total: row?.total ?? 0 });
     res.json({
         success: true,
         data: {
-            visitsToday,
+            date: start,
+            visitsToday: visitCount,
             tasksCompleted,
-            orders: ordersAgg[0] ?? { count: 0, total: 0 },
-            payments: paymentsAgg[0] ?? { count: 0, total: 0 },
+            orders: strip(ordersAgg[0]),
+            payments: strip(paymentsAgg[0]),
             recentActivity: recent,
         },
     });

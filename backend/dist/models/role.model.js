@@ -71,6 +71,8 @@ const HR_EXECUTIVE_PERMISSIONS = [
     'leaves.approve_all',
     'expenses.approve_all',
     'overtime.approve_all',
+    // Expense categories (names, limits, receipt rules) — company-wide config.
+    'expenses.config',
     'departments.view',
     'designations.view',
     'shifts.view',

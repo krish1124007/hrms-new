@@ -29,6 +29,7 @@ const clientSchema = new Schema({
     territory: String,
     lastVisitDate: Date,
     totalOrders: { type: Number, default: 0 },
+    totalOrderValue: { type: Number, default: 0 },
     totalPayments: { type: Number, default: 0 },
     outstandingAmount: { type: Number, default: 0 },
     notes: { type: [noteSchema], default: [] },

@@ -5,6 +5,7 @@ import { Task } from '../models/task.model.js';
 import { Milestone } from '../models/milestone.model.js';
 import { TimeEntry } from '../models/time-entry.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 export const memberSchema = z.object({
     userId: z.string().min(1),
@@ -50,8 +51,8 @@ export async function listProjects(req, res) {
         filter['members.userId'] = q.member;
     if (q.search) {
         filter.$or = [
-            { name: { $regex: q.search, $options: 'i' } },
-            { code: { $regex: q.search, $options: 'i' } },
+            { name: containsInsensitive(q.search) },
+            { code: containsInsensitive(q.search) },
         ];
     }
     const result = await Project.paginate(filter, {

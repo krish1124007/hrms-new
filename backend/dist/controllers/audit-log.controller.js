@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Types } from 'mongoose';
 import { AuditLog } from '../models/audit-log.model.js';
+import { containsInsensitive } from '../lib/regex.js';
 export const listAuditLogsQuerySchema = z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
@@ -34,7 +35,7 @@ export async function listAuditLogs(req, res) {
             filter.createdAt.$lte = new Date(q.to);
     }
     if (q.search) {
-        const rx = new RegExp(q.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        const rx = containsInsensitive(q.search);
         filter.$or = [{ entity: rx }, { entityId: rx }, { 'metadata.event': rx }];
     }
     const result = await AuditLog.paginate(filter, {

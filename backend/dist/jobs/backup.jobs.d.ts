@@ -26,10 +26,15 @@
 import { Queue, Worker } from 'bullmq';
 import { Types } from 'mongoose';
 export declare const backupQueue: Queue<any, any, string, any, any, string>;
-/** Returns whether the monthly schedule is registered with BullMQ. */
+/**
+ * Whether the monthly schedule is registered with BullMQ, and — when it is —
+ * when it really runs next (`nextRun`, epoch ms: the month-end run, not the
+ * queue's next 28th–31st wake-up).
+ */
 export declare function getMonthlyBackupSchedule(): Promise<{
     enabled: boolean;
     pattern: string;
+    timezone: string;
     description: string;
     nextRun?: number;
 }>;

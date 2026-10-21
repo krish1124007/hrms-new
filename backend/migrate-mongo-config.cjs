@@ -1,9 +1,10 @@
-// migrate-mongo configuration.
-// Usage:
-//   npx migrate-mongo create <name>    - scaffold a new migration
-//   npx migrate-mongo up               - apply pending migrations
-//   npx migrate-mongo down             - rollback the last migration
-//   npx migrate-mongo status           - list applied / pending migrations
+// migrate-mongo configuration. migrate-mongo looks for `migrate-mongo-config.js`
+// by default, so every command passes `-f migrate-mongo-config.cjs` (the npm
+// scripts do). Run from backend/:
+//   npm run migrate:create -- <name>   - scaffold a new migration
+//   npm run migrate:up                 - apply pending migrations
+//   npm run migrate:down               - rollback the last migration
+//   npm run migrate:status             - list applied / pending migrations
 // eslint-disable-next-line no-undef
 const dotenv = require('dotenv');
 dotenv.config();

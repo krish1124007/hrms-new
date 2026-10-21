@@ -9,6 +9,11 @@ export declare const componentSchema: z.ZodObject<{
     isTaxable: z.ZodDefault<z.ZodBoolean>;
     isStatutory: z.ZodDefault<z.ZodBoolean>;
     statutoryType: z.ZodOptional<z.ZodEnum<["pf_employee", "pf_employer", "esic_employee", "esic_employer", "professional_tax", "tds"]>>;
+    /**
+     * PF wage: `basic` / `da` — part of it; `none` — never part of it; null —
+     * decided by the component's name (Basic / Dearness / DA).
+     */
+    statutoryBase: z.ZodOptional<z.ZodNullable<z.ZodEnum<["basic", "da", "none"]>>>;
     order: z.ZodDefault<z.ZodNumber>;
     isActive: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
@@ -22,6 +27,7 @@ export declare const componentSchema: z.ZodObject<{
     isTaxable: boolean;
     isStatutory: boolean;
     statutoryType?: "tds" | "pf_employee" | "pf_employer" | "esic_employee" | "esic_employer" | "professional_tax" | undefined;
+    statutoryBase?: "none" | "basic" | "da" | null | undefined;
 }, {
     code: string;
     type: "earning" | "deduction" | "employer_contribution";
@@ -33,6 +39,7 @@ export declare const componentSchema: z.ZodObject<{
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
+    statutoryBase?: "none" | "basic" | "da" | null | undefined;
 }>;
 export declare const updateComponentSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -43,6 +50,7 @@ export declare const updateComponentSchema: z.ZodObject<{
     isTaxable: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
     isStatutory: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
     statutoryType: z.ZodOptional<z.ZodOptional<z.ZodEnum<["pf_employee", "pf_employer", "esic_employee", "esic_employer", "professional_tax", "tds"]>>>;
+    statutoryBase: z.ZodOptional<z.ZodOptional<z.ZodNullable<z.ZodEnum<["basic", "da", "none"]>>>>;
     order: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
     isActive: z.ZodOptional<z.ZodDefault<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
@@ -56,6 +64,7 @@ export declare const updateComponentSchema: z.ZodObject<{
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
+    statutoryBase?: "none" | "basic" | "da" | null | undefined;
 }, {
     code?: string | undefined;
     type?: "earning" | "deduction" | "employer_contribution" | undefined;
@@ -67,6 +76,7 @@ export declare const updateComponentSchema: z.ZodObject<{
     defaultValue?: number | undefined;
     isTaxable?: boolean | undefined;
     isStatutory?: boolean | undefined;
+    statutoryBase?: "none" | "basic" | "da" | null | undefined;
 }>;
 export declare const componentQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -229,18 +239,18 @@ export declare const updateRecordSchema: z.ZodObject<{
     tds: z.ZodOptional<z.ZodUnion<[z.ZodNull, z.ZodNumber]>>;
     note: z.ZodOptional<z.ZodNullable<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
-    expense?: number | null | undefined;
     tds?: number | null | undefined;
     arrears?: number | null | undefined;
     advance?: number | null | undefined;
+    expense?: number | null | undefined;
     reimbursements?: number | null | undefined;
     loanDeduction?: number | null | undefined;
     note?: string | null | undefined;
 }, {
-    expense?: number | null | undefined;
     tds?: number | null | undefined;
     arrears?: number | null | undefined;
     advance?: number | null | undefined;
+    expense?: number | null | undefined;
     reimbursements?: number | null | undefined;
     loanDeduction?: number | null | undefined;
     note?: string | null | undefined;

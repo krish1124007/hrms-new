@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Department } from '../models/department.model.js';
 import { Employee } from '../models/employee.model.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { containsInsensitive } from '../lib/regex.js';
 import { audit } from '../services/audit.service.js';
 export const createDepartmentSchema = z.object({
     name: z.string().min(1),
@@ -28,8 +29,8 @@ export async function listDepartments(req, res) {
         filter.status = q.status;
     if (q.search) {
         filter.$or = [
-            { name: { $regex: q.search, $options: 'i' } },
-            { code: { $regex: q.search, $options: 'i' } },
+            { name: containsInsensitive(q.search) },
+            { code: containsInsensitive(q.search) },
         ];
     }
     const result = await Department.paginate(filter, {

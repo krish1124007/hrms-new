@@ -20,6 +20,7 @@ const salaryComponentSchema = new Schema({
         type: String,
         enum: ['pf_employee', 'pf_employer', 'esic_employee', 'esic_employer', 'professional_tax', 'tds'],
     },
+    statutoryBase: { type: String, enum: ['basic', 'da', 'none', null], default: null },
     order: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
 });

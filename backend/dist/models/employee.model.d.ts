@@ -55,6 +55,8 @@ export interface IEmployee extends Document {
     firstName: string;
     lastName: string;
     email: string;
+    /** The employee's own address — kept up to date by them through `PATCH /employees/me`. */
+    personalEmail?: string;
     phone?: string;
     dateOfBirth?: Date;
     gender?: Gender;
