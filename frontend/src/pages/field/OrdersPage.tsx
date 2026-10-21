@@ -1,4 +1,5 @@
-import { useState, type ReactElement } from 'react';
+import { useRef, useState, type ReactElement } from 'react';
+import { useIsMutating } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, IndianRupee, Plus, ShoppingCart, Truck, XCircle, Trash2, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
@@ -12,8 +13,10 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from '@/c
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
 import { OrderStatusBadge } from '@/components/field/FieldBits';
+import { statValue } from '@/components/field/stat-value';
 import { allowedOrderActions, normaliseOrderStatus } from '@/lib/field-rules';
 import {
+  CREATE_ORDER_MUTATION_KEY,
   useCanManageField,
   useDeleteFieldOrder,
   useFieldOrder,
@@ -23,7 +26,7 @@ import {
   useUpdateOrderStatus,
 } from '@/hooks/use-field';
 import { isNoEmployeeProfileError } from '@/lib/api-error';
-import { personName, refId, type OrderStatusChange, type ProductOrder } from '@/lib/field.api';
+import { newIdempotencyKey, personName, refId, type OrderStatusChange, type ProductOrder } from '@/lib/field.api';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/format';
 import { OrderForm } from './OrderForm';
 
@@ -168,7 +171,8 @@ function OrderDetail({
         )}
       </DialogBody>
       <DialogFooter className="flex-wrap gap-2">
-        {o && canManage && (
+        {/* Only an order with nothing paid against it can be deleted (else ORDER_HAS_PAYMENTS) — cancel it instead. */}
+        {o && canManage && o.paymentStatus === 'pending' && (
           <Button variant="ghost" className="mr-auto text-destructive" onClick={() => setConfirm('delete')}>
             <Trash2 className="mr-1 size-4" />
             Delete
@@ -244,9 +248,17 @@ export default function OrdersPage(): ReactElement {
     status: status || undefined,
     sort: '-createdAt',
   });
-  const { data: report } = useOrderReport();
+  const reportQ = useOrderReport();
   const [creating, setCreating] = useState(false);
   const [viewing, setViewing] = useState<string | null>(null);
+  // Owned here, not by the form, so it survives closing and reopening the
+  // dialog until an order is actually placed.
+  const orderKey = useRef(newIdempotencyKey());
+  const placing = useIsMutating({ mutationKey: CREATE_ORDER_MUTATION_KEY }) > 0;
+  // Never close mid-request: the outcome (order or error) must be seen.
+  const closeCreate = (): void => {
+    if (!placing) setCreating(false);
+  };
 
   const columns: DataTableColumn<ProductOrder>[] = [
     {
@@ -302,7 +314,7 @@ export default function OrdersPage(): ReactElement {
     },
   ];
 
-  const totals = report?.data.totals;
+  const totals = reportQ.data?.data.totals;
 
   return (
     <div className="space-y-6">
@@ -324,9 +336,19 @@ export default function OrdersPage(): ReactElement {
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Orders this month" value={totals?.count ?? 0} icon={ShoppingCart} />
-        <StatCard label="Booked this month" value={totals?.total ?? 0} format={(n) => formatCurrency(n, { compact: true })} icon={IndianRupee} />
-        <StatCard label="Collected against them" value={totals?.paid ?? 0} format={(n) => formatCurrency(n, { compact: true })} icon={CheckCircle2} />
+        <StatCard label="Orders this month" value={statValue(reportQ, totals?.count)} icon={ShoppingCart} />
+        <StatCard
+          label="Booked this month"
+          value={statValue(reportQ, totals?.total)}
+          format={(n) => formatCurrency(n, { compact: true })}
+          icon={IndianRupee}
+        />
+        <StatCard
+          label="Collected against them"
+          value={statValue(reportQ, totals?.paid)}
+          format={(n) => formatCurrency(n, { compact: true })}
+          icon={CheckCircle2}
+        />
       </div>
 
       <div className="flex items-center gap-2">
@@ -366,7 +388,7 @@ export default function OrdersPage(): ReactElement {
         </>
       )}
 
-      <Dialog open={creating} onClose={() => setCreating(false)} size="xl">
+      <Dialog open={creating} onClose={closeCreate} size="xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShoppingCart className="size-4" />
@@ -376,7 +398,8 @@ export default function OrdersPage(): ReactElement {
         <DialogBody className="max-h-[80vh] overflow-y-auto">
           {creating && (
             <OrderForm
-              onCancel={() => setCreating(false)}
+              idempotencyKey={orderKey}
+              onCancel={closeCreate}
               onDone={(order) => {
                 setCreating(false);
                 setViewing(order._id);

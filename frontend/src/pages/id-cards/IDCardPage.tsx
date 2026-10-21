@@ -134,6 +134,8 @@ export default function IDCardPage(): ReactElement {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              type="search"
+              aria-label="Search employees by name, employee ID or email"
               placeholder="Search by name, employee ID, or email"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}

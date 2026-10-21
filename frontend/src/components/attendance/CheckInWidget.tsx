@@ -126,8 +126,8 @@ export function CheckInWidget(): ReactElement {
   };
 
   /**
-   * Check in/out. Other errors are already toasted by the check-in/out
-   * mutations; LOCATION_REQUIRED gets the permission dialog, and
+   * Check in/out. Other errors are already toasted (once) by the global
+   * mutation handler; LOCATION_REQUIRED gets the permission dialog, and
    * EXPENSE_REQUIRED_FOR_CHECKOUT opens today's expense form, which checks
    * out again once the claim is filed.
    */

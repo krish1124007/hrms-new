@@ -11,6 +11,7 @@ import {
   Plus,
   Receipt,
   Trash2,
+  Undo2,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -27,6 +28,7 @@ import { RowActionsMenu, type RowAction } from '@/components/common/RowActionsMe
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
 import { ClientPicker } from '@/components/field/ClientPicker';
 import { PaymentStatusBadge } from '@/components/field/FieldBits';
+import { statValue } from '@/components/field/stat-value';
 import { RepSelect } from '@/components/field/RepSelect';
 import {
   useBouncePayment,
@@ -41,9 +43,11 @@ import {
   usePaymentsDaily,
   useVerifyPayment,
   useRepSelectRequired,
+  useUnbouncePayment,
 } from '@/hooks/use-field';
-import { apiErrorMessage, isNoEmployeeProfileError } from '@/lib/api-error';
-import { businessInstant } from '@/lib/business-day';
+import { usePermissions } from '@/hooks/use-permissions';
+import { apiErrorCode, apiErrorMessage, isNoEmployeeProfileError } from '@/lib/api-error';
+import { addDaysToKey, businessDayKey, businessInstant } from '@/lib/business-day';
 import {
   fieldApi,
   newIdempotencyKey,
@@ -52,7 +56,7 @@ import {
   type PaymentCollection,
 } from '@/lib/field.api';
 import { allowedPaymentActions, normaliseOrderStatus } from '@/lib/field-rules';
-import { formatCurrency, formatDateTime, todayIST } from '@/lib/format';
+import { formatCurrency, formatDateTime } from '@/lib/format';
 
 const money = (n: number | undefined): string => formatCurrency(n ?? 0);
 
@@ -64,6 +68,9 @@ const METHODS: Array<{ value: FieldPaymentMethod; label: string }> = [
   { value: 'other', label: 'Other' },
 ];
 const methodLabel = (m: string): string => METHODS.find((x) => x.value === m)?.label ?? m;
+
+/** How long the receipt's object URL lives: long enough for a slow download to start. */
+const RECEIPT_URL_TTL_MS = 30_000;
 
 /** Fetch the receipt PDF with the session's credentials and save it. */
 async function downloadReceipt(p: PaymentCollection): Promise<void> {
@@ -77,7 +84,8 @@ async function downloadReceipt(p: PaymentCollection): Promise<void> {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    // Revoking at once can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), RECEIPT_URL_TTL_MS);
   } catch (err) {
     toast.error(apiErrorMessage(err, "Couldn't download the receipt"));
   }
@@ -94,6 +102,25 @@ interface RecordForm {
   collectedAt: string;
   notes: string;
   repId: string;
+}
+
+/** How far back a rep may date a collection (the server's `MAX_BACKDATE_DAYS`); field managers may go further. */
+const MAX_BACKDATE_DAYS = 7;
+
+const istClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** The collected-at picker's bounds (`datetime-local`, IST): not in the future; reps at most 7 days back. */
+function collectedAtBounds(canManage: boolean, now: Date = new Date()): { min?: string; max: string } {
+  const day = businessDayKey(now);
+  const time = istClock.format(now);
+  const max = `${day}T${time}`;
+  if (canManage) return { max };
+  return { min: `${addDaysToKey(day, -MAX_BACKDATE_DAYS)}T${time}`, max };
 }
 
 const blankForm = (clientId = '', orderId = ''): RecordForm => ({
@@ -118,16 +145,24 @@ function RecordPaymentDialog({
   initial: RecordForm;
 }): ReactElement {
   const [form, setForm] = useState<RecordForm>(initial);
+  // One key until a payment is recorded — not one per opening: a request
+  // that timed out but went through, retried after closing and reopening,
+  // replays the first receipt instead of recording the money twice.
   const key = useRef(newIdempotencyKey());
   const create = useCreatePayment();
   const repRequired = useRepSelectRequired();
+  const { has } = usePermissions();
+  // Read on every render, so "now" moves on while the dialog stays open.
+  const bounds = collectedAtBounds(has('field-sales.manage'));
 
   useEffect(() => {
-    if (open) {
-      setForm(initial);
-      key.current = newIdempotencyKey();
-    }
+    if (open) setForm(initial);
   }, [open, initial]);
+
+  // Never close mid-request: the outcome (receipt or error) must be seen.
+  const close = (): void => {
+    if (!create.isPending) onClose();
+  };
 
   // The client's orders that still have money due.
   const { data: ordersData } = useFieldOrders(
@@ -154,8 +189,19 @@ function RecordPaymentDialog({
           ? `More than the ${money(due)} due on this order`
           : null;
   const needsReference = form.method === 'cheque' || form.method === 'bank_transfer' || form.method === 'upi';
+  const outOfRange =
+    !!form.collectedAt && (form.collectedAt > bounds.max || (!!bounds.min && form.collectedAt < bounds.min));
+  const whenError = !outOfRange
+    ? null
+    : bounds.min
+      ? `Pick a time in the last ${MAX_BACKDATE_DAYS} days, not in the future`
+      : 'A collection cannot be in the future';
   const valid =
-    !!form.clientId && form.amount.trim() !== '' && !amountError && (!repRequired || !!form.repId);
+    !!form.clientId &&
+    form.amount.trim() !== '' &&
+    !amountError &&
+    !whenError &&
+    (!repRequired || !!form.repId);
 
   const submit = (): void => {
     if (!valid) return;
@@ -178,12 +224,23 @@ function RecordPaymentDialog({
         },
         idempotencyKey: key.current,
       },
-      { onSuccess: onClose },
+      {
+        onSuccess: () => {
+          key.current = newIdempotencyKey();
+          onClose();
+        },
+        onError: (err) => {
+          // This key already recorded a different payment (a retry, after a
+          // timeout, with the form changed): the global toast says so, and
+          // the next attempt gets a fresh key.
+          if (apiErrorCode(err) === 'IDEMPOTENCY_CONFLICT') key.current = newIdempotencyKey();
+        },
+      },
     );
   };
 
   return (
-    <Dialog open={open} onClose={onClose} size="lg">
+    <Dialog open={open} onClose={close} size="lg">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <IndianRupee className="size-4" />
@@ -255,11 +312,18 @@ function RecordPaymentDialog({
             <Input
               id="pay-when"
               type="datetime-local"
-              max={`${todayIST()}T23:59`}
+              min={bounds.min}
+              max={bounds.max}
               value={form.collectedAt}
               onChange={(e) => setForm({ ...form, collectedAt: e.target.value })}
             />
-            <p className="text-xs text-muted-foreground">Leave empty for now.</p>
+            {whenError ? (
+              <p className="text-xs text-destructive">{whenError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Leave empty for now.{bounds.min ? ` Up to ${MAX_BACKDATE_DAYS} days back.` : ''}
+              </p>
+            )}
           </div>
         </div>
         <div className="space-y-1.5">
@@ -268,7 +332,7 @@ function RecordPaymentDialog({
         </div>
       </DialogBody>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
+        <Button variant="outline" onClick={close} disabled={create.isPending}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={!valid} loading={create.isPending}>
@@ -294,13 +358,16 @@ export default function CollectionsPage(): ReactElement {
     method: method || undefined,
     sort: '-collectedAt',
   });
-  const { data: dailyData } = usePaymentsDaily();
-  const { data: outstandingData } = useOutstandingReport({ limit: 8 });
+  const dailyQ = usePaymentsDaily();
+  const outstandingQ = useOutstandingReport({ limit: 8 });
   const deposit = useDepositPayment();
   const verify = useVerifyPayment();
   const bounce = useBouncePayment();
+  const unbounce = useUnbouncePayment();
   const remove = useDeletePayment();
-  const [confirm, setConfirm] = useState<{ kind: 'bounce' | 'delete'; p: PaymentCollection } | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: 'bounce' | 'unbounce' | 'delete'; p: PaymentCollection } | null>(
+    null,
+  );
 
   // `?record=1&clientId=&orderId=` (from an order) opens the dialog prefilled.
   const [recordInit, setRecordInit] = useState<RecordForm | null>(null);
@@ -316,8 +383,8 @@ export default function CollectionsPage(): ReactElement {
     }
   }, [params, setParams]);
 
-  const daily = dailyData?.data;
-  const outstanding = outstandingData?.data;
+  const daily = dailyQ.data?.data;
+  const outstanding = outstandingQ.data?.data;
 
   const columns: DataTableColumn<PaymentCollection>[] = [
     {
@@ -362,15 +429,18 @@ export default function CollectionsPage(): ReactElement {
       cell: (r) => {
         const allowed = allowedPaymentActions(r, { canManage, myEmployeeId });
         const menu: RowAction[] = [];
-        if (allowed.includes('deposit')) menu.push({ label: 'Mark deposited', icon: Landmark, onSelect: () => deposit.mutate(r._id) });
         if (allowed.includes('verify')) menu.push({ label: 'Verify', icon: CheckCircle2, onSelect: () => verify.mutate(r._id) });
+        if (allowed.includes('deposit')) menu.push({ label: 'Mark deposited', icon: Landmark, onSelect: () => deposit.mutate(r._id) });
+        if (allowed.includes('unbounce')) {
+          menu.push({ label: 'Take back bounce', icon: Undo2, onSelect: () => setConfirm({ kind: 'unbounce', p: r }) });
+        }
         if (allowed.includes('bounce')) menu.push({ label: 'Mark bounced', icon: Ban, onSelect: () => setConfirm({ kind: 'bounce', p: r }), destructive: true });
         if (allowed.includes('delete')) menu.push({ label: 'Delete', icon: Trash2, onSelect: () => setConfirm({ kind: 'delete', p: r }), destructive: true });
         return (
           <div className="flex items-center justify-end gap-1">
             <button
               onClick={() => void downloadReceipt(r)}
-              className="rounded p-1.5 text-primary dark:text-blue-400 hover:bg-primary/10"
+              className="rounded p-1.5 text-primary hover:bg-primary/10"
               title="Download receipt (PDF)"
               aria-label={`Download receipt ${r.receiptNumber}`}
             >
@@ -399,11 +469,11 @@ export default function CollectionsPage(): ReactElement {
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Collected today" value={daily?.totals.total ?? 0} format={(n) => money(n)} icon={IndianRupee} />
-        <StatCard label="Receipts today" value={daily?.totals.count ?? 0} icon={Receipt} />
+        <StatCard label="Collected today" value={statValue(dailyQ, daily?.totals.total)} format={(n) => money(n)} icon={IndianRupee} />
+        <StatCard label="Receipts today" value={statValue(dailyQ, daily?.totals.count)} icon={Receipt} />
         <StatCard
           label="Outstanding receivables"
-          value={outstanding?.total ?? 0}
+          value={statValue(outstandingQ, outstanding?.total)}
           format={(n) => formatCurrency(n, { compact: true })}
           icon={AlertCircle}
         />
@@ -455,8 +525,8 @@ export default function CollectionsPage(): ReactElement {
         >
           <option value="">All statuses</option>
           <option value="collected">Collected</option>
-          <option value="deposited">Deposited</option>
           <option value="verified">Verified</option>
+          <option value="deposited">Deposited</option>
           <option value="bounced">Bounced</option>
         </Select>
         <Select
@@ -509,6 +579,17 @@ export default function CollectionsPage(): ReactElement {
         title={`Mark ${confirm?.p.receiptNumber ?? ''} as bounced?`}
         description="A bounced payment stops counting as received: the client's balance and the order's paid amount go back up."
         confirmLabel="Mark bounced"
+      />
+      <ConfirmDialog
+        open={confirm?.kind === 'unbounce'}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm && unbounce.mutate(confirm.p._id, { onSuccess: () => setConfirm(null) })}
+        loading={unbounce.isPending}
+        destructive={false}
+        title={`Take back the bounce on ${confirm?.p.receiptNumber ?? ''}?`}
+        description="The payment counts as received again (status Collected): the client's balance and the order's paid amount go back down. The server refuses if the order has since been paid in full."
+        confirmLabel="Take back bounce"
+        cancelLabel="Keep bounced"
       />
       <ConfirmDialog
         open={confirm?.kind === 'delete'}

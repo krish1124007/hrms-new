@@ -19,7 +19,7 @@ import {
   useProducts,
   useUpdateProduct,
 } from '@/hooks/use-field';
-import { GST_RATES, type Product, type ProductInput } from '@/lib/field.api';
+import { GST_RATES, type Product, type ProductInput, type ProductUpdate } from '@/lib/field.api';
 import { formatCurrency } from '@/lib/format';
 
 interface FormState {
@@ -45,6 +45,11 @@ const blank: FormState = {
   description: '',
   isActive: true,
 };
+
+/** An edit: an emptied HSN code or description goes as `null`, so the server clears it. */
+function toUpdate(f: FormState): ProductUpdate {
+  return { ...toInput(f), hsnCode: f.hsnCode.trim() || null, description: f.description.trim() || null };
+}
 
 function toInput(f: FormState): ProductInput {
   return {
@@ -120,9 +125,8 @@ export default function ProductsPage(): ReactElement {
 
   const submit = (): void => {
     if (!valid) return;
-    const input = toInput(form);
-    if (editing) update.mutate({ id: editing._id, input }, { onSuccess: () => setOpen(false) });
-    else create.mutate(input, { onSuccess: () => setOpen(false) });
+    if (editing) update.mutate({ id: editing._id, input: toUpdate(form) }, { onSuccess: () => setOpen(false) });
+    else create.mutate(toInput(form), { onSuccess: () => setOpen(false) });
   };
 
   const columns: DataTableColumn<Product>[] = [

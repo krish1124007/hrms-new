@@ -1,8 +1,9 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { authApi, type AuthUser } from '@/lib/auth.api';
 import { tokenStorage } from '@/lib/axios';
+import { clearSessionCache } from '@/lib/query-client';
 import { useAuthStore } from '@/stores/auth.store';
 
 export function useAuth(): {
@@ -12,11 +13,16 @@ export function useAuth(): {
 } {
   const { user, isAuthenticated, clear } = useAuthStore();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const logout = async (): Promise<void> => {
     await authApi.logout();
     tokenStorage.clear();
     clear();
+    // Nothing of this session may show to whoever signs in next (the store
+    // subscription in `lib/query-client.ts` does the same for every other
+    // way a session ends).
+    clearSessionCache(queryClient);
     navigate('/login');
   };
 
@@ -35,9 +41,7 @@ export function useLogin() {
       toast.success(`Welcome back, ${result.user.firstName ?? result.user.email}`);
       navigate('/dashboard');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Sign in failed');
-    },
+    // A failed sign-in is toasted once, by the global mutation handler.
   });
 }
 
@@ -69,7 +73,6 @@ export function useForgotPassword() {
     onSuccess: () => {
       toast.success('Reset link sent. Check your inbox.');
     },
-    onError: () => toast.error('Failed to send reset link'),
   });
 }
 
@@ -81,6 +84,5 @@ export function useResetPassword() {
       toast.success('Password reset. Please sign in.');
       navigate('/login');
     },
-    onError: () => toast.error('Failed to reset password'),
   });
 }

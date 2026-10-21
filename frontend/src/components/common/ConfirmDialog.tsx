@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,7 +34,9 @@ export interface ConfirmDialogProps {
 
 /**
  * The one confirmation prompt for destructive actions — instead of acting
- * on the first click or behind a native `confirm()`.
+ * on the first click or behind a native `confirm()`. It opens with focus on
+ * Cancel (Enter never confirms by accident), and while the action runs it
+ * cannot be closed (Esc, a click outside, ×), so its outcome is seen.
  */
 export function ConfirmDialog({
   open,
@@ -49,15 +51,19 @@ export function ConfirmDialog({
   typeToConfirm,
 }: ConfirmDialogProps): ReactElement {
   const [typed, setTyped] = useState('');
+  const cancelRef = useRef<HTMLButtonElement>(null);
   // Every opening starts with an empty box.
   useEffect(() => {
     if (open) setTyped('');
   }, [open]);
 
   const blocked = typeToConfirm !== undefined && typed.trim() !== typeToConfirm;
+  const close = (): void => {
+    if (!loading) onClose();
+  };
 
   return (
-    <Dialog open={open} onClose={onClose} size="sm">
+    <Dialog open={open} onClose={close} size="sm" initialFocusRef={typeToConfirm === undefined ? cancelRef : undefined}>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         {description && <DialogDescription>{description}</DialogDescription>}
@@ -77,7 +83,7 @@ export function ConfirmDialog({
         </DialogBody>
       )}
       <DialogFooter>
-        <Button variant="outline" onClick={onClose} disabled={loading}>
+        <Button ref={cancelRef} variant="outline" onClick={close} disabled={loading}>
           {cancelLabel}
         </Button>
         <Button

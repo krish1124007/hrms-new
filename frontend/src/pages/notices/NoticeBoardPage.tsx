@@ -104,9 +104,6 @@ export default function NoticeBoardPage(): ReactElement {
       setOpen(false);
       reset({ priority: 'normal', isPinned: false, title: '', content: '', expiresAt: '', departments: [] });
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Failed to post notice');
-    },
   });
 
   const ack = useMutation({

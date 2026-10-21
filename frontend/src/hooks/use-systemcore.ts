@@ -51,8 +51,6 @@ export function useCreateDepartment() {
       qc.invalidateQueries({ queryKey: ['departments'] });
       toast.success('Department created');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to create department'),
   });
 }
 
@@ -76,8 +74,6 @@ export function useDeleteDepartment() {
       qc.invalidateQueries({ queryKey: ['departments'] });
       toast.success('Department deleted');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to delete'),
   });
 }
 
@@ -264,8 +260,6 @@ export function useCreateEmployee() {
       qc.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Employee created');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to create employee'),
   });
 }
 
@@ -277,8 +271,6 @@ export function useImportEmployees() {
       qc.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Employees imported');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to import employees'),
   });
 }
 
@@ -305,8 +297,6 @@ export function useDeleteEmployee() {
     },
     // Without this a rejected delete (missing permission, server error) failed
     // silently and the row just stayed put with no explanation.
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Could not delete employee'),
   });
 }
 
@@ -350,8 +340,6 @@ export function useAddEmployeeDocument() {
       qc.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Document uploaded');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to upload document'),
   });
 }
 
@@ -365,7 +353,5 @@ export function useRemoveEmployeeDocument() {
       qc.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Document removed');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to remove document'),
   });
 }

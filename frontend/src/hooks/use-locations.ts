@@ -2,10 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { locationsApi, type LocationInput } from '@/lib/locations.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 export function useLocations(params?: Record<string, unknown>) {
   return useQuery({
@@ -22,7 +18,6 @@ export function useCreateLocation() {
       qc.invalidateQueries({ queryKey: ['locations'] });
       toast.success('Location added');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to add location')),
   });
 }
 
@@ -35,7 +30,6 @@ export function useUpdateLocation() {
       qc.invalidateQueries({ queryKey: ['locations'] });
       toast.success('Location updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update location')),
   });
 }
 
@@ -47,6 +41,5 @@ export function useDeleteLocation() {
       qc.invalidateQueries({ queryKey: ['locations'] });
       toast.success('Location deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete location')),
   });
 }

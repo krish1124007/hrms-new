@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Pencil, Plus, Target, Trash2, TrendingUp, Trophy, Users } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Pagination } from '@/components/ui/data-table';
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
@@ -25,7 +27,15 @@ import {
 import { usePermissions } from '@/hooks/use-permissions';
 import { apiErrorMessage, isNoEmployeeProfileError } from '@/lib/api-error';
 import { partsOfKey } from '@/lib/business-day';
-import { personName, refId, type SalesTarget, type SalesTargetInput, type TargetType } from '@/lib/field.api';
+import {
+  personName,
+  refId,
+  type SalesTarget,
+  type SalesTargetInput,
+  type SalesTargetUpdate,
+  type TargetType,
+  type TeamSummary,
+} from '@/lib/field.api';
 import { formatCurrency, todayIST } from '@/lib/format';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -33,6 +43,8 @@ const TYPE_LABEL: Record<TargetType, string> = { amount: 'Sales (₹)', quantity
 
 const fmtValue = (type: TargetType, n: number): string =>
   type === 'amount' ? formatCurrency(n, { compact: n >= 100000 }) : n.toLocaleString('en-IN');
+
+const PAGE_SIZE = 20;
 
 const STATUS_BADGE = {
   exceeded: { variant: 'success', label: 'Exceeded' },
@@ -67,10 +79,14 @@ export default function SalesTargetsPage(): ReactElement {
   const [month, setMonth] = useState(thisMonth);
   const [year, setYear] = useState(thisYear);
   const [type, setType] = useState<TargetType>('amount');
+  const [page, setPage] = useState(1);
 
-  const { data: targetsData, isLoading, error } = useSalesTargets({ month, year, limit: 100 });
-  const { data: lbData } = useLeaderboard({ month, year, type });
-  const { data: summary } = useTeamSummary({ month, year, type });
+  // Paged: a month with more targets than one page never silently cuts any off.
+  const { data: targetsData, isLoading, error } = useSalesTargets({ month, year, page, limit: PAGE_SIZE });
+  const lbQ = useLeaderboard({ month, year, type });
+  const summaryQ = useTeamSummary({ month, year, type });
+  const lbData = lbQ.data;
+  const summary = summaryQ.data;
   const { data: reps = [] } = useFieldReps(canManage && has('employees.view'));
   const { data: catData } = useProductCategories();
   const categories = catData?.data ?? [];
@@ -82,6 +98,18 @@ export default function SalesTargetsPage(): ReactElement {
   const leaderboard = lbData?.data ?? [];
   const sum = summary?.data;
   const years = useMemo(() => [thisYear - 1, thisYear, thisYear + 1], [thisYear]);
+  /** A summary figure: a skeleton while loading, "Couldn't load" on error — never a misleading 0. */
+  const summaryValue = (pick: (s: TeamSummary) => ReactNode): ReactNode => {
+    if (summaryQ.isLoading) return <Skeleton className="h-8 w-24" aria-label="Loading" />;
+    if (summaryQ.error) {
+      return (
+        <span className="text-sm font-medium text-destructive" title={apiErrorMessage(summaryQ.error)}>
+          Couldn&apos;t load
+        </span>
+      );
+    }
+    return sum ? pick(sum) : '—';
+  };
 
   const blank = (): FormState => ({ employeeId: '', month, year, type: 'amount', productCategory: '', targetValue: '' });
   const [open, setOpen] = useState(false);
@@ -112,14 +140,20 @@ export default function SalesTargetsPage(): ReactElement {
 
   const submit = (): void => {
     if (!valid) return;
+    const category = form.type !== 'visits' && form.productCategory ? form.productCategory : undefined;
     const body: Omit<SalesTargetInput, 'employeeId'> = {
       period: { month: form.month, year: form.year },
       type: form.type,
-      productCategory: form.type !== 'visits' && form.productCategory ? form.productCategory : undefined,
+      productCategory: category,
       targetValue: value,
     };
-    if (editing) update.mutate({ id: editing._id, input: body }, { onSuccess: () => setOpen(false) });
-    else create.mutate({ ...body, employeeId: form.employeeId }, { onSuccess: () => setOpen(false) });
+    if (editing) {
+      // "All products" on an edit clears the category (`null`); leaving it out kept the old one.
+      const input: SalesTargetUpdate = { ...body, productCategory: category ?? null };
+      update.mutate({ id: editing._id, input }, { onSuccess: () => setOpen(false) });
+    } else {
+      create.mutate({ ...body, employeeId: form.employeeId }, { onSuccess: () => setOpen(false) });
+    }
   };
 
   return (
@@ -140,14 +174,30 @@ export default function SalesTargetsPage(): ReactElement {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <Select aria-label="Month" value={String(month)} onChange={(e) => setMonth(Number(e.target.value))} className="w-28">
+        <Select
+          aria-label="Month"
+          value={String(month)}
+          onChange={(e) => {
+            setMonth(Number(e.target.value));
+            setPage(1);
+          }}
+          className="w-28"
+        >
           {MONTHS.map((m, i) => (
             <option key={m} value={i + 1}>
               {m}
             </option>
           ))}
         </Select>
-        <Select aria-label="Year" value={String(year)} onChange={(e) => setYear(Number(e.target.value))} className="w-28">
+        <Select
+          aria-label="Year"
+          value={String(year)}
+          onChange={(e) => {
+            setYear(Number(e.target.value));
+            setPage(1);
+          }}
+          className="w-28"
+        >
           {years.map((y) => (
             <option key={y} value={y}>
               {y}
@@ -164,10 +214,10 @@ export default function SalesTargetsPage(): ReactElement {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Total target" value={sum ? fmtValue(type, sum.totalTarget) : '—'} icon={Target} />
-        <StatCard label="Achieved" value={sum ? fmtValue(type, sum.totalAchieved) : '—'} icon={TrendingUp} />
-        <StatCard label="Achievement" value={sum ? `${Math.round(sum.percentage)}%` : '—'} icon={Trophy} />
-        <StatCard label="Reps with a target" value={sum?.employees ?? 0} icon={Users} />
+        <StatCard label="Total target" value={summaryValue((s) => fmtValue(type, s.totalTarget))} icon={Target} />
+        <StatCard label="Achieved" value={summaryValue((s) => fmtValue(type, s.totalAchieved))} icon={TrendingUp} />
+        <StatCard label="Achievement" value={summaryValue((s) => `${Math.round(s.percentage)}%`)} icon={Trophy} />
+        <StatCard label="Reps with a target" value={summaryValue((s) => s.employees)} icon={Users} />
       </div>
 
       {isNoEmployeeProfileError(error) ? (
@@ -182,7 +232,11 @@ export default function SalesTargetsPage(): ReactElement {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {leaderboard.length === 0 ? (
+              {lbQ.isLoading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : lbQ.error ? (
+                <p className="text-sm text-destructive">{apiErrorMessage(lbQ.error)}</p>
+              ) : leaderboard.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No {TYPE_LABEL[type].toLowerCase()} targets for this month.</p>
               ) : (
                 <ul className="space-y-3">
@@ -268,6 +322,7 @@ export default function SalesTargetsPage(): ReactElement {
                   })}
                 </ul>
               )}
+              <Pagination page={page} pages={targetsData?.pagination?.pages ?? 1} onPageChange={setPage} />
             </CardContent>
           </Card>
         </div>

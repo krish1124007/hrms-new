@@ -98,6 +98,15 @@ export interface FieldClientInput {
   status?: ClientStatus;
 }
 
+/** `null` clears an optional field on an update (the server `$unset`s it). */
+type Clearable<T, K extends keyof T> = Omit<T, K> & { [P in K]?: T[P] | null };
+
+/** A client edit: cleared contact details, pin, rep or territory go as `null`. */
+export type FieldClientUpdate = Clearable<
+  Partial<FieldClientInput>,
+  'contactPerson' | 'phone' | 'email' | 'company' | 'location' | 'assignedTo' | 'territory'
+>;
+
 /** One client pin on the client map. */
 export interface ClientPin {
   _id: string;
@@ -145,6 +154,9 @@ export interface ProductInput {
   isActive?: boolean;
 }
 
+/** A product edit: a cleared HSN code or description goes as `null`. */
+export type ProductUpdate = Clearable<Partial<ProductInput>, 'hsnCode' | 'description'>;
+
 /* ──────────────────────────────────────────────────────────── */
 /* Visits                                                        */
 /* ──────────────────────────────────────────────────────────── */
@@ -159,6 +171,8 @@ export interface VisitCheckpoint {
   /** Signed URL (short-lived) on reads; the upload's `url` on writes. */
   photo?: string;
   address?: string;
+  /** Check-out only: the rep's notes when closing the visit (the visit's `notes` are the check-in ones). */
+  notes?: string;
 }
 
 export interface FieldVisit {
@@ -181,7 +195,10 @@ export interface FieldVisit {
   distanceFromClientM?: number;
   /** True when the check-in was farther from the client than the allowed radius. */
   locationMismatch?: boolean;
+  /** True when the rep checked in without a GPS fix at a client that has a pin. */
+  locationMissing?: boolean;
   duration?: number;
+  /** Notes given at check-in (or when the visit was planned); check-out notes are `checkOut.notes`. */
   notes?: string;
   outcome?: VisitOutcome;
   nextFollowUpDate?: string;
@@ -269,6 +286,9 @@ export interface FieldTaskInput {
   dueDate?: string;
 }
 
+/** A task edit: a cleared description, client or due date goes as `null`. */
+export type FieldTaskUpdate = Clearable<Partial<FieldTaskInput>, 'description' | 'clientId' | 'dueDate'>;
+
 /* ──────────────────────────────────────────────────────────── */
 /* Targets                                                       */
 /* ──────────────────────────────────────────────────────────── */
@@ -305,6 +325,9 @@ export interface SalesTargetInput {
   targetValue: number;
   milestones?: Array<{ value: number; reward?: string }>;
 }
+
+/** A target edit: a cleared product category (every product counts) goes as `null`. */
+export type SalesTargetUpdate = Clearable<Partial<Omit<SalesTargetInput, 'employeeId'>>, 'productCategory'>;
 
 export interface TeamSummary {
   month: number;
@@ -570,7 +593,7 @@ export const fieldApi = {
     (await api.get('/field/products/categories')).data,
   createProduct: async (input: ProductInput): Promise<ItemResponse<Product>> =>
     (await api.post('/field/products', input)).data,
-  updateProduct: async (id: string, input: Partial<ProductInput>): Promise<ItemResponse<Product>> =>
+  updateProduct: async (id: string, input: ProductUpdate): Promise<ItemResponse<Product>> =>
     (await api.patch(`/field/products/${id}`, input)).data,
   deleteProduct: async (id: string): Promise<{ success: boolean }> =>
     (await api.delete(`/field/products/${id}`)).data,
@@ -585,7 +608,7 @@ export const fieldApi = {
     (await api.get(`/field/clients/${id}`)).data,
   createClient: async (input: FieldClientInput): Promise<ItemResponse<FieldClient>> =>
     (await api.post('/field/clients', input)).data,
-  updateClient: async (id: string, input: Partial<FieldClientInput>): Promise<ItemResponse<FieldClient>> =>
+  updateClient: async (id: string, input: FieldClientUpdate): Promise<ItemResponse<FieldClient>> =>
     (await api.patch(`/field/clients/${id}`, input)).data,
   deleteClient: async (id: string): Promise<{ success: boolean }> =>
     (await api.delete(`/field/clients/${id}`)).data,
@@ -619,7 +642,7 @@ export const fieldApi = {
     (await api.get('/field/tasks', { params })).data,
   createTask: async (input: FieldTaskInput): Promise<ItemResponse<FieldTask>> =>
     (await api.post('/field/tasks', input)).data,
-  updateTask: async (id: string, input: Partial<FieldTaskInput>): Promise<ItemResponse<FieldTask>> =>
+  updateTask: async (id: string, input: FieldTaskUpdate): Promise<ItemResponse<FieldTask>> =>
     (await api.patch(`/field/tasks/${id}`, input)).data,
   deleteTask: async (id: string): Promise<{ success: boolean }> =>
     (await api.delete(`/field/tasks/${id}`)).data,
@@ -639,10 +662,8 @@ export const fieldApi = {
     (await api.get('/field/targets/team-summary', { params })).data,
   createTarget: async (input: SalesTargetInput): Promise<ItemResponse<SalesTarget>> =>
     (await api.post('/field/targets', input)).data,
-  updateTarget: async (
-    id: string,
-    input: Partial<Omit<SalesTargetInput, 'employeeId'>>,
-  ): Promise<ItemResponse<SalesTarget>> => (await api.patch(`/field/targets/${id}`, input)).data,
+  updateTarget: async (id: string, input: SalesTargetUpdate): Promise<ItemResponse<SalesTarget>> =>
+    (await api.patch(`/field/targets/${id}`, input)).data,
   deleteTarget: async (id: string): Promise<{ success: boolean }> =>
     (await api.delete(`/field/targets/${id}`)).data,
 
@@ -684,6 +705,9 @@ export const fieldApi = {
     (await api.patch(`/field/payments/${id}/verify`)).data,
   markPaymentBounced: async (id: string): Promise<ItemResponse<PaymentCollection>> =>
     (await api.patch(`/field/payments/${id}`, { status: 'bounced' })).data,
+  /** "Take back bounce": `bounced → collected` (400/409 when the order has no room left for it). */
+  takeBackBounce: async (id: string): Promise<ItemResponse<PaymentCollection>> =>
+    (await api.patch(`/field/payments/${id}`, { status: 'collected' })).data,
   deletePayment: async (id: string): Promise<{ success: boolean }> =>
     (await api.delete(`/field/payments/${id}`)).data,
   /** The receipt PDF, fetched with the caller's credentials. */

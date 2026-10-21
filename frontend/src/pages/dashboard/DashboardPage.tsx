@@ -31,6 +31,10 @@ import { useAuth } from '@/hooks/use-auth';
 import { usePermissions } from '@/hooks/use-permissions';
 import { OnboardingChecklist } from '@/components/common/OnboardingChecklist';
 import { dashboardApi } from '@/lib/dashboard.api';
+import { formatDate } from '@/lib/format';
+
+/** `21 Oct` — a day of the year on the business (IST) calendar. */
+const dayMonth = (d: string): string => formatDate(d, { year: undefined, month: 'short', day: 'numeric' });
 
 /**
  * Tenant-level dashboard — every card is live data now.
@@ -48,12 +52,8 @@ import { dashboardApi } from '@/lib/dashboard.api';
 export default function DashboardPage(): ReactElement {
   const { user } = useAuth();
   const { has } = usePermissions();
-  const today = new Date().toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  // The business (IST) day, in the app's date style — not the browser's locale or timezone.
+  const today = formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   const overview = useQuery({ queryKey: ['dashboard', 'overview'], queryFn: dashboardApi.overview });
   const trend = useQuery({
@@ -77,7 +77,7 @@ export default function DashboardPage(): ReactElement {
   const trendData =
     trend.data?.map((d) => ({
       ...d,
-      day: new Date(d.date).toLocaleDateString(undefined, { weekday: 'short' }),
+      day: formatDate(d.date, { weekday: 'short', year: undefined, month: undefined, day: undefined }),
     })) ?? [];
 
   return (
@@ -187,10 +187,7 @@ export default function DashboardPage(): ReactElement {
               items={(upcoming.data?.birthdays ?? []).map((b) => ({
                 key: b._id,
                 label: `${b.firstName} ${b.lastName}`,
-                detail: new Date(b.dob).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                }),
+                detail: dayMonth(b.dob),
               }))}
             />
             <UpcomingSection
@@ -203,13 +200,7 @@ export default function DashboardPage(): ReactElement {
                 label: l.employee
                   ? `${l.employee.firstName} ${l.employee.lastName}`
                   : 'Team member',
-                detail: `${new Date(l.startDate).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })} → ${new Date(l.endDate).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}`,
+                detail: `${dayMonth(l.startDate)} → ${dayMonth(l.endDate)}`,
               }))}
             />
           </CardContent>

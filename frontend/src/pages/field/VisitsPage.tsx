@@ -17,7 +17,13 @@ import { RowActionsMenu, type RowAction } from '@/components/common/RowActionsMe
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
 import { ClientPicker } from '@/components/field/ClientPicker';
 import { LocationCapture } from '@/components/field/LocationCapture';
-import { LocationMismatchBadge, PhotoInput, PhotoStrip, VisitStatusBadge } from '@/components/field/FieldBits';
+import {
+  LocationMismatchBadge,
+  LocationMissingBadge,
+  PhotoInput,
+  PhotoStrip,
+  VisitStatusBadge,
+} from '@/components/field/FieldBits';
 import { RepSelect } from '@/components/field/RepSelect';
 import { VisitPinsMap } from '@/components/field/VisitPinsMap';
 import {
@@ -74,6 +80,7 @@ function CheckInDialog({ open, onClose }: { open: boolean; onClose: () => void }
   const [notes, setNotes] = useState('');
   const [photo, setPhoto] = useState('');
   const [fix, setFix] = useState<BrowserFix | undefined>();
+  const [locating, setLocating] = useState(false);
   const [plannedId, setPlannedId] = useState('');
   const { data: today } = useTodayVisits();
   const checkIn = useCheckIn();
@@ -89,9 +96,16 @@ function CheckInDialog({ open, onClose }: { open: boolean; onClose: () => void }
     setPhoto('');
     setPlannedId('');
   };
+  // Closing (Cancel, Esc, success) always starts the next check-in clean.
+  const close = (): void => {
+    if (checkIn.isPending) return;
+    reset();
+    onClose();
+  };
 
   const submit = (): void => {
-    if (!clientId) return;
+    // Wait for the GPS fix: checking in without one flags the visit.
+    if (!clientId || locating) return;
     checkIn.mutate(
       {
         clientId,
@@ -113,7 +127,7 @@ function CheckInDialog({ open, onClose }: { open: boolean; onClose: () => void }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} size="lg">
+    <Dialog open={open} onClose={close} size="lg">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <LogIn className="size-4" />
@@ -154,7 +168,7 @@ function CheckInDialog({ open, onClose }: { open: boolean; onClose: () => void }
             ))}
           </Select>
         </div>
-        {open && <LocationCapture onFix={onFix} />}
+        {open && <LocationCapture onFix={onFix} onLocating={setLocating} />}
         <PhotoInput value={photo} onChange={setPhoto} label="Photo (optional)" />
         <div className="space-y-1.5">
           <Label htmlFor="ci-notes">Notes</Label>
@@ -162,12 +176,17 @@ function CheckInDialog({ open, onClose }: { open: boolean; onClose: () => void }
         </div>
       </DialogBody>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
+        <Button variant="outline" onClick={close} disabled={checkIn.isPending}>
           Cancel
         </Button>
-        <Button onClick={submit} disabled={!clientId} loading={checkIn.isPending}>
+        <Button
+          onClick={submit}
+          disabled={!clientId || locating}
+          loading={checkIn.isPending}
+          title={locating ? 'Waiting for your location…' : undefined}
+        >
           <LogIn className="mr-2 size-4" />
-          Check in
+          {locating ? 'Locating…' : 'Check in'}
         </Button>
       </DialogFooter>
     </Dialog>
@@ -182,11 +201,24 @@ function CheckOutDialog({ visit, onClose }: { visit: FieldVisit | null; onClose:
   const [followUp, setFollowUp] = useState('');
   const [photo, setPhoto] = useState('');
   const [fix, setFix] = useState<BrowserFix | undefined>();
+  const [locating, setLocating] = useState(false);
   const checkOut = useCheckOut();
   const onFix = useCallback((f: BrowserFix | undefined) => setFix(f), []);
 
+  const reset = (): void => {
+    setOutcome('positive');
+    setNotes('');
+    setFollowUp('');
+    setPhoto('');
+  };
+  const close = (): void => {
+    if (checkOut.isPending) return;
+    reset();
+    onClose();
+  };
+
   const submit = (): void => {
-    if (!visit) return;
+    if (!visit || locating) return;
     checkOut.mutate(
       {
         id: visit._id,
@@ -202,9 +234,7 @@ function CheckOutDialog({ visit, onClose }: { visit: FieldVisit | null; onClose:
       },
       {
         onSuccess: () => {
-          setNotes('');
-          setFollowUp('');
-          setPhoto('');
+          reset();
           onClose();
         },
       },
@@ -212,7 +242,7 @@ function CheckOutDialog({ visit, onClose }: { visit: FieldVisit | null; onClose:
   };
 
   return (
-    <Dialog open={visit !== null} onClose={onClose} size="md">
+    <Dialog open={visit !== null} onClose={close} size="md">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <LogOut className="size-4" />
@@ -230,7 +260,7 @@ function CheckOutDialog({ visit, onClose }: { visit: FieldVisit | null; onClose:
             ))}
           </Select>
         </div>
-        {visit && <LocationCapture onFix={onFix} />}
+        {visit && <LocationCapture onFix={onFix} onLocating={setLocating} />}
         <PhotoInput value={photo} onChange={setPhoto} label="Photo (optional)" />
         <div className="space-y-1.5">
           <Label htmlFor="co-notes">Notes</Label>
@@ -242,12 +272,12 @@ function CheckOutDialog({ visit, onClose }: { visit: FieldVisit | null; onClose:
         </div>
       </DialogBody>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
+        <Button variant="outline" onClick={close} disabled={checkOut.isPending}>
           Cancel
         </Button>
-        <Button onClick={submit} loading={checkOut.isPending}>
+        <Button onClick={submit} disabled={locating} loading={checkOut.isPending}>
           <LogOut className="mr-2 size-4" />
-          Check out
+          {locating ? 'Locating…' : 'Check out'}
         </Button>
       </DialogFooter>
     </Dialog>
@@ -449,6 +479,7 @@ export default function VisitsPage(): ReactElement {
         <div className="flex flex-col items-start gap-1">
           <VisitStatusBadge status={r.status} />
           {r.locationMismatch && <LocationMismatchBadge distanceM={r.distanceFromClientM} />}
+          {r.locationMissing && <LocationMissingBadge />}
         </div>
       ),
     },
@@ -461,7 +492,9 @@ export default function VisitsPage(): ReactElement {
           {r.checkIn?.time && !r.locationMismatch && r.distanceFromClientM != null && (
             <div className="text-muted-foreground">{Math.round(r.distanceFromClientM)} m from client</div>
           )}
-          {r.checkIn?.time && !r.checkIn.location && <div className="text-muted-foreground">No GPS fix</div>}
+          {r.checkIn?.time && !r.checkIn.location && !r.locationMissing && (
+            <div className="text-muted-foreground">No GPS fix</div>
+          )}
         </div>
       ),
     },
@@ -470,9 +503,18 @@ export default function VisitsPage(): ReactElement {
       key: 'outcome',
       header: 'Outcome',
       cell: (r) => (
-        <div className="max-w-[200px] text-xs">
+        <div className="max-w-[220px] space-y-0.5 text-xs">
           <div>{outcomeLabel(r.outcome)}</div>
-          {r.notes && <div className="line-clamp-2 text-muted-foreground">{r.notes}</div>}
+          {r.notes && (
+            <div className="line-clamp-2 text-muted-foreground" title={r.notes}>
+              <span className="font-medium text-foreground/80">In:</span> {r.notes}
+            </div>
+          )}
+          {r.checkOut?.notes && (
+            <div className="line-clamp-2 text-muted-foreground" title={r.checkOut.notes}>
+              <span className="font-medium text-foreground/80">Out:</span> {r.checkOut.notes}
+            </div>
+          )}
         </div>
       ),
     },
@@ -504,7 +546,7 @@ export default function VisitsPage(): ReactElement {
             {day && (
               <Link
                 to={`/field/trail?employeeId=${encodeURIComponent(refId(r.employeeId))}&date=${day}`}
-                className="rounded p-1.5 text-primary dark:text-blue-400 hover:bg-primary/10"
+                className="rounded p-1.5 text-primary hover:bg-primary/10"
                 title="Trail for that day"
                 aria-label={`Trail for ${clientName(r)} visit`}
               >
@@ -559,6 +601,7 @@ export default function VisitsPage(): ReactElement {
                       {v.checkIn?.time ? `since ${formatTime(v.checkIn.time)}` : ''}
                     </div>
                     {v.locationMismatch && <LocationMismatchBadge distanceM={v.distanceFromClientM} />}
+                    {v.locationMissing && <LocationMissingBadge />}
                   </div>
                   {(isMine(v) || canManage) && (
                     <Button size="sm" onClick={() => setCheckingOut(v)}>

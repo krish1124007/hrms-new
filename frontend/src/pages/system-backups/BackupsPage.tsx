@@ -22,7 +22,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { usePermissions } from '@/hooks/use-permissions';
 import { backupsApi, saveBlob, type BackupRow } from '@/lib/backups.api';
 import { cn } from '@/lib/utils';
-import { nextMonthEndRun } from './backup-schedule';
+import { formatDateTime } from '@/lib/format';
 
 const STATUS_CONFIG: Record<
   BackupRow['status'],
@@ -53,9 +53,10 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function formatDateTime(s?: string): string {
-  if (!s) return '—';
-  return new Date(s).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+/** A backup time on the IST clock (the server's schedule runs on IST too). */
+function formatWhen(s?: string | number): string {
+  if (s === undefined || s === '') return '—';
+  return formatDateTime(s);
 }
 
 export default function BackupsPage(): ReactElement {
@@ -157,11 +158,7 @@ export default function BackupsPage(): ReactElement {
                 {schedule?.enabled
                   ? `Runs automatically late on the last day of every month.${
                       schedule.nextRun
-                        ? ` Next run: ${nextMonthEndRun(schedule.nextRun).toLocaleString('en-IN', {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
-                            timeZone: 'Asia/Kolkata',
-                          })} IST.`
+                        ? ` Next run: ${formatWhen(schedule.nextRun)} IST.`
                         : ''
                     }`
                   : 'Database is not being backed up automatically. Enable to run a backup at the end of every month.'}
@@ -257,10 +254,10 @@ export default function BackupsPage(): ReactElement {
                       {formatBytes(backup.size)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      {formatDateTime(backup.startedAt ?? backup.createdAt)}
+                      {formatWhen(backup.startedAt ?? backup.createdAt)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      {formatDateTime(backup.completedAt)}
+                      {formatWhen(backup.completedAt)}
                     </td>
                     {canManage && (
                       <td className="px-4 py-3">

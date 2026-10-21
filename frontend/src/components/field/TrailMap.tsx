@@ -20,6 +20,11 @@ const TICK_MS = 100;
 
 const fmtKm = (m: number): string => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
 
+// Module constants: a new options object each render makes react-leaflet
+// restyle the layer on every playback tick.
+const ROUTE_STYLE = { color: '#1e293b', weight: 4, opacity: 0.55, dashArray: '8 6' } as const;
+const TRAVELLED_STYLE = { color: '#2563eb', weight: 6, opacity: 0.9 } as const;
+
 /**
  * A rep's day replayed: the full route in grey, the part travelled so far in
  * blue, a moving dot at the playhead, and a numbered pin per visit.
@@ -60,11 +65,14 @@ export function TrailMap({ trail, height = 520 }: { trail: Trail; height?: numbe
 
   const idx = points.length ? pointIndexAt(times, t) : 0;
   const route = useMemo(() => points.map((p) => [p.lat, p.lng] as [number, number]), [points]);
-  const travelled = route.slice(0, idx + 1);
+  // A new array only when the playhead reaches another point — not on every
+  // 100 ms tick — so the travelled line is redrawn only when it grows.
+  const travelled = useMemo(() => route.slice(0, idx + 1), [route, idx]);
   const located = useMemo(
     () => visits.filter((v): v is VisitPin & { lat: number; lng: number } => v.lat != null && v.lng != null),
     [visits],
   );
+  const visitIcons = useMemo(() => located.map((v, i) => visitIcon(i + 1, v.status)), [located]);
   const fit = useMemo(
     () => [...route, ...located.map((v) => [v.lat, v.lng] as [number, number])],
     [route, located],
@@ -90,10 +98,10 @@ export function TrailMap({ trail, height = 520 }: { trail: Trail; height?: numbe
         </p>
       )}
 
-      <MapCanvas height={height}>
+      <MapCanvas height={height} preferCanvas>
         <FitBounds points={fit} signature={`${trail.employeeId}:${trail.date}:${fit.length}`} />
-        {route.length > 1 && <Polyline positions={route} pathOptions={{ color: '#1e293b', weight: 4, opacity: 0.55, dashArray: '8 6' }} />}
-        {travelled.length > 1 && <Polyline positions={travelled} pathOptions={{ color: '#2563eb', weight: 6, opacity: 0.9 }} />}
+        {route.length > 1 && <Polyline positions={route} pathOptions={ROUTE_STYLE} />}
+        {travelled.length > 1 && <Polyline positions={travelled} pathOptions={TRAVELLED_STYLE} />}
         {current && (
           <Marker position={[current.lat, current.lng]} icon={playheadIcon} title="Playhead" zIndexOffset={1000}>
             <Popup>
@@ -105,7 +113,7 @@ export function TrailMap({ trail, height = 520 }: { trail: Trail; height?: numbe
           </Marker>
         )}
         {located.map((v, i) => (
-          <Marker key={v.visitId} position={[v.lat, v.lng]} icon={visitIcon(i + 1, v.status)} title={v.clientName}>
+          <Marker key={v.visitId} position={[v.lat, v.lng]} icon={visitIcons[i]} title={v.clientName}>
             <Popup>
               <div className="space-y-0.5 text-xs">
                 <div className="text-sm font-semibold">

@@ -34,7 +34,11 @@ export function apiErrorMessage(err: unknown, fallback = 'Something went wrong')
   if (body?.error?.message) return body.error.message;
   if (err instanceof AxiosError) {
     if (err.code === 'ERR_NETWORK') return 'Network error — check your connection';
+    if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+      return 'The server took too long to answer — check the list before trying again';
+    }
     const status = err.response?.status;
+    if (status === 413) return 'File is too large for the server to accept';
     if (status === 401) return 'Session expired — please sign in again';
     if (status === 403) return "You don't have permission to see this";
     if (status === 404) return 'Not found';

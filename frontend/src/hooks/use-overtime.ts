@@ -2,10 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { overtimeApi, type OvertimeInput } from '@/lib/overtime.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 export function useOvertimeRequests(params?: Record<string, unknown>) {
   return useQuery({
@@ -44,7 +40,6 @@ export function useCreateOvertime() {
       qc.invalidateQueries({ queryKey: ['overtime'] });
       toast.success('Overtime request submitted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to submit overtime request')),
   });
 }
 
@@ -57,7 +52,6 @@ export function useUpdateOvertime() {
       qc.invalidateQueries({ queryKey: ['overtime'] });
       toast.success('Request updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update')),
   });
 }
 
@@ -69,7 +63,6 @@ export function useDeleteOvertime() {
       qc.invalidateQueries({ queryKey: ['overtime'] });
       toast.success('Request withdrawn');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to withdraw')),
   });
 }
 
@@ -82,7 +75,6 @@ export function useApproveOvertime() {
       qc.invalidateQueries({ queryKey: ['overtime'] });
       toast.success('Approved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to approve')),
   });
 }
 
@@ -95,6 +87,5 @@ export function useRejectOvertime() {
       qc.invalidateQueries({ queryKey: ['overtime'] });
       toast.success('Rejected');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reject')),
   });
 }

@@ -59,11 +59,16 @@ import { toast } from 'sonner';
 import { LocationPermissionDialog } from '@/components/common/LocationPermissionDialog';
 import { CheckoutExpenseDialog, isExpenseRequiredError } from '@/components/attendance/CheckoutExpenseDialog';
 import { RichText } from '@/components/common/RichText';
+import { monthBoundsIST, partsOfKey } from '@/lib/business-day';
+import { formatDate, formatTime, todayIST } from '@/lib/format';
 
 function fmtTime(iso?: string): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  return formatTime(iso);
 }
+
+/** `21 Oct` — a day of the year on the business (IST) calendar. */
+const dayMonth = (d: string): string => formatDate(d, { year: undefined, month: 'short', day: 'numeric' });
 
 function fmtHours(h?: number): string {
   if (!h || h <= 0) return '0h 0m';
@@ -127,12 +132,8 @@ function rememberReadLater(userId: string | undefined, noticeId: string): void {
 
 export default function EmployeeDashboardPage(): ReactElement {
   const { user } = useAuth();
-  const today = new Date().toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  // The business (IST) day, in the app's date style — not the browser's locale or timezone.
+  const today = formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   const todayQ = useTodayAttendance();
   const checkIn = useCheckIn();
@@ -183,7 +184,7 @@ export default function EmployeeDashboardPage(): ReactElement {
    * Check out straight away. Only if the server answers
    * EXPENSE_REQUIRED_FOR_CHECKOUT does today's expense form open; once the
    * claim is filed it calls this again. LOCATION_REQUIRED opens the
-   * location help instead. Other errors are toasted by the mutation.
+   * location help instead. Other errors are toasted by the global mutation handler.
    */
   const submitCheckOut = async (known?: { lat: number; lng: number }): Promise<void> => {
     const payload: CheckInPayload = { method: 'manual' };
@@ -243,14 +244,15 @@ export default function EmployeeDashboardPage(): ReactElement {
   // to be dropped by the API, so the tiles below counted every record ever
   // recorded; `from`/`to` are sent alongside it so the range holds even
   // against an older backend. `limit` covers the longest month.
-  const month = new Date();
-  const monthStr = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
-  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
-  const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 0, 23, 59, 59, 999);
+  // The IST calendar month — not the browser's: from 00:00 IST on the 1st to
+  // the end of the last day, whatever timezone this browser is in.
+  const { year: thisYear, month: thisMonth } = partsOfKey(todayIST());
+  const monthStr = `${thisYear}-${String(thisMonth).padStart(2, '0')}`;
+  const monthBounds = monthBoundsIST(thisYear, thisMonth);
   const monthQ = useMyAttendance({
     month: monthStr,
-    from: monthStart.toISOString(),
-    to: monthEnd.toISOString(),
+    from: monthBounds.from.toISOString(),
+    to: monthBounds.to.toISOString(),
     limit: 31,
   });
   const records = (monthQ.data?.data ?? []) as Attendance[];
@@ -268,7 +270,7 @@ export default function EmployeeDashboardPage(): ReactElement {
   });
 
   // Leave balances
-  const { data: balancesData, isLoading: loadingBalances } = useMyLeaveBalances(month.getFullYear());
+  const { data: balancesData, isLoading: loadingBalances } = useMyLeaveBalances(thisYear);
   const balances = balancesData?.data ?? [];
 
   const tdRec = todayQ.data?.data ?? null;
@@ -363,7 +365,7 @@ export default function EmployeeDashboardPage(): ReactElement {
           in the attendance history. */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-muted-foreground">
-          {month.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+          {formatDate(monthBounds.from, { month: 'long', year: 'numeric', day: undefined })}
         </h2>
         <Link to="/attendance/my" className="text-xs font-medium text-primary hover:underline">
           View history
@@ -449,10 +451,7 @@ export default function EmployeeDashboardPage(): ReactElement {
               items={(upcoming.data?.birthdays ?? []).map((b) => ({
                 key: b._id,
                 label: `${b.firstName} ${b.lastName}`,
-                detail: new Date(b.dob).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                }),
+                detail: dayMonth(b.dob),
               }))}
             />
             <UpcomingSection
@@ -465,13 +464,7 @@ export default function EmployeeDashboardPage(): ReactElement {
                 label: l.employee
                   ? `${l.employee.firstName} ${l.employee.lastName}`
                   : 'Team member',
-                detail: `${new Date(l.startDate).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })} → ${new Date(l.endDate).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}`,
+                detail: `${dayMonth(l.startDate)} → ${dayMonth(l.endDate)}`,
               }))}
             />
           </CardContent>

@@ -100,9 +100,6 @@ export default function CalendarPage(): ReactElement {
       toast.success('Event created');
       setEditing(null);
     },
-    onError: (e: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(e.response?.data?.error?.message ?? 'Failed to create event');
-    },
   });
 
   const update = useMutation({
@@ -112,9 +109,6 @@ export default function CalendarPage(): ReactElement {
       qc.invalidateQueries({ queryKey: ['calendar-events'] });
       toast.success('Event updated');
       setEditing(null);
-    },
-    onError: (e: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(e.response?.data?.error?.message ?? 'Failed to update');
     },
   });
 

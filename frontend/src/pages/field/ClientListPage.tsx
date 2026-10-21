@@ -29,6 +29,7 @@ import {
   type ClientStatus,
   type FieldClient,
   type FieldClientInput,
+  type FieldClientUpdate,
 } from '@/lib/field.api';
 import { formatCurrency, formatDate } from '@/lib/format';
 
@@ -89,6 +90,32 @@ function toInput(f: FormState): FieldClientInput {
     location: hasLocation ? { lat, lng } : undefined,
     assignedTo: f.assignedTo || undefined,
     territory: f.territory.trim() || undefined,
+  };
+}
+
+/**
+ * An edit: a field the user emptied goes as `null` (the server clears it) —
+ * leaving it out would keep the old value. Address parts are cleared with ''
+ * (they are set one by one).
+ */
+function toUpdate(f: FormState): FieldClientUpdate {
+  const input = toInput(f);
+  const orNull = (v: string): string | null => v.trim() || null;
+  return {
+    ...input,
+    contactPerson: orNull(f.contactPerson),
+    phone: orNull(f.phone),
+    email: orNull(f.email),
+    company: orNull(f.company),
+    territory: orNull(f.territory),
+    assignedTo: f.assignedTo || null,
+    location: input.location ?? null,
+    address: {
+      line1: f.line1.trim(),
+      city: f.city.trim(),
+      state: f.state.trim(),
+      pincode: f.pincode.trim(),
+    },
   };
 }
 
@@ -198,9 +225,8 @@ export default function ClientListPage(): ReactElement {
 
   const submit = (): void => {
     if (!valid) return;
-    const input = toInput(form);
-    if (editing) update.mutate({ id: editing._id, input }, { onSuccess: () => setOpen(false) });
-    else create.mutate(input, { onSuccess: () => setOpen(false) });
+    if (editing) update.mutate({ id: editing._id, input: toUpdate(form) }, { onSuccess: () => setOpen(false) });
+    else create.mutate(toInput(form), { onSuccess: () => setOpen(false) });
   };
 
   const columns: DataTableColumn<FieldClient>[] = [

@@ -46,8 +46,6 @@ export default function LeaveBalancePage(): ReactElement {
   const [page, setPage] = useState(1);
   const { data, isLoading, error, refetch } = useLeaveBalances({ year, page, limit: PAGE_SIZE });
   const { data: types } = useLeaveTypes({ isActive: true, limit: 100 });
-  // Only people who still work here — never ex-employees.
-  const { data: employees = [] } = useActiveEmployees();
   const allocate = useAllocateLeaveBalances();
   const resetBalances = useResetLeaveBalances();
   const openYear = useOpenLeaveYear();
@@ -55,6 +53,9 @@ export default function LeaveBalancePage(): ReactElement {
   const canOpenYear = has('leaves.update');
   // Allocate / reset are `leaves.update` on the API too.
   const canManage = has('leaves.update');
+  // Only people who still work here — never ex-employees. The whole list is
+  // for the allocate form, so only someone who may allocate fetches it.
+  const { data: employees = [] } = useActiveEmployees({ enabled: canManage });
   const [resetOpen, setResetOpen] = useState(false);
   // The API opens at most next year (in the business timezone).
   const latestOpenable = Number(todayKey().slice(0, 4)) + 1;

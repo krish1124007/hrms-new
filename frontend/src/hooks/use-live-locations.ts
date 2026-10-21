@@ -47,6 +47,31 @@ export function mergeLocationUpdate(rows: LiveLocation[], u: LocationUpdate): Li
 }
 
 /**
+ * Fold a fresh poll into what is shown. The poll decides who is listed (it
+ * drops reps silent for 2 h) and carries the details (on a visit, battery),
+ * but a rep the socket has meanwhile moved keeps the newer position — a poll
+ * that was in flight must not jump a marker back. A rep the socket added
+ * after the poll started stays too.
+ */
+export function mergePolledLocations(
+  shown: LiveLocation[],
+  polled: LiveLocation[],
+  pollStartedAt: number,
+): LiveLocation[] {
+  const byId = new Map(shown.map((r) => [r.employeeId, r]));
+  const at = (r: LiveLocation): number => new Date(r.recordedAt).getTime();
+  const merged = polled.map((p) => {
+    const s = byId.get(p.employeeId);
+    if (!s || at(s) <= at(p)) return p;
+    return { ...p, lat: s.lat, lng: s.lng, accuracy: s.accuracy, recordedAt: s.recordedAt };
+  });
+  const listed = new Set(polled.map((p) => p.employeeId));
+  const addedSince = shown.filter((s) => !listed.has(s.employeeId) && at(s) >= pollStartedAt);
+  if (addedSince.length === 0) return merged;
+  return [...merged, ...addedSince].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
  * Every visible rep's latest position: `GET /field/tracking/live`, kept
  * current by the `/field-tracking` socket, with a 30-second poll whenever the
  * socket is not connected.
@@ -75,7 +100,12 @@ export function useLiveLocations() {
 
   const query = useQuery({
     queryKey: LIVE_QUERY_KEY,
-    queryFn: () => fieldApi.liveTracking(),
+    queryFn: async (): Promise<LiveResponse> => {
+      const startedAt = Date.now();
+      const res = await fieldApi.liveTracking();
+      const shown = qc.getQueryData<LiveResponse>(LIVE_QUERY_KEY)?.data ?? [];
+      return { ...res, data: mergePolledLocations(shown, res.data ?? [], startedAt) };
+    },
     refetchInterval: status === 'live' ? LIVE_REFRESH_MS : LIVE_POLL_MS,
     refetchIntervalInBackground: false,
   });

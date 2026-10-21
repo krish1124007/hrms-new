@@ -3,7 +3,7 @@ import { refId, type OrderStatus, type OrderStatusChange, type PaymentCollection
 /*
  * Which buttons a field user sees — the server's rules
  * (`field-orders.controller.ts`, `field-payments.controller.ts`), so nobody is
- * offered an action that can only 403.
+ * offered an action that can only 403 or 409.
  */
 
 /** Legacy `draft` reads as pending; legacy `processing`/`shipped` as confirmed. */
@@ -21,28 +21,40 @@ export interface FieldActor {
 }
 
 /**
- * Status changes `actor` may make on `order`: confirm and deliver need
- * `field-sales.manage`; a manager may cancel a pending or confirmed order, a
- * rep only their own pending one.
+ * Status changes `actor` may make on `order`:
+ * - confirm and deliver need `field-sales.manage`, and nobody confirms or
+ *   delivers their own order (the server answers 403 `SELF_APPROVAL`);
+ * - a manager may cancel a pending or confirmed order;
+ * - a rep may cancel only their own pending order, and only while nothing is
+ *   paid against it (403 `ORDER_HAS_PAYMENTS`).
  */
 export function allowedOrderActions(
-  order: Pick<ProductOrder, 'status' | 'employeeId'>,
+  order: Pick<ProductOrder, 'status' | 'employeeId' | 'paymentStatus'>,
   actor: FieldActor,
 ): OrderStatusChange[] {
   const s = normaliseOrderStatus(order.status);
   const mine = !!actor.myEmployeeId && refId(order.employeeId) === actor.myEmployeeId;
+  const unpaid = (order.paymentStatus ?? 'pending') === 'pending';
   const out: OrderStatusChange[] = [];
-  if (actor.canManage && s === 'pending') out.push('confirmed');
-  if (actor.canManage && s === 'confirmed') out.push('delivered');
-  if ((actor.canManage && (s === 'pending' || s === 'confirmed')) || (mine && s === 'pending')) out.push('cancelled');
+  if (actor.canManage && !mine && s === 'pending') out.push('confirmed');
+  if (actor.canManage && !mine && s === 'confirmed') out.push('delivered');
+  if ((actor.canManage && (s === 'pending' || s === 'confirmed')) || (mine && s === 'pending' && unpaid)) {
+    out.push('cancelled');
+  }
   return out;
 }
 
-export type PaymentAction = 'deposit' | 'verify' | 'bounce' | 'delete';
+/** `unbounce` = "Take back bounce" (`bounced → collected`). */
+export type PaymentAction = 'verify' | 'deposit' | 'bounce' | 'unbounce' | 'delete';
 
 /**
- * Payment actions for `actor`: the collector (or a manager) marks a collected
- * payment deposited; a manager verifies, marks bounced, or deletes.
+ * Payment actions for `actor`, along the server's status machine
+ * `collected → verified → deposited`:
+ * - a manager verifies a collected payment;
+ * - the collector (or a manager) marks a verified payment deposited;
+ * - a manager marks any payment bounced, takes a bounce back
+ *   (`bounced → collected`, refused when the order no longer has room for
+ *   it), or deletes a payment.
  */
 export function allowedPaymentActions(
   p: Pick<PaymentCollection, 'status' | 'employeeId'>,
@@ -50,9 +62,10 @@ export function allowedPaymentActions(
 ): PaymentAction[] {
   const mine = !!actor.myEmployeeId && refId(p.employeeId) === actor.myEmployeeId;
   const out: PaymentAction[] = [];
-  if (p.status === 'collected' && (mine || actor.canManage)) out.push('deposit');
-  if (actor.canManage && (p.status === 'collected' || p.status === 'deposited')) out.push('verify');
+  if (actor.canManage && p.status === 'collected') out.push('verify');
+  if (p.status === 'verified' && (mine || actor.canManage)) out.push('deposit');
   if (actor.canManage && p.status !== 'bounced') out.push('bounce');
+  if (actor.canManage && p.status === 'bounced') out.push('unbounce');
   if (actor.canManage) out.push('delete');
   return out;
 }

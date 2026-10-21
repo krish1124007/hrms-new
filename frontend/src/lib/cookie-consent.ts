@@ -13,7 +13,12 @@ export interface CookieConsent {
 }
 
 const STORAGE_KEY = 'ddhrms.cookie-consent';
-const CURRENT_VERSION = 1;
+/**
+ * Bump when what a choice covers changes, so everyone is asked again.
+ * v2: crash reports may now include the field-sales pages (maps, live
+ * locations) — choices made under v1 never covered those.
+ */
+const CURRENT_VERSION = 2;
 
 export function readConsent(): CookieConsent | null {
   try {

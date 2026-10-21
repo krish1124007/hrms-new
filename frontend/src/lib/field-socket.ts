@@ -48,7 +48,10 @@ export function connectFieldTracking({ onUpdate, onStatus }: FieldSocketHandlers
 
   const socket: Socket = io(`${socketOrigin()}${FIELD_TRACKING_NAMESPACE}`, {
     auth: (cb: (data: object) => void) => cb({ token: tokenStorage.getAccess() ?? '' }),
+    // WebSocket first, but fall back to HTTP long-polling where a proxy or
+    // firewall blocks WebSockets (without this the first failure is final).
     transports: ['websocket', 'polling'],
+    tryAllTransports: true,
     reconnectionDelayMax: 30_000,
   });
 

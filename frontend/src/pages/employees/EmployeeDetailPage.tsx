@@ -45,6 +45,7 @@ import { formatDate } from '@/lib/format';
 import { EmployeeStatusDialog } from '@/components/employees/EmployeeStatusDialog';
 import { businessDayKey, todayKey } from '@/lib/business-day';
 import { documentsApi } from '@/lib/documents.api';
+import { apiErrorMessage } from '@/lib/api-error';
 import { authApi } from '@/lib/auth.api';
 import { usePermissions } from '@/hooks/use-permissions';
 import { toast } from 'sonner';
@@ -415,24 +416,29 @@ function DocumentsTab({
       return;
     }
     setUploading(true);
+    let url: string | undefined;
     try {
       const uploaded = await documentsApi.upload(file, {
         folder: `/employees/${employeeId}`,
         category: docType,
       });
-      const url = uploaded.data?.file?.url;
+      url = uploaded.data?.file?.url;
       if (!url) throw new Error('Upload succeeded but no file URL returned');
+    } catch (err) {
+      // A plain request, not a mutation: nobody else reports it.
+      toast.error(apiErrorMessage(err, 'Failed to upload document'));
+      setUploading(false);
+      return;
+    }
+    try {
       await addDoc.mutateAsync({
         id: employeeId,
         body: { type: docType, name: docName.trim() || file.name, fileUrl: url },
       });
       setOpen(false);
       reset();
-    } catch (err) {
-      const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string };
-      toast.error(
-        e.response?.data?.error?.message ?? e.message ?? 'Failed to upload document',
-      );
+    } catch {
+      // The global mutation handler already told the user.
     } finally {
       setUploading(false);
     }
@@ -605,8 +611,6 @@ function ResetPasswordDialog({
       setConfirm('');
       onClose();
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to reset password'),
   });
 
   const submit = (): void => {

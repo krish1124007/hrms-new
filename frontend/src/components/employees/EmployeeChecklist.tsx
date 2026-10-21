@@ -30,6 +30,8 @@ export function EmployeeChecklist({
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
+          type="search"
+          aria-label="Search employees"
           placeholder="Search employees…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}

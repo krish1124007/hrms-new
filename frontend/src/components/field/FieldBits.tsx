@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactElement } from 'react';
-import { Camera, ImageOff, Loader2, MapPinOff, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { Camera, ImageOff, Loader2, LocateOff, MapPinOff, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -35,10 +35,11 @@ export function VisitStatusBadge({ status }: { status: VisitStatus }): ReactElem
   return <Badge variant={s.variant}>{s.label}</Badge>;
 }
 
+/** Along `collected → verified → deposited`; `bounced` from any of them. */
 const PAYMENT_STATUS: Record<PaymentCollectionStatus, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
   collected: { label: 'Collected', variant: 'secondary' },
-  deposited: { label: 'Deposited', variant: 'default' },
-  verified: { label: 'Verified', variant: 'success' },
+  verified: { label: 'Verified', variant: 'default' },
+  deposited: { label: 'Deposited', variant: 'success' },
   bounced: { label: 'Bounced', variant: 'destructive' },
 };
 
@@ -55,6 +56,16 @@ export function LocationMismatchBadge({ distanceM }: { distanceM?: number }): Re
     <Badge variant="destructive" title="The check-in location was far from the client's saved location">
       <MapPinOff className="mr-1 size-3" />
       {d ? `${d} from client` : 'Away from client'}
+    </Badge>
+  );
+}
+
+/** "No GPS" — the rep checked in without a location at a client that has a pin. */
+export function LocationMissingBadge(): ReactElement {
+  return (
+    <Badge variant="destructive" title="The check-in had no GPS fix, so it could not be compared with the client's location">
+      <LocateOff className="mr-1 size-3" />
+      No GPS
     </Badge>
   );
 }
@@ -111,6 +122,19 @@ export function PhotoInput({
   const fileRef = useRef<HTMLInputElement>(null);
   const upload = useUploadFieldPhoto();
   const [preview, setPreview] = useState<string>('');
+
+  // Each preview is an object URL holding the picked file in memory: free
+  // the old one when it is replaced or removed, and the last one on unmount.
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview);
+    },
+    [preview],
+  );
+  // The form was reset from outside (dialog closed, submitted): drop the preview.
+  useEffect(() => {
+    if (!value) setPreview('');
+  }, [value]);
 
   const pick = (file: File | undefined): void => {
     if (!file) return;

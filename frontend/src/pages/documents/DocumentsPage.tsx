@@ -185,9 +185,6 @@ export default function DocumentsPage(): ReactElement {
       qc.invalidateQueries({ queryKey: ['documents'] });
       toast.success('File uploaded');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) => {
-      toast.error(err.response?.data?.error?.message ?? 'Upload failed');
-    },
   });
 
   const remove = useMutation({
@@ -214,7 +211,7 @@ export default function DocumentsPage(): ReactElement {
       }
       if (folder !== activeFolder) setActiveFolder(folder);
     } catch {
-      // The mutation's onError already told the user.
+      // The global mutation handler already told the user.
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }

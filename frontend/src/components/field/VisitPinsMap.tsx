@@ -46,7 +46,8 @@ export function VisitPinsMap({
               </div>
               <Link
                 to={`/field/trail?employeeId=${encodeURIComponent(p.employeeId)}&date=${date}`}
-                className="font-medium text-primary dark:text-blue-400 hover:underline"
+                // Leaflet popups are white in both themes: a fixed dark blue, not the theme's primary.
+                className="font-medium text-blue-700 hover:underline"
               >
                 Show the rep&apos;s trail
               </Link>

@@ -4,13 +4,21 @@ import { Button } from '@/components/ui/button';
 import { useBrowserLocation, type BrowserFix } from '@/hooks/use-browser-location';
 
 /**
- * Asks the browser for a GPS fix when shown and reports it upward. The
- * server compares the check-in fix with the client's pin and flags a
- * mismatch; it never rejects a check-in for it.
+ * Asks the browser for a GPS fix when shown and reports it upward, and
+ * whether it is still looking (`onLocating`) so the form can wait for it.
+ * The server compares the check-in fix with the client's pin and flags a
+ * mismatch (or a missing fix); it never rejects a check-in for it.
  */
-export function LocationCapture({ onFix }: { onFix: (fix: BrowserFix | undefined) => void }): ReactElement {
+export function LocationCapture({
+  onFix,
+  onLocating,
+}: {
+  onFix: (fix: BrowserFix | undefined) => void;
+  onLocating?: (locating: boolean) => void;
+}): ReactElement {
   const loc = useBrowserLocation();
   const { request, fix } = loc;
+  const locating = loc.status === 'locating' || loc.status === 'idle';
 
   useEffect(() => {
     request();
@@ -18,6 +26,11 @@ export function LocationCapture({ onFix }: { onFix: (fix: BrowserFix | undefined
   useEffect(() => {
     onFix(fix);
   }, [fix, onFix]);
+  useEffect(() => {
+    onLocating?.(locating);
+  }, [locating, onLocating]);
+  // Unmounted (dialog closed): nothing is being located any more.
+  useEffect(() => () => onLocating?.(false), [onLocating]);
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">

@@ -2,10 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { disciplinaryApi, type DisciplinaryInput } from '@/lib/disciplinary.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 export function useDisciplinaryList(params?: Record<string, unknown>) {
   return useQuery({
@@ -44,7 +40,6 @@ export function useCreateDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary'] });
       toast.success('Case created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create case')),
   });
 }
 
@@ -58,7 +53,6 @@ export function useUpdateDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Case updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update case')),
   });
 }
 
@@ -70,7 +64,6 @@ export function useDeleteDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary'] });
       toast.success('Case deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete case')),
   });
 }
 
@@ -84,7 +77,6 @@ export function useAcknowledgeDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Acknowledgement recorded');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to acknowledge')),
   });
 }
 
@@ -105,7 +97,6 @@ export function useResolveDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Case closed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to resolve')),
   });
 }
 
@@ -119,7 +110,6 @@ export function useEscalateDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Case escalated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to escalate')),
   });
 }
 
@@ -133,7 +123,6 @@ export function useCancelDisciplinary() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Case cancelled');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to cancel')),
   });
 }
 
@@ -146,6 +135,5 @@ export function useAddDisciplinaryComment() {
       qc.invalidateQueries({ queryKey: ['disciplinary', v.id] });
       toast.success('Comment added');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to add comment')),
   });
 }

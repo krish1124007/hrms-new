@@ -138,7 +138,7 @@ export default function PolicyFormPage(): ReactElement {
         ? (await update.mutateAsync({ id, input: payload })).data._id
         : (await create.mutateAsync(payload)).data._id;
     } catch {
-      // mutateAsync surfaces toasts via the hooks' onError handlers — no extra noise here
+      // The global mutation handler has toasted the failure — no extra noise here
       return;
     }
 

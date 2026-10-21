@@ -2,8 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attendanceApi, type Attendance } from '@/lib/attendance.api';
+import { dashboardApi } from '@/lib/dashboard.api';
 import { expenseCategoriesApi, expenseClaimsApi } from '@/lib/expense-claims.api';
 import { noticesApi, type Notice } from '@/lib/notices.api';
 import { payrollApi, type PayrollRecord } from '@/lib/payroll.api';
@@ -207,3 +208,35 @@ describe('EmployeeDashboardPage notice pop-up and payslip', () => {
   });
 });
 
+describe('EmployeeDashboardPage dates (IST, whatever the browser)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    // 31 Oct 2026, 19:00 UTC = 1 Nov 2026, 00:30 IST: already November in India.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T19:00:00.000Z'));
+    today.mockResolvedValue({ success: true, data: null } as never);
+    my.mockResolvedValue({ success: true, data: [], pagination: { page: 1, limit: 31, total: 0, pages: 0 } } as never);
+    vi.mocked(noticesApi.list).mockResolvedValue({ success: true, data: [], pagination: { page: 1, limit: 1, total: 0, pages: 0 } });
+    vi.mocked(dashboardApi.upcoming).mockResolvedValue({
+      birthdays: [{ _id: 'b1', firstName: 'Meera', lastName: 'Shah', dob: '1994-11-01T00:00:00.000Z' }],
+      leaves: [],
+    } as never);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts this IST month's attendance and labels days the Indian way", async () => {
+    renderPage();
+    await waitFor(() => expect(my).toHaveBeenCalled());
+    expect(my.mock.calls[0][0]).toMatchObject({
+      month: '2026-11',
+      from: '2026-10-31T18:30:00.000Z', // 1 Nov 00:00 IST
+      to: '2026-11-30T18:29:59.999Z', // end of 30 Nov IST
+    });
+    expect(await screen.findByText('November 2026')).toBeInTheDocument();
+    expect(await screen.findByText('1 Nov')).toBeInTheDocument();
+  });
+});

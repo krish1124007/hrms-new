@@ -1,13 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  QueryClient,
-  QueryClientProvider,
-  QueryCache,
-  MutationCache,
-} from '@tanstack/react-query';
-import { Toaster, toast } from 'sonner';
-import { AxiosError } from 'axios';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'sonner';
 import App from './App.tsx';
 import { ThemeProvider } from './providers/ThemeProvider.tsx';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -15,7 +9,8 @@ import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { CookieConsentBanner } from './components/common/CookieConsent';
 import { readConsent } from './lib/cookie-consent';
 import { initSentry } from './lib/sentry';
-import { apiErrorMessage } from './lib/api-error';
+import { clearCacheOnSessionChange, queryClient } from './lib/query-client';
+import { purgeLegacyStorage } from './lib/legacy-storage';
 import './index.css';
 
 // Install Sentry only if the user gave analytics consent (ePrivacy/GDPR).
@@ -29,60 +24,12 @@ window.addEventListener('cookie-consent-changed', () => {
   window.location.reload();
 });
 
-/** A user-facing message for any error — shared with tables' error states. */
-const errorMessage = (err: unknown): string => apiErrorMessage(err);
+// Data an older build left in this browser (e.g. a full employee form draft).
+purgeLegacyStorage();
 
-/**
- * Query errors: only toast on server (5xx) or unrecognised — 4xx is the
- * component's job to render inline (a list passes the query's `error` to
- * `DataTable`, a self-service page shows "no employee profile"), never as an
- * empty state. Mutations always toast: user just clicked something and
- * expects feedback. Opt-out per-call via `meta: { silent: true }`.
- */
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60_000,
-      retry: (failureCount, err) => {
-        if (err instanceof AxiosError && err.response?.status && err.response.status < 500) {
-          return false; // client errors are permanent
-        }
-        return failureCount < 2;
-      },
-      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
-      refetchOnWindowFocus: false,
-    },
-    mutations: {
-      retry: false, // side-effect safety — never auto-retry mutations
-    },
-  },
-  queryCache: new QueryCache({
-    onError: (err, query) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const silent = (query.meta as any)?.silent;
-      if (silent) return;
-      if (err instanceof AxiosError && err.response?.status && err.response.status < 500) {
-        return;
-      }
-      toast.error(errorMessage(err));
-    },
-  }),
-  mutationCache: new MutationCache({
-    onError: (err, _vars, _ctx, mutation) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const silent = (mutation.meta as any)?.silent;
-      if (silent) return;
-      
-      // No toast for LOCATION_REQUIRED or EXPENSE_REQUIRED_FOR_CHECKOUT: each
-      // opens a dedicated dialog (location help / today's expense form).
-      const body = (err as AxiosError)?.response?.data as { error?: { code?: string } } | undefined;
-      const code = body?.error?.code;
-      if (code === 'LOCATION_REQUIRED' || code === 'EXPENSE_REQUIRED_FOR_CHECKOUT') return;
-      
-      toast.error(errorMessage(err));
-    },
-  }),
-});
+// Logout, a failed token refresh or a different user signing in drops every
+// cached response, so nobody sees the previous user's data.
+clearCacheOnSessionChange(queryClient);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element #root not found');

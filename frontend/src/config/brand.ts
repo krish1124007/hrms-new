@@ -20,3 +20,10 @@ export const COMPANY_SHORT_NAME = 'DDIPL';
  */
 export const SUPPORT_EMAIL: string =
   (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined)?.trim() || 'info@dharmeshdeshani.com';
+
+/**
+ * The support phone number on the public support page. Set
+ * `VITE_SUPPORT_PHONE` at build time; the default is the company's line.
+ */
+export const SUPPORT_PHONE: string =
+  (import.meta.env.VITE_SUPPORT_PHONE as string | undefined)?.trim() || '+91 92130 17921';

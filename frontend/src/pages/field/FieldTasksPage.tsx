@@ -33,6 +33,7 @@ import {
   refId,
   type FieldTask,
   type FieldTaskInput,
+  type FieldTaskUpdate,
   type FieldTaskPriority,
   type FieldTaskStatus,
 } from '@/lib/field.api';
@@ -146,8 +147,18 @@ export default function FieldTasksPage(): ReactElement {
       status: form.status,
       dueDate: form.dueDate ? dueInstant(form.dueDate) : undefined,
     };
-    if (editing) update.mutate({ id: editing._id, input }, { onSuccess: () => setOpen(false) });
-    else create.mutate(input, { onSuccess: () => setOpen(false) });
+    if (editing) {
+      // An emptied description, client or due date goes as `null`, so the server clears it.
+      const changes: FieldTaskUpdate = {
+        ...input,
+        description: input.description ?? null,
+        clientId: input.clientId ?? null,
+        dueDate: input.dueDate ?? null,
+      };
+      update.mutate({ id: editing._id, input: changes }, { onSuccess: () => setOpen(false) });
+    } else {
+      create.mutate(input, { onSuccess: () => setOpen(false) });
+    }
   };
 
   const isMine = (t: FieldTask): boolean => !!myEmployeeId && refId(t.assignedTo) === myEmployeeId;
@@ -215,7 +226,7 @@ export default function FieldTasksPage(): ReactElement {
             {mine && r.status === 'new' && (
               <button
                 onClick={() => accept.mutate(r._id)}
-                className="rounded p-1.5 text-primary dark:text-blue-400 hover:bg-primary/10"
+                className="rounded p-1.5 text-primary hover:bg-primary/10"
                 title="Accept"
                 aria-label={`Accept ${r.title}`}
               >

@@ -36,6 +36,7 @@ import {
 import { usePermissions } from '@/hooks/use-permissions';
 import { employeesApi, type Employee } from '@/lib/systemcore.api';
 import { todayKey } from '@/lib/business-day';
+import { formatDate } from '@/lib/format';
 import { EmployeeImportModal } from './EmployeeImportModal';
 
 const STATUS_VARIANTS: Record<Employee['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
@@ -182,7 +183,7 @@ export default function EmployeeListPage(): ReactElement {
       key: 'joiningDate',
       header: 'Joined',
       cell: (row) =>
-        row.joiningDate ? new Date(row.joiningDate).toLocaleDateString('en-IN') : '—',
+        row.joiningDate ? formatDate(row.joiningDate) : '—',
     },
     {
       key: 'actions',

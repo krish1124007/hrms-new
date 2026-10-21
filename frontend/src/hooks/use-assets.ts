@@ -6,10 +6,6 @@ import {
   type AssetInput,
 } from '@/lib/assets.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 export function useAssets(params?: Record<string, unknown>) {
   return useQuery({ queryKey: ['assets', params], queryFn: () => assetsApi.list(params) });
@@ -35,7 +31,6 @@ export function useCreateAsset() {
       qc.invalidateQueries({ queryKey: ['assets'] });
       toast.success('Asset created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create asset')),
   });
 }
 
@@ -49,7 +44,6 @@ export function useUpdateAsset() {
       qc.invalidateQueries({ queryKey: ['assets', v.id] });
       toast.success('Asset updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update asset')),
   });
 }
 
@@ -61,7 +55,6 @@ export function useDeleteAsset() {
       qc.invalidateQueries({ queryKey: ['assets'] });
       toast.success('Asset deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete asset')),
   });
 }
 
@@ -75,7 +68,6 @@ export function useAssignAsset() {
       qc.invalidateQueries({ queryKey: ['assets', v.id] });
       toast.success('Asset assigned');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to assign asset')),
   });
 }
 
@@ -89,7 +81,6 @@ export function useUnassignAsset() {
       qc.invalidateQueries({ queryKey: ['assets', v.id] });
       toast.success('Asset unassigned');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to unassign asset')),
   });
 }
 
@@ -102,6 +93,5 @@ export function useImportAssets() {
       qc.invalidateQueries({ queryKey: ['assets'] });
       toast.success(res.message || 'Assets imported successfully');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to import assets')),
   });
 }

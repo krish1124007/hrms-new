@@ -2,7 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { hrPoliciesApi, type PolicyInput } from '@/lib/hr-policies.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
+/** An upload's failure in words (see `useUploadPolicyAttachment`). */
+const uploadErrMsg = (err: unknown, fallback: string): string => {
   const e = err as {
     response?: { status?: number; data?: { error?: { message?: string } } };
     code?: string;
@@ -49,7 +50,6 @@ export function useCreatePolicy() {
       qc.invalidateQueries({ queryKey: ['policies'] });
       toast.success('Policy created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create policy')),
   });
 }
 
@@ -63,7 +63,6 @@ export function useUpdatePolicy() {
       qc.invalidateQueries({ queryKey: ['policies', v.id] });
       toast.success('Policy updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update policy')),
   });
 }
 
@@ -75,7 +74,6 @@ export function useDeletePolicy() {
       qc.invalidateQueries({ queryKey: ['policies'] });
       toast.success('Policy deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete policy')),
   });
 }
 
@@ -96,7 +94,6 @@ export function usePublishPolicy() {
       qc.invalidateQueries({ queryKey: ['policies', v.id] });
       toast.success('Policy published');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to publish')),
   });
 }
 
@@ -109,7 +106,6 @@ export function useArchivePolicy() {
       qc.invalidateQueries({ queryKey: ['policies', v] });
       toast.success('Policy archived');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to archive')),
   });
 }
 
@@ -122,7 +118,6 @@ export function useRestorePolicy() {
       qc.invalidateQueries({ queryKey: ['policies', v] });
       toast.success('Policy restored');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to restore')),
   });
 }
 
@@ -136,7 +131,6 @@ export function useAcknowledgePolicy() {
       qc.invalidateQueries({ queryKey: ['policies', v.id, 'acknowledgements'] });
       toast.success('Acknowledged');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to acknowledge')),
   });
 }
 
@@ -145,11 +139,14 @@ export function useUploadPolicyAttachment() {
   return useMutation({
     mutationFn: ({ id, file }: { id: string; file: File }) =>
       hrPoliciesApi.uploadAttachment(id, file),
+    // Its own words for an upload's failures (a proxy 413, a connection cut
+    // mid-upload) instead of the global toast — still one toast per failure.
+    meta: { silent: true },
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['policies', v.id] });
       toast.success('Attachment uploaded');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to upload attachment')),
+    onError: (e) => toast.error(uploadErrMsg(e, 'Failed to upload attachment')),
   });
 }
 
@@ -162,6 +159,5 @@ export function useDeletePolicyAttachment() {
       qc.invalidateQueries({ queryKey: ['policies', v.id] });
       toast.success('Attachment removed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to remove attachment')),
   });
 }

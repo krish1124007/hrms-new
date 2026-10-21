@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { Marker, Popup } from 'react-leaflet';
 import { MapPin, Radio, RefreshCw, Route, Users } from 'lucide-react';
@@ -14,6 +14,19 @@ import { repIcon } from './map-icons';
 const STALE_MS = 15 * 60_000;
 
 const isStale = (r: LiveLocation, now: number): boolean => now - new Date(r.recordedAt).getTime() > STALE_MS;
+
+/** How often "last seen …" and the grey (stale) markers are re-evaluated. */
+export const LIVE_CLOCK_MS = 30_000;
+
+/** The current time, re-read every `ms` — so ages and staleness move on without new data. */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+  return now;
+}
 
 function StatusBadge({ status, reason }: { status: string; reason?: string }): ReactElement {
   if (status === 'live') {
@@ -43,7 +56,8 @@ function StatusBadge({ status, reason }: { status: string; reason?: string }): R
 export function LiveMap({ height = 520 }: { height?: number | string }): ReactElement {
   const { reps, status, reason, isLoading, error, dataUpdatedAt } = useLiveLocations();
   const [selected, setSelected] = useState<string | null>(null);
-  const now = dataUpdatedAt || Date.now();
+  const tick = useNow(LIVE_CLOCK_MS);
+  const now = Math.max(tick, dataUpdatedAt);
 
   const coords = useMemo(() => reps.map((r) => [r.lat, r.lng] as [number, number]), [reps]);
   // Re-fit when reps join or leave, not when one of them moves.
@@ -85,7 +99,7 @@ export function LiveMap({ height = 520 }: { height?: number | string }): ReactEl
                   <div className="text-sm font-semibold">{r.name}</div>
                   {r.employeeCode && <div className="text-gray-500">{r.employeeCode}</div>}
                   <div>
-                    Updated {formatTime(r.recordedAt)} ({formatRelative(r.recordedAt)})
+                    Updated {formatTime(r.recordedAt)} ({formatRelative(r.recordedAt, { now: new Date(now) })})
                   </div>
                   {r.accuracy != null && <div>Accuracy ±{Math.round(r.accuracy)} m</div>}
                   {r.battery != null && <div>Battery {Math.round(r.battery)}%</div>}
@@ -124,7 +138,7 @@ export function LiveMap({ height = 520 }: { height?: number | string }): ReactEl
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-medium">{r.name}</span>
                     <span className={cn('text-xs', stale ? 'text-muted-foreground' : 'text-success')}>
-                      {formatRelative(r.recordedAt)}
+                      {formatRelative(r.recordedAt, { now: new Date(now) })}
                     </span>
                   </div>
                   {r.employeeCode && <div className="text-xs text-muted-foreground">{r.employeeCode}</div>}
@@ -136,7 +150,7 @@ export function LiveMap({ height = 520 }: { height?: number | string }): ReactEl
                   )}
                   <Link
                     to={`/field/trail?employeeId=${encodeURIComponent(r.employeeId)}&date=${today}`}
-                    className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary dark:text-blue-400 hover:underline"
+                    className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <Route className="size-3" />

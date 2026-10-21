@@ -82,7 +82,7 @@ export default function FieldDashboardPage(): ReactElement {
       <div className="grid gap-4 md:grid-cols-3">
         {canManage && (
           <Link to="/field/tracking" className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
-            <Radar className="mb-2 size-5 text-primary dark:text-blue-400" />
+            <Radar className="mb-2 size-5 text-primary" />
             <div className="font-medium">Live map</div>
             <div className="text-xs text-muted-foreground">Where every rep is right now</div>
           </Link>
@@ -91,12 +91,12 @@ export default function FieldDashboardPage(): ReactElement {
           to={`/field/trail?date=${today}`}
           className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40"
         >
-          <Route className="mb-2 size-5 text-primary dark:text-blue-400" />
+          <Route className="mb-2 size-5 text-primary" />
           <div className="font-medium">Trails</div>
           <div className="text-xs text-muted-foreground">Replay a rep&apos;s route for any day</div>
         </Link>
         <Link to="/field/clients/map" className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
-          <MapIcon className="mb-2 size-5 text-primary dark:text-blue-400" />
+          <MapIcon className="mb-2 size-5 text-primary" />
           <div className="font-medium">Client map</div>
           <div className="text-xs text-muted-foreground">Clients by location and category</div>
         </Link>

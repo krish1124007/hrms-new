@@ -18,17 +18,38 @@ export const tokenStorage = {
   },
 };
 
+/**
+ * How long a request may take before it fails with `ECONNABORTED` — without
+ * one a stalled request spins forever and its form can never be retried.
+ * (Money writes carry an `Idempotency-Key`, so retrying after a timeout that
+ * went through replays the first result instead of booking twice.)
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+/** File uploads and downloads (photos, documents, imports, backups) get longer. */
+export const TRANSFER_TIMEOUT_MS = 5 * 60_000;
+
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: { 'Content-Type': 'application/json' },
 });
+
+/** A request that moves a file: a multipart body or a binary response. */
+function isTransfer(config: InternalAxiosRequestConfig): boolean {
+  return (
+    (typeof FormData !== 'undefined' && config.data instanceof FormData) ||
+    config.responseType === 'blob' ||
+    config.responseType === 'arraybuffer'
+  );
+}
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = tokenStorage.getAccess();
   if (token) {
     config.headers.set('Authorization', `Bearer ${token}`);
   }
+  if (config.timeout === REQUEST_TIMEOUT_MS && isTransfer(config)) config.timeout = TRANSFER_TIMEOUT_MS;
   return config;
 });
 

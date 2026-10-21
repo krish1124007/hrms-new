@@ -5,8 +5,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { io } from 'socket.io-client';
 import { fieldApi, type LiveLocation } from '@/lib/field.api';
-import { LIVE_POLL_MS } from '@/hooks/use-live-locations';
-import { LiveMap } from './LiveMap';
+import { LIVE_POLL_MS, mergePolledLocations } from '@/hooks/use-live-locations';
+import { LIVE_CLOCK_MS, LiveMap } from './LiveMap';
 
 // Leaflet needs a real layout engine; the map itself is not under test here,
 // only which markers LiveMap asks it to draw.
@@ -28,7 +28,13 @@ vi.mock('react-leaflet', () => ({
   ),
   Popup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Tooltip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  useMap: () => ({ fitBounds: vi.fn(), setView: vi.fn(), getZoom: () => 5 }),
+  useMap: () => ({
+    fitBounds: vi.fn(),
+    setView: vi.fn(),
+    getZoom: () => 5,
+    getContainer: () => document.createElement('div'),
+    invalidateSize: vi.fn(),
+  }),
 }));
 
 type Handler = (...args: unknown[]) => void;
@@ -124,8 +130,10 @@ describe('LiveMap', () => {
     renderMap();
     await screen.findAllByTestId('marker');
     expect(ioMock).toHaveBeenCalledTimes(1);
-    const [url, opts] = ioMock.mock.calls[0] as [string, { auth: unknown }];
+    const [url, opts] = ioMock.mock.calls[0] as [string, { auth: unknown; tryAllTransports?: boolean }];
     expect(url).toMatch(/\/field-tracking$/);
+    // Falls back to long-polling where WebSockets are blocked.
+    expect(opts.tryAllTransports).toBe(true);
     // A callback, so every reconnect reads the current (possibly refreshed) token.
     const auth = opts.auth as (cb: (data: object) => void) => void;
     const cb = vi.fn();
@@ -215,5 +223,59 @@ describe('LiveMap', () => {
     });
     expect(LIVE_POLL_MS).toBe(30_000);
     expect(liveTracking.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('moves "last seen" on and greys a rep out with the 30 s clock, without new data', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const now = Date.now();
+    liveTracking.mockResolvedValue({
+      success: true,
+      data: [rep({ employeeId: 'e1', name: 'Ravi Kumar', recordedAt: new Date(now - 14 * 60_000).toISOString() })],
+    });
+    renderMap();
+    const list = screen.getByTestId('rep-list');
+    const age = await within(list).findByText('14 minutes ago');
+    expect(age).toHaveClass('text-success');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * LIVE_CLOCK_MS + 50);
+    });
+    const later = within(list).getByText('16 minutes ago');
+    expect(later).toHaveClass('text-muted-foreground'); // stale after 15 min
+  });
+});
+
+describe('mergePolledLocations', () => {
+  const t = (min: number): string => new Date(Date.UTC(2026, 9, 21, 6, min)).toISOString();
+
+  it('keeps a newer socket position over an older polled one, with the poll’s details', () => {
+    const shown = [rep({ employeeId: 'e1', name: 'Ravi', lat: 20, lng: 73, recordedAt: t(10) })];
+    const polled = [
+      rep({
+        employeeId: 'e1',
+        name: 'Ravi',
+        lat: 19,
+        lng: 72,
+        recordedAt: t(5),
+        battery: 40,
+        onVisit: { visitId: 'v1', clientId: 'c1', clientName: 'Acme' },
+      }),
+    ];
+    const [merged] = mergePolledLocations(shown, polled, Date.parse(t(9)));
+    expect(merged).toMatchObject({ lat: 20, lng: 73, recordedAt: t(10), battery: 40, onVisit: { clientName: 'Acme' } });
+  });
+
+  it('takes the polled point when it is newer, drops reps the poll no longer lists, keeps ones added meanwhile', () => {
+    const shown = [
+      rep({ employeeId: 'e1', name: 'Ravi', lat: 20, recordedAt: t(1) }),
+      rep({ employeeId: 'gone', name: 'Silent', recordedAt: t(0) }),
+      rep({ employeeId: 'new', name: 'Asha', recordedAt: t(12) }),
+    ];
+    const polled = [rep({ employeeId: 'e1', name: 'Ravi', lat: 21, recordedAt: t(11) })];
+    const merged = mergePolledLocations(shown, polled, Date.parse(t(11)));
+    expect(merged.map((r) => [r.employeeId, r.lat])).toEqual([
+      ['new', 19],
+      ['e1', 21],
+    ]);
   });
 });

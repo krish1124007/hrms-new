@@ -1,6 +1,6 @@
 import { type ReactElement } from 'react';
 import { Mail, Phone, Globe, Clock, LifeBuoy, ChevronRight } from 'lucide-react';
-import { APP_NAME, COMPANY_NAME, SUPPORT_EMAIL } from '@/config/brand';
+import { APP_NAME, COMPANY_NAME, SUPPORT_EMAIL, SUPPORT_PHONE } from '@/config/brand';
 
 /**
  * Public, no-auth support page for the mobile app and the web dashboard.
@@ -10,13 +10,14 @@ import { APP_NAME, COMPANY_NAME, SUPPORT_EMAIL } from '@/config/brand';
  * layout, no auth store) so app-store reviewers and end users can open it
  * directly.
  *
- * Names come from `config/brand.ts`; the e-mail from `VITE_SUPPORT_EMAIL`.
+ * Names come from `config/brand.ts`; the e-mail and phone from
+ * `VITE_SUPPORT_EMAIL` / `VITE_SUPPORT_PHONE`.
  */
 const CONTACT = {
   appName: APP_NAME,
   company: COMPANY_NAME,
   email: SUPPORT_EMAIL,
-  phone: '+91 92130 17921',
+  phone: SUPPORT_PHONE,
   website: 'https://hrms.ddipl.org',
   hours: 'Monday – Saturday, 10:00 AM – 6:00 PM IST',
 };

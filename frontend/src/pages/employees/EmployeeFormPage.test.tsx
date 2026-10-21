@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { purgeLegacyStorage } from '@/lib/legacy-storage';
 import EmployeeFormPage from './EmployeeFormPage';
 
 const createMutate = vi.fn();
@@ -69,6 +70,8 @@ describe('EmployeeFormPage draft', () => {
     localStorage.setItem(DRAFT_KEY, legacy);
     sessionStorage.setItem(DRAFT_KEY, legacy);
 
+    // App start-up (`main.tsx`) purges the localStorage copy once.
+    purgeLegacyStorage();
     renderPage();
 
     expect(await screen.findByDisplayValue('Ravi')).toBeInTheDocument();
@@ -76,6 +79,19 @@ describe('EmployeeFormPage draft', () => {
     expect(screen.getByLabelText('Login password')).toHaveValue('');
     expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
     await waitFor(() => expect(sessionStorage.getItem(DRAFT_KEY) ?? '').not.toContain('1234567890'));
+  });
+
+  it('"Discard draft" leaves no draft behind — not even an empty one', async () => {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ firstName: 'Ravi' }));
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByDisplayValue('Ravi')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /discard draft/i }));
+
+    await waitFor(() => expect(screen.queryByDisplayValue('Ravi')).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
   });
 
   it('says why Next does not move on', async () => {

@@ -5,22 +5,32 @@ import {
   type CheckInInput,
   type CheckOutInput,
   type FieldClientInput,
+  type FieldClientUpdate,
   type FieldTaskInput,
+  type FieldTaskUpdate,
   type OrderLineInput,
   type OrderStatusChange,
   type PaymentCollectionInput,
   type ProductInput,
   type ProductOrderInput,
+  type ProductUpdate,
   type SalesTargetInput,
+  type SalesTargetUpdate,
   type TargetType,
   type VisitInput,
 } from '@/lib/field.api';
-import { apiErrorMessage } from '@/lib/api-error';
 import { usePermissions } from '@/hooks/use-permissions';
 import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
 
-const errMsg = (err: unknown, fallback: string): string => apiErrorMessage(err, fallback);
+/*
+ * Mutation failures are toasted once, by the global handler
+ * (`lib/query-client.ts`) — never again here.
+ */
+
+/** `useIsMutating` keys of the money writes, so their dialogs can refuse to close mid-request. */
+export const CREATE_ORDER_MUTATION_KEY = ['field-order-create'] as const;
+export const CREATE_PAYMENT_MUTATION_KEY = ['field-payment-create'] as const;
 
 /** `field-sales.manage` — sees and acts on every rep's records. */
 export function useCanManageField(): boolean {
@@ -85,18 +95,16 @@ export function useCreateProduct() {
       invalidateProducts(qc);
       toast.success('Product added');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to add product')),
   });
 }
 export function useUpdateProduct() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; input: Partial<ProductInput> }) => fieldApi.updateProduct(vars.id, vars.input),
+    mutationFn: (vars: { id: string; input: ProductUpdate }) => fieldApi.updateProduct(vars.id, vars.input),
     onSuccess: () => {
       invalidateProducts(qc);
       toast.success('Product updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update product')),
   });
 }
 export function useDeleteProduct() {
@@ -107,7 +115,6 @@ export function useDeleteProduct() {
       invalidateProducts(qc);
       toast.success('Product removed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to remove product')),
   });
 }
 
@@ -140,18 +147,16 @@ export function useCreateFieldClient() {
       invalidateClients(qc);
       toast.success('Client created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create client')),
   });
 }
 export function useUpdateFieldClient() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; input: Partial<FieldClientInput> }) => fieldApi.updateClient(vars.id, vars.input),
+    mutationFn: (vars: { id: string; input: FieldClientUpdate }) => fieldApi.updateClient(vars.id, vars.input),
     onSuccess: () => {
       invalidateClients(qc);
       toast.success('Client updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update client')),
   });
 }
 export function useDeleteFieldClient() {
@@ -162,7 +167,6 @@ export function useDeleteFieldClient() {
       invalidateClients(qc);
       toast.success('Client deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete client')),
   });
 }
 
@@ -198,7 +202,6 @@ export function useCreateVisit() {
       invalidateVisits(qc);
       toast.success('Visit planned');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to plan visit')),
   });
 }
 export function useCheckIn() {
@@ -207,7 +210,9 @@ export function useCheckIn() {
     mutationFn: (input: CheckInInput) => fieldApi.checkIn(input),
     onSuccess: (res) => {
       invalidateVisits(qc);
-      if (res.data.locationMismatch) {
+      if (res.data.locationMissing) {
+        toast.warning('Checked in without a location — the visit is flagged for your manager');
+      } else if (res.data.locationMismatch) {
         const d = res.data.distanceFromClientM;
         toast.warning(
           d != null
@@ -218,7 +223,6 @@ export function useCheckIn() {
         toast.success('Checked in');
       }
     },
-    onError: (e) => toast.error(errMsg(e, 'Check-in failed')),
   });
 }
 export function useCheckOut() {
@@ -229,7 +233,6 @@ export function useCheckOut() {
       invalidateVisits(qc);
       toast.success('Checked out');
     },
-    onError: (e) => toast.error(errMsg(e, 'Check-out failed')),
   });
 }
 export function useCancelVisit() {
@@ -240,7 +243,6 @@ export function useCancelVisit() {
       invalidateVisits(qc);
       toast.success('Visit cancelled');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to cancel visit')),
   });
 }
 export function useDeleteVisit() {
@@ -251,13 +253,11 @@ export function useDeleteVisit() {
       invalidateVisits(qc);
       toast.success('Visit deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete visit')),
   });
 }
 export function useUploadFieldPhoto() {
   return useMutation({
     mutationFn: (file: File) => fieldApi.uploadPhoto(file),
-    onError: (e) => toast.error(errMsg(e, 'Photo upload failed')),
   });
 }
 
@@ -281,18 +281,16 @@ export function useCreateFieldTask() {
       invalidateTasks(qc);
       toast.success('Task assigned');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create task')),
   });
 }
 export function useUpdateFieldTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; input: Partial<FieldTaskInput> }) => fieldApi.updateTask(vars.id, vars.input),
+    mutationFn: (vars: { id: string; input: FieldTaskUpdate }) => fieldApi.updateTask(vars.id, vars.input),
     onSuccess: () => {
       invalidateTasks(qc);
       toast.success('Task updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update task')),
   });
 }
 export function useDeleteFieldTask() {
@@ -303,7 +301,6 @@ export function useDeleteFieldTask() {
       invalidateTasks(qc);
       toast.success('Task deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete task')),
   });
 }
 export function useAcceptFieldTask() {
@@ -314,7 +311,6 @@ export function useAcceptFieldTask() {
       invalidateTasks(qc);
       toast.success('Task accepted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to accept task')),
   });
 }
 export function useCompleteFieldTask() {
@@ -326,7 +322,6 @@ export function useCompleteFieldTask() {
       invalidateTasks(qc);
       toast.success('Task completed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to complete task')),
   });
 }
 
@@ -357,19 +352,16 @@ export function useCreateTarget() {
       invalidateTargets(qc);
       toast.success('Target set');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to set target')),
   });
 }
 export function useUpdateTarget() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; input: Partial<Omit<SalesTargetInput, 'employeeId'>> }) =>
-      fieldApi.updateTarget(vars.id, vars.input),
+    mutationFn: (vars: { id: string; input: SalesTargetUpdate }) => fieldApi.updateTarget(vars.id, vars.input),
     onSuccess: () => {
       invalidateTargets(qc);
       toast.success('Target updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update target')),
   });
 }
 export function useDeleteTarget() {
@@ -380,7 +372,6 @@ export function useDeleteTarget() {
       invalidateTargets(qc);
       toast.success('Target deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete target')),
   });
 }
 
@@ -415,13 +406,13 @@ export function useOrderReport(params?: { from?: string; to?: string }) {
 export function useCreateFieldOrder() {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: CREATE_ORDER_MUTATION_KEY,
     mutationFn: (vars: { input: ProductOrderInput; idempotencyKey: string }) =>
       fieldApi.createOrder(vars.input, vars.idempotencyKey),
     onSuccess: (res) => {
       invalidateOrders(qc);
       toast.success(`Order ${res.data.orderNumber} placed`);
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to place order')),
   });
 }
 export function useUpdateFieldOrder() {
@@ -433,7 +424,6 @@ export function useUpdateFieldOrder() {
       invalidateOrders(qc);
       toast.success('Order updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update order')),
   });
 }
 const STATUS_DONE: Record<OrderStatusChange, string> = {
@@ -449,7 +439,6 @@ export function useUpdateOrderStatus() {
       invalidateOrders(qc);
       toast.success(STATUS_DONE[vars.status]);
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update order')),
   });
 }
 export function useDeleteFieldOrder() {
@@ -460,7 +449,6 @@ export function useDeleteFieldOrder() {
       invalidateOrders(qc);
       toast.success('Order deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete order')),
   });
 }
 
@@ -493,16 +481,23 @@ export function useOutstandingReport(params?: { page?: number; limit?: number; s
 export function useCreatePayment() {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: CREATE_PAYMENT_MUTATION_KEY,
     mutationFn: (vars: { input: PaymentCollectionInput; idempotencyKey: string }) =>
       fieldApi.createPayment(vars.input, vars.idempotencyKey),
     onSuccess: (res) => {
       invalidatePayments(qc);
       toast.success(`Payment recorded — receipt ${res.data.receiptNumber}`);
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to record payment')),
   });
 }
-function paymentAction(fn: (id: string) => Promise<unknown>, done: string, failed: string) {
+/**
+ * One status step or delete on a payment. A refusal (409
+ * `INVALID_STATUS_TRANSITION` — someone moved it meanwhile; 400 `OVERPAYMENT`
+ * — the order has no room to take a bounce back) is toasted by the global
+ * handler with the server's message, and the list is re-read so the row
+ * stops offering a dead action.
+ */
+function paymentAction(fn: (id: string) => Promise<unknown>, done: string) {
   return function usePaymentAction() {
     const qc = useQueryClient();
     return useMutation({
@@ -511,14 +506,15 @@ function paymentAction(fn: (id: string) => Promise<unknown>, done: string, faile
         invalidatePayments(qc);
         toast.success(done);
       },
-      onError: (e) => toast.error(errMsg(e, failed)),
+      onError: () => invalidatePayments(qc),
     });
   };
 }
-export const useDepositPayment = paymentAction((id) => fieldApi.depositPayment(id), 'Marked as deposited', 'Failed to mark deposited');
-export const useVerifyPayment = paymentAction((id) => fieldApi.verifyPayment(id), 'Payment verified', 'Failed to verify');
-export const useBouncePayment = paymentAction((id) => fieldApi.markPaymentBounced(id), 'Marked as bounced', 'Failed to update payment');
-export const useDeletePayment = paymentAction((id) => fieldApi.deletePayment(id), 'Payment deleted', 'Failed to delete payment');
+export const useVerifyPayment = paymentAction((id) => fieldApi.verifyPayment(id), 'Payment verified');
+export const useDepositPayment = paymentAction((id) => fieldApi.depositPayment(id), 'Marked as deposited');
+export const useBouncePayment = paymentAction((id) => fieldApi.markPaymentBounced(id), 'Marked as bounced');
+export const useUnbouncePayment = paymentAction((id) => fieldApi.takeBackBounce(id), 'Bounce taken back — the payment counts again');
+export const useDeletePayment = paymentAction((id) => fieldApi.deletePayment(id), 'Payment deleted');
 
 /* ── Tracking ── */
 export function useTrail(employeeId: string | undefined, date: string) {

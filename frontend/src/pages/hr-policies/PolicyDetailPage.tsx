@@ -172,8 +172,13 @@ export default function PolicyDetailPage(): ReactElement {
   const onAttachmentSelected = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = e.target.files?.[0];
     if (!file) return;
-    await uploadAttachment.mutateAsync({ id: p._id, file });
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    try {
+      await uploadAttachment.mutateAsync({ id: p._id, file });
+    } catch {
+      // The upload hook has told the user why.
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
   const onDeleteAttachment = (attachmentId: string, name: string): void => {
     if (!confirm(`Remove attachment "${name}"?`)) return;

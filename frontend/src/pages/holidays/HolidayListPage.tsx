@@ -31,6 +31,7 @@ import type { Holiday } from '@/lib/systemcore.api';
 import { cn } from '@/lib/utils';
 import { usePermissions } from '@/hooks/use-permissions';
 import { businessDayKey } from '@/lib/business-day';
+import { formatDate } from '@/lib/format';
 import { HolidayImportDialog } from './HolidayImportDialog';
 
 const schema = z.object({
@@ -155,7 +156,7 @@ export default function HolidayListPage(): ReactElement {
     {
       key: 'date',
       header: 'Date',
-      cell: (h) => new Date(h.date).toLocaleDateString('en-IN', { dateStyle: 'medium' }),
+      cell: (h) => formatDate(h.date),
     },
     {
       key: 'type',

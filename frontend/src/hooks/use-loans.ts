@@ -2,10 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { loansApi, type LoanInput } from '@/lib/loans.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 export function useLoans(params?: Record<string, unknown>) {
   return useQuery({ queryKey: ['loans', params], queryFn: () => loansApi.list(params) });
@@ -31,7 +27,6 @@ export function useCreateLoan() {
       qc.invalidateQueries({ queryKey: ['loans'] });
       toast.success('Loan application created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create loan')),
   });
 }
 
@@ -45,7 +40,6 @@ export function useUpdateLoan() {
       qc.invalidateQueries({ queryKey: ['loans', v.id] });
       toast.success('Loan updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update loan')),
   });
 }
 
@@ -57,7 +51,6 @@ export function useDeleteLoan() {
       qc.invalidateQueries({ queryKey: ['loans'] });
       toast.success('Loan deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete loan')),
   });
 }
 
@@ -71,7 +64,6 @@ export function useApproveLoan() {
       qc.invalidateQueries({ queryKey: ['loans', v.id] });
       toast.success('Loan approved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to approve loan')),
   });
 }
 
@@ -85,7 +77,6 @@ export function useRejectLoan() {
       qc.invalidateQueries({ queryKey: ['loans', v.id] });
       toast.success('Loan rejected');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reject loan')),
   });
 }
 
@@ -106,7 +97,6 @@ export function useDisburseLoan() {
       qc.invalidateQueries({ queryKey: ['loans', v.id] });
       toast.success('Loan disbursed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to disburse')),
   });
 }
 
@@ -131,7 +121,6 @@ export function useRecordLoanPayment() {
       qc.invalidateQueries({ queryKey: ['loans', v.id] });
       toast.success('Payment recorded');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to record payment')),
   });
 }
 

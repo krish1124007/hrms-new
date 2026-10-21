@@ -131,11 +131,10 @@ function readDraft(): Record<string, unknown> | null {
 }
 
 function clearDraft(): void {
+  // (The full-form copy older builds kept in localStorage is purged once at
+  // startup — `lib/legacy-storage.ts`.)
   try {
     sessionStorage.removeItem(DRAFT_KEY);
-    // Older builds kept the whole form — passwords and bank details included —
-    // in localStorage; make sure that copy is gone.
-    localStorage.removeItem(DRAFT_KEY);
   } catch {
     /* storage unavailable */
   }
@@ -204,6 +203,7 @@ export default function EmployeeFormPage(): ReactElement {
     reset,
     trigger,
     setValue,
+    getValues,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema) as unknown as Resolver<FormValues>,
@@ -279,8 +279,10 @@ export default function EmployeeFormPage(): ReactElement {
   const submitted = useRef(false);
   useEffect(() => {
     if (isEdit) return;
-    const sub = watch((vals) => {
-      if (submitted.current) return;
+    const sub = watch((vals, { name }) => {
+      // Only edits of a field are a draft: a `reset()` (restoring a draft,
+      // "Discard draft") has no field name and must not write one back.
+      if (submitted.current || !name) return;
       try {
         sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draftOf(vals as Record<string, unknown>)));
       } catch {
@@ -294,14 +296,14 @@ export default function EmployeeFormPage(): ReactElement {
   const [draftRestored, setDraftRestored] = useState(false);
   useEffect(() => {
     if (isEdit) return;
-    // Drop any full-form draft an older build left in localStorage.
-    try {
-      localStorage.removeItem(DRAFT_KEY);
-    } catch {
-      /* storage unavailable */
-    }
     const draft = readDraft();
     if (draft) {
+      // Keep only the cleaned copy (an older build's draft may hold secrets).
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      } catch {
+        /* storage unavailable */
+      }
       reset({ ...FORM_DEFAULTS, ...(draft as Partial<FormValues>) });
       setDraftRestored(true);
     }
@@ -309,7 +311,13 @@ export default function EmployeeFormPage(): ReactElement {
 
   const discardDraft = (): void => {
     clearDraft();
-    reset();
+    // To the blank form. A bare reset() would go back to the restored draft
+    // (RHF makes the last reset's values the new defaults), and fields
+    // FORM_DEFAULTS does not name would keep what the draft filled in.
+    const blank = Object.fromEntries(
+      Object.entries(getValues()).map(([k, v]) => [k, typeof v === 'boolean' ? false : '']),
+    );
+    reset({ ...blank, ...FORM_DEFAULTS } as FormValues);
     setDraftRestored(false);
     setStep(1);
   };

@@ -12,10 +12,6 @@ import {
   type RegularizationStatus,
 } from '@/lib/attendance.api';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 /* ── Config ── */
 export function useAttendanceConfig() {
@@ -32,7 +28,6 @@ export function useUpdateAttendanceConfig() {
       qc.invalidateQueries({ queryKey: ['attendance-config'] });
       toast.success('Attendance settings saved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to save settings')),
   });
 }
 
@@ -71,11 +66,8 @@ export function useCheckIn() {
       invalidateAllAttendance(qc);
       toast.success('Checked in successfully');
     },
-    onError: (e: any) => {
-      if (e?.response?.data?.error?.code !== 'LOCATION_REQUIRED') {
-        toast.error(errMsg(e, 'Check-in failed'));
-      }
-    },
+    // Failures are toasted once by the global mutation handler, which leaves
+    // LOCATION_REQUIRED to the caller's location help.
   });
 }
 export function useCheckOut() {
@@ -86,14 +78,9 @@ export function useCheckOut() {
       invalidateAllAttendance(qc);
       toast.success('Checked out successfully');
     },
-    onError: (e: any) => {
-      // LOCATION_REQUIRED opens the location help and EXPENSE_REQUIRED_FOR_CHECKOUT
-      // today's expense form (both in the caller), so neither is an error toast.
-      const code = e?.response?.data?.error?.code;
-      if (code !== 'LOCATION_REQUIRED' && code !== 'EXPENSE_REQUIRED_FOR_CHECKOUT') {
-        toast.error(errMsg(e, 'Check-out failed'));
-      }
-    },
+    // Failures are toasted once by the global mutation handler. It skips
+    // LOCATION_REQUIRED (the caller opens the location help) and
+    // EXPENSE_REQUIRED_FOR_CHECKOUT (the caller opens today's expense form).
   });
 }
 export function useStartBreak() {
@@ -101,7 +88,6 @@ export function useStartBreak() {
   return useMutation({
     mutationFn: (type: BreakType) => attendanceApi.startBreak(type),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['attendance-today'] }),
-    onError: (e) => toast.error(errMsg(e, 'Failed to start break')),
   });
 }
 export function useEndBreak() {
@@ -109,7 +95,6 @@ export function useEndBreak() {
   return useMutation({
     mutationFn: () => attendanceApi.endBreak(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['attendance-today'] }),
-    onError: (e) => toast.error(errMsg(e, 'Failed to end break')),
   });
 }
 
@@ -164,7 +149,6 @@ export function useRequestRegularization() {
       qc.invalidateQueries({ queryKey: ['attendance-regularizations'] });
       toast.success('Regularization requested');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to request regularization')),
   });
 }
 
@@ -215,7 +199,6 @@ export function useCreateSite() {
       qc.invalidateQueries({ queryKey: ['attendance-sites'] });
       toast.success('Site created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create site')),
   });
 }
 export function useUpdateSite() {
@@ -227,7 +210,6 @@ export function useUpdateSite() {
       qc.invalidateQueries({ queryKey: ['attendance-sites'] });
       toast.success('Site updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update site')),
   });
 }
 export function useDeleteSite() {
@@ -238,7 +220,6 @@ export function useDeleteSite() {
       qc.invalidateQueries({ queryKey: ['attendance-sites'] });
       toast.success('Site deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete site')),
   });
 }
 
@@ -257,7 +238,6 @@ export function useCreateGeofence() {
       qc.invalidateQueries({ queryKey: ['attendance-geofences'] });
       toast.success('Geofence created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create geofence')),
   });
 }
 export function useUpdateGeofence() {
@@ -269,7 +249,6 @@ export function useUpdateGeofence() {
       qc.invalidateQueries({ queryKey: ['attendance-geofences'] });
       toast.success('Geofence updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update geofence')),
   });
 }
 export function useDeleteGeofence() {
@@ -280,7 +259,6 @@ export function useDeleteGeofence() {
       qc.invalidateQueries({ queryKey: ['attendance-geofences'] });
       toast.success('Geofence deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete geofence')),
   });
 }
 
@@ -300,7 +278,6 @@ export function useCreateQRCode() {
       qc.invalidateQueries({ queryKey: ['attendance-qr'] });
       toast.success('QR code created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create QR code')),
   });
 }
 export function useDeleteQRCode() {
@@ -311,7 +288,6 @@ export function useDeleteQRCode() {
       qc.invalidateQueries({ queryKey: ['attendance-qr'] });
       toast.success('QR code deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete QR code')),
   });
 }
 
@@ -330,7 +306,6 @@ export function useCreateAllowedIP() {
       qc.invalidateQueries({ queryKey: ['attendance-ips'] });
       toast.success('IP added');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to add IP')),
   });
 }
 /** HR correction of a mis-punched record (missing check-out, wrong time). */
@@ -352,7 +327,6 @@ export function useCorrectAttendanceRecord() {
       qc.invalidateQueries({ queryKey: ['attendance-monthly'] });
       toast.success('Attendance record updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Could not update the record')),
   });
 }
 
@@ -364,7 +338,6 @@ export function useDeleteAllowedIP() {
       qc.invalidateQueries({ queryKey: ['attendance-ips'] });
       toast.success('IP removed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to remove IP')),
   });
 }
 

@@ -35,9 +35,9 @@ import {
   useEscalateDisciplinary,
   useResolveDisciplinary,
 } from '@/hooks/use-disciplinary';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/axios';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { usePermissions } from '@/hooks/use-permissions';
+import type { Employee } from '@/lib/systemcore.api';
 import {
   DISCIPLINARY_SEVERITIES,
   DISCIPLINARY_TYPES,
@@ -56,23 +56,33 @@ const STATUS_VARIANT: Record<DisciplinaryStatus, 'default' | 'success' | 'warnin
   cancelled: 'secondary',
 };
 
-interface UserOption {
-  _id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
+interface EscalationTarget {
+  /** The person's user account — what `escalatedTo` names. */
+  userId: string;
+  name: string;
+  employeeCode?: string;
 }
 
-/** Escalation targets — loaded only when a manager opens the escalate dialog. */
-function useUsersForEscalation(enabled: boolean) {
-  return useQuery({
-    queryKey: ['users', 'escalation-list'],
-    queryFn: async (): Promise<{ data: UserOption[] }> => {
-      const res = await api.get('/users', { params: { limit: 100 } });
-      return res.data;
-    },
-    enabled,
+/** The user account behind an employee row (`userId` may come populated or as an id). */
+function userIdOf(e: Pick<Employee, 'userId'>): string | null {
+  const ref = e.userId;
+  if (!ref) return null;
+  return typeof ref === 'string' ? ref : ref._id;
+}
+
+/**
+ * Escalation targets: current employees who can sign in (they have a user
+ * account) — from the employee picker, which an HR manager may read, never
+ * `GET /users` (admin-only, so it answered 403). Loaded only when the
+ * escalate dialog opens.
+ */
+function useEscalationTargets(enabled: boolean): { targets: EscalationTarget[]; isLoading: boolean; error: unknown } {
+  const { data = [], isLoading, error } = useActiveEmployees({ enabled });
+  const targets = data.flatMap((e) => {
+    const userId = userIdOf(e);
+    return userId ? [{ userId, name: `${e.firstName} ${e.lastName}`.trim(), employeeCode: e.employeeId }] : [];
   });
+  return { targets, isLoading: enabled && isLoading, error };
 }
 
 const SEVERITY_VARIANT: Record<DisciplinarySeverity, 'success' | 'default' | 'warning' | 'destructive'> = {
@@ -100,8 +110,7 @@ export default function DisciplinaryDetailPage(): ReactElement {
   const canRecordAck = has('disciplinary.view');
 
   const [escOpen, setEscOpen] = useState(false);
-  const { data: usersData } = useUsersForEscalation(canManage && escOpen);
-  const users = usersData?.data ?? [];
+  const escalation = useEscalationTargets(canManage && escOpen);
 
   const [ackOpen, setAckOpen] = useState(false);
   const [ackNotes, setAckNotes] = useState('');
@@ -501,14 +510,23 @@ export default function DisciplinaryDetailPage(): ReactElement {
         <DialogBody className="space-y-3">
           <div>
             <Label htmlFor="esc-to">Escalate to *</Label>
-            <Select id="esc-to" value={escTo} onChange={(e) => setEscTo(e.target.value)}>
-              <option value="">Select a user</option>
-              {users.map((u) => (
-                <option key={u._id} value={u._id}>
-                  {u.firstName} {u.lastName} ({u.email})
+            <Select
+              id="esc-to"
+              value={escTo}
+              onChange={(e) => setEscTo(e.target.value)}
+              disabled={escalation.isLoading}
+            >
+              <option value="">{escalation.isLoading ? 'Loading people…' : 'Select a person'}</option>
+              {escalation.targets.map((t) => (
+                <option key={t.userId} value={t.userId}>
+                  {t.name}
+                  {t.employeeCode ? ` (${t.employeeCode})` : ''}
                 </option>
               ))}
             </Select>
+            {!!escalation.error && (
+              <p className="mt-1 text-xs text-destructive">Couldn&apos;t load the people to escalate to.</p>
+            )}
           </div>
           <div>
             <Label htmlFor="esc-reason">Reason *</Label>

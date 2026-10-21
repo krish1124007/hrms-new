@@ -9,10 +9,6 @@ import {
   type AllocateBalanceInput,
 } from '@/lib/leaves.api';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 /* ── Leave Types ── */
 export function useLeaveTypes(params?: Record<string, unknown>) {
@@ -36,7 +32,6 @@ export function useCreateLeaveType() {
       qc.invalidateQueries({ queryKey: ['leave-types'] });
       toast.success('Leave type created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create leave type')),
   });
 }
 export function useUpdateLeaveType() {
@@ -48,7 +43,6 @@ export function useUpdateLeaveType() {
       qc.invalidateQueries({ queryKey: ['leave-types'] });
       toast.success('Leave type updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update leave type')),
   });
 }
 export function useDeleteLeaveType() {
@@ -59,7 +53,6 @@ export function useDeleteLeaveType() {
       qc.invalidateQueries({ queryKey: ['leave-types'] });
       toast.success('Leave type deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete leave type')),
   });
 }
 
@@ -84,7 +77,6 @@ export function useAllocateLeaveBalances() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Leave balances allocated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to allocate balances')),
   });
 }
 export function useAdjustLeaveBalance() {
@@ -96,7 +88,6 @@ export function useAdjustLeaveBalance() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Balance adjusted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to adjust balance')),
   });
 }
 
@@ -124,7 +115,6 @@ export function useResetLeaveBalances() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success(`Used and carried-forward days for ${year} reset to 0`);
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reset balances')),
   });
 }
 
@@ -169,7 +159,6 @@ export function useApplyLeave() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Leave request submitted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to submit leave request')),
   });
 }
 export function useApproveLeave() {
@@ -181,7 +170,6 @@ export function useApproveLeave() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Leave approved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to approve leave')),
   });
 }
 export function useRejectLeave() {
@@ -193,7 +181,6 @@ export function useRejectLeave() {
       qc.invalidateQueries({ queryKey: ['leave-requests'] });
       toast.success('Leave rejected');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reject leave')),
   });
 }
 export function useCancelLeave() {
@@ -205,7 +192,6 @@ export function useCancelLeave() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Leave cancelled');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to cancel leave')),
   });
 }
 export function useDeleteLeaveRequest() {
@@ -217,7 +203,6 @@ export function useDeleteLeaveRequest() {
       qc.invalidateQueries({ queryKey: ['leave-balances'] });
       toast.success('Leave request deleted and balance restored');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete leave request')),
   });
 }
 export function useLeaveReports(year?: number) {

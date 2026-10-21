@@ -23,8 +23,26 @@ export function initials(name: string): string {
   return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?';
 }
 
-/** A round badge with the rep's initials; amber ring while on a visit, grey when stale. */
+const repIconCache = new Map<string, L.DivIcon>();
+const REP_ICON_CACHE_MAX = 500;
+
+/**
+ * A round badge with the rep's initials; amber ring while on a visit, grey
+ * when stale. Cached per look, so a re-render (a socket update, the clock
+ * tick) hands each marker the same icon object and Leaflet does not rebuild
+ * every marker's DOM.
+ */
 export function repIcon(name: string, opts: { onVisit?: boolean; stale?: boolean; selected?: boolean } = {}): L.DivIcon {
+  const key = `${initials(name)}|${opts.onVisit ? 1 : 0}${opts.stale ? 1 : 0}${opts.selected ? 1 : 0}`;
+  const hit = repIconCache.get(key);
+  if (hit) return hit;
+  if (repIconCache.size >= REP_ICON_CACHE_MAX) repIconCache.clear();
+  const icon = buildRepIcon(name, opts);
+  repIconCache.set(key, icon);
+  return icon;
+}
+
+function buildRepIcon(name: string, opts: { onVisit?: boolean; stale?: boolean; selected?: boolean }): L.DivIcon {
   const bg = opts.stale ? '#94a3b8' : opts.onVisit ? '#f59e0b' : '#2563eb';
   const ring = opts.selected ? '0 0 0 3px #0f172a' : '0 1px 4px rgba(0,0,0,.35)';
   return L.divIcon({

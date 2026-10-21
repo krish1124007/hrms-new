@@ -7,10 +7,6 @@ import {
   type ExpenseClaimInput,
 } from '@/lib/expense-claims.api';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 /* ── Categories ── */
 export function useExpenseCategories(params?: Record<string, unknown>) {
@@ -27,7 +23,6 @@ export function useCreateExpenseCategory() {
       qc.invalidateQueries({ queryKey: ['expense-categories'] });
       toast.success('Category created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create category')),
   });
 }
 export function useUpdateExpenseCategory() {
@@ -39,7 +34,6 @@ export function useUpdateExpenseCategory() {
       qc.invalidateQueries({ queryKey: ['expense-categories'] });
       toast.success('Category updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update category')),
   });
 }
 export function useDeleteExpenseCategory() {
@@ -50,7 +44,6 @@ export function useDeleteExpenseCategory() {
       qc.invalidateQueries({ queryKey: ['expense-categories'] });
       toast.success('Category deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete category')),
   });
 }
 
@@ -88,7 +81,6 @@ export function useCreateExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Expense claim submitted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to submit expense claim')),
   });
 }
 export function useUpdateExpenseClaim() {
@@ -100,7 +92,6 @@ export function useUpdateExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Claim updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update claim')),
   });
 }
 export function useDeleteExpenseClaim() {
@@ -111,7 +102,6 @@ export function useDeleteExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Claim deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete claim')),
   });
 }
 export function useApproveExpenseClaim() {
@@ -122,7 +112,6 @@ export function useApproveExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Claim approved');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to approve claim')),
   });
 }
 export function useRejectExpenseClaim() {
@@ -134,7 +123,6 @@ export function useRejectExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Claim rejected');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reject claim')),
   });
 }
 export function useReimburseExpenseClaim() {
@@ -146,7 +134,6 @@ export function useReimburseExpenseClaim() {
       qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Claim reimbursed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to reimburse claim')),
   });
 }
 export function useExpenseReports(year?: number) {

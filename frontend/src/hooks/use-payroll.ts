@@ -7,10 +7,6 @@ import {
   type RecordAdjustmentsInput,
 } from '@/lib/payroll.api';
 
-const errMsg = (err: unknown, fallback: string): string => {
-  const e = err as { response?: { data?: { error?: { message?: string } } } };
-  return e.response?.data?.error?.message ?? fallback;
-};
 
 /* ── Components ── */
 export function useSalaryComponents(params?: Record<string, unknown>) {
@@ -27,7 +23,6 @@ export function useCreateComponent() {
       qc.invalidateQueries({ queryKey: ['payroll-components'] });
       toast.success('Component created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create component')),
   });
 }
 export function useUpdateComponent() {
@@ -39,7 +34,6 @@ export function useUpdateComponent() {
       qc.invalidateQueries({ queryKey: ['payroll-components'] });
       toast.success('Component updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update component')),
   });
 }
 export function useDeleteComponent() {
@@ -50,7 +44,6 @@ export function useDeleteComponent() {
       qc.invalidateQueries({ queryKey: ['payroll-components'] });
       toast.success('Component deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete component')),
   });
 }
 
@@ -71,7 +64,6 @@ export function useCreateStructure() {
       qc.invalidateQueries({ queryKey: ['payroll-structures'] });
       toast.success('Structure created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create structure')),
   });
 }
 export function useUpdateStructure() {
@@ -83,7 +75,6 @@ export function useUpdateStructure() {
       qc.invalidateQueries({ queryKey: ['payroll-structures'] });
       toast.success('Structure updated');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to update structure')),
   });
 }
 export function useDeleteStructure() {
@@ -94,7 +85,6 @@ export function useDeleteStructure() {
       qc.invalidateQueries({ queryKey: ['payroll-structures'] });
       toast.success('Structure deleted');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to delete structure')),
   });
 }
 
@@ -122,7 +112,6 @@ export function useCreateCycle() {
       qc.invalidateQueries({ queryKey: ['payroll-cycles'] });
       toast.success('Cycle created');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to create cycle')),
   });
 }
 export function useProcessCycle() {
@@ -135,7 +124,6 @@ export function useProcessCycle() {
       qc.invalidateQueries({ queryKey: ['payroll-cycle-records', id] });
       toast.success('Payroll processed');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to process payroll')),
   });
 }
 export function useCycleRecords(cycleId: string | undefined) {
@@ -176,7 +164,6 @@ export function useGeneratePayslips() {
       invalidateCycle(qc, id);
       toast.success(`Generated ${d.data.generated} payslip(s)`);
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to generate payslips')),
   });
 }
 export function useLockCycle() {
@@ -187,7 +174,6 @@ export function useLockCycle() {
       invalidateCycle(qc, id);
       toast.success('Cycle locked');
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to lock cycle')),
   });
 }
 export function useMarkCyclePaid() {
@@ -210,7 +196,6 @@ export function useMarkCyclePaid() {
         toast.success('Cycle marked as paid');
       }
     },
-    onError: (e) => toast.error(errMsg(e, 'Failed to mark as paid')),
   });
 }
 

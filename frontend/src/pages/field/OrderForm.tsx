@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactElement } from 'react';
+import { useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
 import { PackagePlus, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { ClientPicker } from '@/components/field/ClientPicker';
 import { useDebounced } from '@/hooks/use-debounced';
 import { RepSelect } from '@/components/field/RepSelect';
 import { useCreateFieldOrder, useProducts, useRepSelectRequired } from '@/hooks/use-field';
+import { apiErrorCode } from '@/lib/api-error';
 import { newIdempotencyKey, type Product, type ProductOrder } from '@/lib/field.api';
 import { priceOrder } from '@/lib/order-pricing';
 import { formatCurrency } from '@/lib/format';
@@ -29,6 +30,12 @@ interface OrderFormProps {
   defaultClient?: { id: string; name: string };
   /** The rep's own visit to that client; the visit is marked "order placed". */
   visitId?: string;
+  /**
+   * The `Idempotency-Key`, owned by the caller so it outlives the form: kept
+   * until an order is placed, so a request that timed out but went through
+   * and is retried (even after closing and reopening) books one order.
+   */
+  idempotencyKey?: MutableRefObject<string>;
 }
 
 /**
@@ -37,7 +44,13 @@ interface OrderFormProps {
  * the server's formula and computed by the server on submit — the request
  * carries only `productId`, `quantity` and `discountPercent` per line.
  */
-export function OrderForm({ onDone, onCancel, defaultClient, visitId }: OrderFormProps): ReactElement {
+export function OrderForm({
+  onDone,
+  onCancel,
+  defaultClient,
+  visitId,
+  idempotencyKey: sharedKey,
+}: OrderFormProps): ReactElement {
   const [clientId, setClientId] = useState(defaultClient?.id ?? '');
   const [clientName, setClientName] = useState(defaultClient?.name ?? '');
   const [repId, setRepId] = useState('');
@@ -47,8 +60,9 @@ export function OrderForm({ onDone, onCancel, defaultClient, visitId }: OrderFor
   const [deliveryDate, setDeliveryDate] = useState('');
   const [search, setSearch] = useState('');
   const q = useDebounced(search.trim(), 250);
-  // One key per form: a double click or a network retry books one order.
-  const idempotencyKey = useRef(newIdempotencyKey());
+  // A double click or a network retry books one order.
+  const ownKey = useRef(newIdempotencyKey());
+  const idempotencyKey = sharedKey ?? ownKey;
 
   const { data: productsData, isLoading: productsLoading } = useProducts({
     search: q || undefined,
@@ -119,6 +133,12 @@ export function OrderForm({ onDone, onCancel, defaultClient, visitId }: OrderFor
           idempotencyKey.current = newIdempotencyKey();
           onDone(res.data);
         },
+        onError: (err) => {
+          // This key already booked a different order (a retry, after a
+          // timeout, with the lines changed): the global toast says so, and
+          // the next attempt gets a fresh key.
+          if (apiErrorCode(err) === 'IDEMPOTENCY_CONFLICT') idempotencyKey.current = newIdempotencyKey();
+        },
       },
     );
   };
@@ -176,7 +196,7 @@ export function OrderForm({ onDone, onCancel, defaultClient, visitId }: OrderFor
                     </span>
                     <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                       {money(p.price)} / {p.unit} · GST {p.gstRate}%
-                      <PackagePlus className="size-4 text-primary dark:text-blue-400" />
+                      <PackagePlus className="size-4 text-primary" />
                     </span>
                   </button>
                 </li>
@@ -302,7 +322,7 @@ export function OrderForm({ onDone, onCancel, defaultClient, visitId }: OrderFor
       </div>
 
       <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={onCancel}>
+        <Button variant="outline" onClick={onCancel} disabled={create.isPending}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={!valid} loading={create.isPending}>

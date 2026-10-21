@@ -11,7 +11,33 @@ interface MapCanvasProps {
   center?: [number, number];
   zoom?: number;
   className?: string;
+  /** Draw vector layers (routes) on one canvas instead of SVG nodes — for thousands of points. */
+  preferCanvas?: boolean;
   children?: ReactNode;
+}
+
+/**
+ * Leaflet measures its container once; when the box changes size later (a
+ * tab shown, the sidebar collapsed, the window resized) tiles stay grey
+ * until it is told to measure again.
+ */
+function InvalidateOnResize(): null {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => map.invalidateSize());
+    });
+    observer.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [map]);
+  return null;
 }
 
 /**
@@ -23,6 +49,7 @@ export function MapCanvas({
   center = INDIA_CENTER,
   zoom = INDIA_ZOOM,
   className,
+  preferCanvas = false,
   children,
 }: MapCanvasProps): ReactElement {
   return (
@@ -30,8 +57,15 @@ export function MapCanvas({
       className={cn('relative z-0 overflow-hidden rounded-lg border border-border', className)}
       style={{ height }}
     >
-      <MapContainer center={center} zoom={zoom} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
+      <MapContainer
+        center={center}
+        zoom={zoom}
+        style={{ height: '100%', width: '100%' }}
+        scrollWheelZoom
+        preferCanvas={preferCanvas}
+      >
         <TileLayer attribution={MAP_TILE_ATTRIBUTION} url={MAP_TILE_URL} />
+        <InvalidateOnResize />
         {children}
       </MapContainer>
     </div>

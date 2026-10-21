@@ -92,8 +92,6 @@ export default function ProfilePage(): ReactElement {
       setSession({ user: updated });
       toast.success('Profile updated');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to update profile'),
   });
 
   const changePassword = useMutation({
@@ -106,8 +104,6 @@ export default function ProfilePage(): ReactElement {
       clear();
       navigate('/login');
     },
-    onError: (err: { response?: { data?: { error?: { message?: string } } } }) =>
-      toast.error(err.response?.data?.error?.message ?? 'Failed to change password'),
   });
 
   const [showCurrent, setShowCurrent] = useState(false);

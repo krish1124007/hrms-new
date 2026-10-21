@@ -31,7 +31,9 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { apiErrorMessage } from '@/lib/api-error';
 import { usePermissions } from '@/hooks/use-permissions';
 import { getAnalytics, type AnalyticsData } from '@/lib/analytics.api';
 
@@ -48,12 +50,33 @@ function formatINR(amount: number, compact = false): string {
 }
 
 export default function OverviewPage(): ReactElement {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['analytics-overview'],
     queryFn: getAnalytics,
     staleTime: 60_000,
     refetchOnWindowFocus: true,
   });
+
+  // A failed load says so (with a retry) instead of spinning forever.
+  if (error && !data) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Analytics Overview"
+          description="Headcount, attendance and leave trends across the company"
+        />
+        <Card>
+          <CardContent className="flex h-64 flex-col items-center justify-center gap-3 text-center" role="alert">
+            <p className="font-medium">Couldn&apos;t load the analytics</p>
+            <p className="max-w-md text-sm text-muted-foreground">{apiErrorMessage(error)}</p>
+            <Button variant="outline" size="sm" onClick={() => void refetch()} loading={isFetching}>
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (isLoading || !data) {
     return (
