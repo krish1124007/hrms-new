@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactElement } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, type ReactElement } from 'react';
 import { Loader2, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { employeesApi } from '@/lib/systemcore.api';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
+import { matchesEmployee } from '@/lib/employee-search';
 
 /**
- * Pick employees by ticking them — current (active) staff only, searchable.
+ * Pick employees by ticking them — current staff only (active or on notice), searchable.
  * `value` may hold ids that are not on screen (another search, or people who
  * have since left); they stay selected until unticked.
  */
@@ -17,17 +17,8 @@ export function EmployeeChecklist({
   onChange: (ids: string[]) => void;
 }): ReactElement {
   const [search, setSearch] = useState('');
-  const [debounced, setDebounced] = useState('');
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(search.trim()), 250);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['employees', 'checklist', debounced],
-    queryFn: () => employeesApi.list({ status: 'active', limit: 100, search: debounced || undefined }),
-  });
-  const employees = data?.data ?? [];
+  const { data: all = [], isLoading } = useActiveEmployees();
+  const employees = useMemo(() => all.filter((e) => matchesEmployee(e, search)), [all, search]);
   const selected = new Set(value);
 
   const toggle = (id: string, on: boolean): void => {
@@ -51,7 +42,7 @@ export function EmployeeChecklist({
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : employees.length === 0 ? (
-          <p className="p-3 text-center text-xs text-muted-foreground">No active employees found.</p>
+          <p className="p-3 text-center text-xs text-muted-foreground">No current employees found.</p>
         ) : (
           employees.map((e) => (
             <label

@@ -49,9 +49,10 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  list.mockResolvedValue({
+  // One active employee; nobody on notice.
+  list.mockImplementation(async (params) => ({
     success: true,
-    data: [
+    data: (params as { status?: string } | undefined)?.status !== 'active' ? [] : [
       {
         _id: 'e1',
         employeeId: 'EMP-001',
@@ -62,8 +63,8 @@ beforeEach(() => {
         designation: { _id: 'd1', name: 'Engineer', level: 1 },
       } as Employee,
     ],
-    pagination: { page: 1, limit: 20, total: 1, pages: 1 },
-  });
+    pagination: { page: 1, limit: 100, total: 1, pages: 1 },
+  }));
   generate.mockResolvedValue({
     success: true,
     data: { employee: card, generatedAt: '2026-10-21T06:00:00.000Z' },
@@ -87,9 +88,13 @@ describe('IDCardPage', () => {
     expect(preview.textContent).not.toMatch(/DD HRMS/);
   });
 
-  it('only lists active employees to print cards for', async () => {
+  it('only lists current staff (active or on notice), within the API page cap', async () => {
     renderPage();
     await screen.findByRole('button', { name: /Asha Rao/ });
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ status: 'active' }));
+    const statuses = list.mock.calls.map(([params]) => (params as { status?: string }).status);
+    expect(new Set(statuses)).toEqual(new Set(['active', 'onNotice']));
+    for (const [params] of list.mock.calls) {
+      expect((params as { limit: number }).limit).toBeLessThanOrEqual(100);
+    }
   });
 });

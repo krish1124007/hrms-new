@@ -29,6 +29,10 @@ import {
 import { Label } from '@/components/ui/label';
 import { documentsApi, type DocumentRecord } from '@/lib/documents.api';
 import { formatRelative } from '@/lib/format';
+import { apiErrorMessage } from '@/lib/api-error';
+import { Pagination } from '@/components/ui/data-table';
+
+const PAGE_SIZE = 30;
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 
@@ -146,13 +150,21 @@ export default function DocumentsPage(): ReactElement {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
-  const { data: filesData, isLoading } = useQuery({
-    queryKey: ['documents', activeFolder, searchQuery],
+  // Paged on the server. The page belongs to the folder + search it was
+  // chosen for: another folder or search starts again at page 1.
+  const filterKey = `${activeFolder}|${searchQuery}`;
+  const [paging, setPaging] = useState({ key: filterKey, page: 1 });
+  const page = paging.key === filterKey ? paging.page : 1;
+  const setPage = (p: number): void => setPaging({ key: filterKey, page: p });
+
+  const { data: filesData, isLoading, error: filesError } = useQuery({
+    queryKey: ['documents', activeFolder, searchQuery, page],
     queryFn: () =>
       documentsApi.list({
         ...(activeFolder && activeFolder !== '/' ? { folder: activeFolder } : {}),
         ...(searchQuery ? { search: searchQuery } : {}),
-        limit: 100,
+        page,
+        limit: PAGE_SIZE,
       }),
   });
 
@@ -299,6 +311,11 @@ export default function DocumentsPage(): ReactElement {
                 <Skeleton key={i} className="h-24 rounded-lg" />
               ))}
             </div>
+          ) : filesError ? (
+            <div className="rounded-lg border border-dashed border-destructive/40 py-12 text-center text-sm">
+              <p className="font-medium text-foreground">Couldn't load files</p>
+              <p className="mt-1 text-muted-foreground">{apiErrorMessage(filesError)}</p>
+            </div>
           ) : files.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center">
               <FolderOpen className="mb-3 size-12 text-muted-foreground" />
@@ -332,6 +349,7 @@ export default function DocumentsPage(): ReactElement {
               ))}
             </div>
           )}
+          <Pagination page={page} pages={filesData?.pagination?.pages ?? 1} onPageChange={setPage} />
         </div>
       </div>
 

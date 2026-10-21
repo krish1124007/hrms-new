@@ -9,7 +9,9 @@
  *   earnings      the salary structure's components, or the employee's
  *                 basic / HRA / DA / allowance — each × days paid / days in
  *                 the month
- *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS
+ *   statutory     PF, ESI, PT (lib/statutory.ts) and the declared monthly TDS;
+ *                 PF is on the structure components flagged `statutoryBase`
+ *                 (else named Basic / DA), else the salary basic + DA
  *   loans/claims  the EMIs due in the month and the approved claims not yet
  *                 reimbursed — except what another record holds (counted
  *                 and not settled yet; see "Items held by a payroll record")
@@ -21,8 +23,9 @@
  *
  * The full-month gross is basic + HRA + DA + special allowance from the
  * salary components (or the structure's earnings) — never the stored
- * `salary.grossSalary`, which the employee pre-save hook also adds the CSV
- * import's `otherAllowances` stash (PF, CTC, net pay …) into.
+ * `salary.grossSalary`, which the employee pre-save hook also adds every
+ * `otherAllowances` entry into (old CSV imports parked PF, CTC, net pay … there;
+ * scripts/fix-salary-stash.ts removes them).
  *
  * Days are business-day labels (UTC midnight of the IST calendar date), the
  * `Attendance.date` convention; other dates (joining, exit, leave, due dates)
@@ -300,6 +303,7 @@ export const STRUCTURE_POPULATE = {
 type StructureComponent = Pick<ISalaryComponent, 'name' | 'type' | 'isStatutory' | 'statutoryType' | 'isActive'> & {
   _id: Types.ObjectId;
   calculationType?: CalculationType;
+  statutoryBase?: ISalaryComponent['statutoryBase'];
 };
 
 interface StructureAmount {
@@ -413,20 +417,35 @@ function structureLines(structure: StructureAmount[] | null, type: Exclude<Compo
     .filter((l) => l.amount > 0);
 }
 
-/** Structure components that are PF wages: the basic and the dearness allowance. */
+/** Fallback for unflagged structures: components named like a basic or a dearness allowance. */
 const PF_WAGE_COMPONENT = /basic|dearness|^da$/i;
 
 /**
+ * The structure's earning components that are PF wages: those flagged
+ * `statutoryBase` ('basic' / 'da') when any earning is flagged — the flags
+ * are then the whole truth — else those whose name is a basic or DA
+ * (`PF_WAGE_COMPONENT`).
+ */
+function pfWageComponentIds(structure: StructureAmount[] | null): Set<string> {
+  const earnings = (structure ?? []).filter((a) => a.component.type === 'earning');
+  const flagged = earnings.filter((a) => a.component.statutoryBase);
+  const chosen = flagged.length > 0 ? flagged : earnings.filter((a) => PF_WAGE_COMPONENT.test(a.component.name.trim()));
+  return new Set(chosen.map((a) => String(a.component._id)));
+}
+
+/**
  * The earned wage PF is on. With a structure: its earned lines whose
- * component is a basic or DA (`PF_WAGE_COMPONENT`); when none is, and without
+ * component is a PF wage (`pfWageComponentIds`); when none is, and without
  * a structure, the pro-rated `salary.basic + salary.da`.
  */
 function pfWageOf(
   employee: SalaryEmployee,
+  structure: StructureAmount[] | null,
   earnings: IPayrollLine[],
   proRate: (amount: number) => number,
 ): number {
-  const fromStructure = earnings.filter((l) => l.componentId && PF_WAGE_COMPONENT.test(l.name.trim()));
+  const ids = pfWageComponentIds(structure);
+  const fromStructure = earnings.filter((l) => l.componentId && ids.has(String(l.componentId)));
   if (fromStructure.length > 0) return round2(fromStructure.reduce((s, l) => s + l.amount, 0));
   return round2(proRate(num(employee.salary?.basic)) + proRate(num(employee.salary?.da)));
 }
@@ -740,7 +759,7 @@ export async function computeRecord(
   // Statutory deductions are on the wages earned: the pro-rated salary plus overtime.
   const earnedGross = round2(earnings.reduce((s, l) => s + l.amount, 0) + overtimeAmount);
   // PF on the earned basic + DA (capped at the wage ceiling in lib/statutory).
-  const pfWage = pfWageOf(employee, earnings, proRate);
+  const pfWage = pfWageOf(employee, structure, earnings, proRate);
 
   // ESI applicability is decided once per contribution period from the full-month gross.
   const periodKey = esiPeriodKey(new Date(Date.UTC(cycle.year, cycle.month - 1, 1)));

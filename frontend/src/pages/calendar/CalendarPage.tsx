@@ -127,7 +127,7 @@ export default function CalendarPage(): ReactElement {
     },
   });
 
-  const events = eventsData?.data ?? [];
+  const events = useMemo(() => eventsData?.data ?? [], [eventsData]);
 
   // Company week-off rule — which Saturdays/Sundays are non-working.
   const { data: configData } = useAttendanceConfig();

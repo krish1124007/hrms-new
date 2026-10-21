@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { DataTable, Pagination, type DataTableColumn } from '@/components/ui/data-table';
 import { RejectionReason } from '@/components/common/RejectionReason';
 import {
   Dialog,
@@ -28,6 +28,12 @@ import {
 } from '@/hooks/use-expense-claims';
 import { documentsApi } from '@/lib/documents.api';
 import type { ExpenseClaim, ExpenseClaimStatus } from '@/lib/expense-claims.api';
+import { formatDate, todayIST } from '@/lib/format';
+import { isNoEmployeeProfileError } from '@/lib/api-error';
+import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
+import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
+
+const PAGE_SIZE = 20;
 
 const STATUS_VARIANT: Record<
   ExpenseClaimStatus,
@@ -68,7 +74,11 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function MyExpensesPage(): ReactElement {
-  const { data, isLoading } = useMyExpenseClaims({ limit: 50 });
+  const [page, setPage] = useState(1);
+  const { data, isLoading, error, refetch } = useMyExpenseClaims({ page, limit: PAGE_SIZE });
+  const me = useMyEmployeeProfile();
+  // Someone without an employee record (e.g. the seeded admin) has no claims.
+  const noProfile = me.noProfile || isNoEmployeeProfileError(error);
   const { data: cats } = useExpenseCategories({ isActive: true, limit: 100 });
   const create = useCreateExpenseClaim();
   const remove = useDeleteExpenseClaim();
@@ -80,7 +90,8 @@ export default function MyExpensesPage(): ReactElement {
       category: '',
       amount: 0,
       currency: 'INR',
-      date: new Date().toISOString().slice(0, 10),
+      // Today on the IST calendar — not the UTC day before 05:30 IST.
+      date: todayIST(),
       status: 'pending',
       receiptUrls: [],
     },
@@ -118,7 +129,8 @@ export default function MyExpensesPage(): ReactElement {
       category: '',
       amount: 0,
       currency: 'INR',
-      date: new Date().toISOString().slice(0, 10),
+      // Today on the IST calendar — not the UTC day before 05:30 IST.
+      date: todayIST(),
       status: 'pending',
       description: '',
       receiptUrls: [],
@@ -134,7 +146,7 @@ export default function MyExpensesPage(): ReactElement {
     {
       key: 'date',
       header: 'Date',
-      cell: (c) => new Date(c.date).toLocaleDateString('en-IN', { dateStyle: 'medium' }),
+      cell: (c) => formatDate(c.date),
     },
     {
       key: 'category',
@@ -204,20 +216,31 @@ export default function MyExpensesPage(): ReactElement {
         description="Submit and track your expense claims"
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'My Expenses' }]}
         actions={
-          <Button size="sm" onClick={openDialog}>
-            <Plus className="size-4" /> New Claim
-          </Button>
+          noProfile ? undefined : (
+            <Button size="sm" onClick={openDialog}>
+              <Plus className="size-4" /> New Claim
+            </Button>
+          )
         }
       />
 
-      <DataTable
-        columns={columns}
-        data={data?.data ?? []}
-        loading={isLoading}
-        rowKey={(c) => c._id}
-        emptyTitle="No expense claims"
-        emptyDescription="Click 'New Claim' to submit your first expense"
-      />
+      {noProfile ? (
+        <NoEmployeeProfileNotice feature="expense claim" />
+      ) : (
+        <>
+          <DataTable
+            columns={columns}
+            data={data?.data ?? []}
+            loading={isLoading}
+            error={error}
+            onRetry={() => void refetch()}
+            rowKey={(c) => c._id}
+            emptyTitle="No expense claims"
+            emptyDescription="Click 'New Claim' to submit your first expense"
+          />
+          <Pagination page={page} pages={data?.pagination?.pages ?? 1} onPageChange={setPage} />
+        </>
+      )}
 
       <Dialog open={open} onClose={() => setOpen(false)} size="md">
         <DialogHeader>

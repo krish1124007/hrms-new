@@ -50,7 +50,7 @@ import {
 import { useMyLeaveBalances } from '@/hooks/use-leaves';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '@/lib/dashboard.api';
-import { type Attendance } from '@/lib/attendance.api';
+import { type Attendance, type CheckInPayload } from '@/lib/attendance.api';
 import { payrollApi } from '@/lib/payroll.api';
 import { noticesApi, type Notice } from '@/lib/notices.api';
 import { useEffect } from 'react';
@@ -186,7 +186,7 @@ export default function EmployeeDashboardPage(): ReactElement {
    * location help instead. Other errors are toasted by the mutation.
    */
   const submitCheckOut = async (known?: { lat: number; lng: number }): Promise<void> => {
-    const payload: any = { method: 'manual' };
+    const payload: CheckInPayload = { method: 'manual' };
     const res: LocationResult = known ? { ok: true, loc: known } : await getLocation();
     if (res.ok) payload.location = res.loc;
     try {
@@ -202,7 +202,7 @@ export default function EmployeeDashboardPage(): ReactElement {
   };
 
   const submitCheckIn = async (): Promise<void> => {
-    const payload: any = { method: 'manual' };
+    const payload: CheckInPayload = { method: 'manual' };
     const res = await getLocation();
 
     if (res.ok) {
@@ -211,7 +211,7 @@ export default function EmployeeDashboardPage(): ReactElement {
 
     try {
       await checkIn.mutateAsync(payload);
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (isLocationRequiredError(e)) {
         setLocFailure({ reason: res.ok ? 'unavailable' : res.reason, kind: 'in' });
       }
@@ -232,7 +232,7 @@ export default function EmployeeDashboardPage(): ReactElement {
     toast.success('Location enabled');
     
     if (kind === 'in') {
-      const payload: any = { method: 'manual', location: res.loc };
+      const payload: CheckInPayload = { method: 'manual', location: res.loc };
       checkIn.mutate(payload);
     } else {
       void submitCheckOut(res.loc);
@@ -372,22 +372,22 @@ export default function EmployeeDashboardPage(): ReactElement {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
           label="Present"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.present}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.present}
           icon={UserCheck}
         />
         <StatCard
           label="Late"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.late}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.late}
           icon={Clock}
         />
         <StatCard
           label="Absent"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : summary.absent}
+          value={monthQ.isLoading ? <InlineSkel /> : summary.absent}
           icon={CalendarOff}
         />
         <StatCard
           label="Hours this month"
-          value={monthQ.isLoading ? (<InlineSkel /> as any) : fmtHours(summary.totalHours)}
+          value={monthQ.isLoading ? <InlineSkel /> : fmtHours(summary.totalHours)}
           icon={Activity}
         />
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useMemo, useRef, useState, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toPng, toJpeg } from 'html-to-image';
 import { toast } from 'sonner';
@@ -11,7 +11,8 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { IdCardView } from '@/components/employees/IdCardView';
 import { cn } from '@/lib/utils';
 import { idCardsApi } from '@/lib/id-cards.api';
-import { employeesApi, type Employee } from '@/lib/systemcore.api';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
+import { matchesEmployee } from '@/lib/employee-search';
 
 /** A CR80 card is 53.98 mm wide; the printed image is scaled to that. */
 const PRINT_WIDTH = '53.98mm';
@@ -34,26 +35,12 @@ function triggerDownload(dataUrl: string, name: string): void {
 export default function IDCardPage(): ReactElement {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const search = searchInput.trim();
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
-
-  const { data: empResp, isLoading } = useQuery({
-    queryKey: ['employees-id-card', debouncedSearch],
-    queryFn: () =>
-      employeesApi.list({
-        page: 1,
-        limit: 20,
-        // Cards are for current staff only.
-        status: 'active',
-        search: debouncedSearch || undefined,
-      }),
-  });
-  const employees: Employee[] = empResp?.data ?? [];
-  const employee = employees.find((e) => e._id === selectedEmployeeId);
+  // Cards are for current staff only (active or on notice).
+  const { data: everyone = [], isLoading } = useActiveEmployees();
+  const employees = useMemo(() => everyone.filter((e) => matchesEmployee(e, search)), [everyone, search]);
+  const employee = everyone.find((e) => e._id === selectedEmployeeId);
 
   const cardQ = useQuery({
     queryKey: ['id-card', 'generate', selectedEmployeeId],
@@ -161,7 +148,7 @@ export default function IDCardPage(): ReactElement {
             </div>
           ) : employees.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No active employees found{debouncedSearch ? ` for "${debouncedSearch}"` : ''}
+              No current employees found{search ? ` for "${search}"` : ''}
             </p>
           ) : (
             <div className="max-h-[28rem] space-y-2 overflow-y-auto">

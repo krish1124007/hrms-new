@@ -77,6 +77,8 @@ export const componentSchema = z.object({
       'tds',
     ])
     .optional(),
+  /** Earning that is part of the PF wage (`basic` / `da`); null clears the flag. */
+  statutoryBase: z.enum(['basic', 'da']).nullable().optional(),
   order: z.coerce.number().default(0),
   isActive: z.boolean().default(true),
 });

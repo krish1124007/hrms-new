@@ -73,7 +73,7 @@ const MONTHS = [
 
 export default function HolidayListPage(): ReactElement {
   const [year, setYear] = useState(() => new Date().getFullYear());
-  const { data, isLoading } = useHolidays({ limit: 200, year });
+  const { data, isLoading, error, refetch } = useHolidays({ limit: 200, year });
   const create = useCreateHoliday();
   const update = useUpdateHoliday();
   const remove = useDeleteHoliday();
@@ -265,6 +265,8 @@ export default function HolidayListPage(): ReactElement {
             columns={columns}
             data={data?.data ?? []}
             loading={isLoading}
+            error={error}
+            onRetry={() => void refetch()}
             rowKey={(h) => h._id}
             emptyTitle="No holidays defined"
             emptyDescription="Add public and optional holidays for the year"

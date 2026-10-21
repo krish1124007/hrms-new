@@ -12,8 +12,10 @@ import App from './App.tsx';
 import { ThemeProvider } from './providers/ThemeProvider.tsx';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
-import { CookieConsentBanner, readConsent } from './components/common/CookieConsent';
+import { CookieConsentBanner } from './components/common/CookieConsent';
+import { readConsent } from './lib/cookie-consent';
 import { initSentry } from './lib/sentry';
+import { apiErrorMessage } from './lib/api-error';
 import './index.css';
 
 // Install Sentry only if the user gave analytics consent (ePrivacy/GDPR).
@@ -27,30 +29,15 @@ window.addEventListener('cookie-consent-changed', () => {
   window.location.reload();
 });
 
-/**
- * Extract a user-facing message from an arbitrary error.
- * Handles Axios + our standard `{ error: { message } }` envelope.
- */
-function errorMessage(err: unknown): string {
-  if (err instanceof AxiosError) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body = err.response?.data as any;
-    if (body?.error?.message) return body.error.message as string;
-    if (err.code === 'ERR_NETWORK') return 'Network error — check your connection';
-    if (err.response?.status === 401) return 'Session expired — please sign in again';
-    if (err.response?.status === 429) {
-      return body?.error?.message ?? 'Too many requests — please slow down';
-    }
-    return err.message;
-  }
-  return (err as Error)?.message ?? 'Something went wrong';
-}
+/** A user-facing message for any error — shared with tables' error states. */
+const errorMessage = (err: unknown): string => apiErrorMessage(err);
 
 /**
  * Query errors: only toast on server (5xx) or unrecognised — 4xx is the
- * component's job to render inline. Mutations always toast: user just
- * clicked something and expects feedback. Opt-out per-call via
- * `meta: { silent: true }`.
+ * component's job to render inline (a list passes the query's `error` to
+ * `DataTable`, a self-service page shows "no employee profile"), never as an
+ * empty state. Mutations always toast: user just clicked something and
+ * expects feedback. Opt-out per-call via `meta: { silent: true }`.
  */
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -88,7 +75,7 @@ const queryClient = new QueryClient({
       
       // No toast for LOCATION_REQUIRED or EXPENSE_REQUIRED_FOR_CHECKOUT: each
       // opens a dedicated dialog (location help / today's expense form).
-      const body = (err as AxiosError)?.response?.data as any;
+      const body = (err as AxiosError)?.response?.data as { error?: { code?: string } } | undefined;
       const code = body?.error?.code;
       if (code === 'LOCATION_REQUIRED' || code === 'EXPENSE_REQUIRED_FOR_CHECKOUT') return;
       

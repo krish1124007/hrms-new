@@ -68,6 +68,11 @@ const envSchema = z.object({
 
   COMPANY_NAME: z.string().default('Company'),
   COMPANY_EMAIL: z.string().optional(),
+  /** Contact address on the public privacy policy (GET /api/v1/privacy-policy); falls back to COMPANY_EMAIL. */
+  SUPPORT_EMAIL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().email('SUPPORT_EMAIL must be an e-mail address').optional(),
+  ),
   /**
    * The company's state: the seller state on GST invoices, and the Professional
    * Tax state of an employee with no state on file (payroll).

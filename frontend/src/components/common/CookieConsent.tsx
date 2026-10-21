@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
 import { Cookie, X } from 'lucide-react';
+import { readConsent, writeConsent } from '@/lib/cookie-consent';
 
 /**
  * Cookie / storage consent banner.
@@ -12,57 +13,9 @@ import { Cookie, X } from 'lucide-react';
  *     moments before an error). Off until the user agrees; `main.tsx` only
  *     starts Sentry when this is true.
  *
- * Consent lives in this browser's localStorage. "Accept" and "Reject" are
- * equally prominent.
+ * Consent lives in this browser's localStorage (`lib/cookie-consent.ts`).
+ * "Accept" and "Necessary only" are equally prominent.
  */
-
-export interface CookieConsent {
-  necessary: true;
-  analytics: boolean;
-  version: number;
-  recordedAt: string;
-}
-
-const STORAGE_KEY = 'ddhrms.cookie-consent';
-const CURRENT_VERSION = 1;
-
-export function readConsent(): CookieConsent | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as CookieConsent;
-    if (parsed.version !== CURRENT_VERSION) return null; // re-prompt on version bump
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/** Forget the saved choice so the banner asks again (Settings → Privacy). */
-export function clearConsent(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // Storage unavailable — nothing was saved either.
-  }
-}
-
-function writeConsent(analytics: boolean): CookieConsent {
-  const consent: CookieConsent = {
-    necessary: true,
-    analytics,
-    version: CURRENT_VERSION,
-    recordedAt: new Date().toISOString(),
-  };
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(consent));
-  } catch {
-    // Storage unavailable — the banner will simply ask again next visit.
-  }
-  // Let the app react (Sentry starts or stops) without polling localStorage.
-  window.dispatchEvent(new CustomEvent('cookie-consent-changed', { detail: consent }));
-  return consent;
-}
 
 export function CookieConsentBanner(): ReactElement | null {
   const [visible, setVisible] = useState(false);

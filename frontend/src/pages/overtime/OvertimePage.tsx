@@ -37,7 +37,8 @@ import {
   useOvertimeStats,
   useRejectOvertime,
 } from '@/hooks/use-overtime';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
+import { EmployeeFilterOptions } from '@/components/common/EmployeeFilterOptions';
 import { usePermissions } from '@/hooks/use-permissions';
 import {
   OVERTIME_STATUSES,
@@ -107,7 +108,7 @@ export default function OvertimePage(): ReactElement {
 function MyRequestsTab(): ReactElement {
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState(false);
-  const { data, isLoading } = useMyOvertimeRequests({ page, limit: 20 });
+  const { data, isLoading, error, refetch } = useMyOvertimeRequests({ page, limit: 20 });
   const create = useCreateOvertime();
   const remove = useDeleteOvertime();
 
@@ -201,6 +202,8 @@ function MyRequestsTab(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No overtime requests yet"
         emptyDescription="Submit your first OT request when you've worked extra hours"
@@ -284,14 +287,15 @@ function AllRequestsTab({ canApprove }: { canApprove: boolean }): ReactElement {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<'' | OvertimeStatus>('pending');
   const [employee, setEmployee] = useState('');
-  const { data, isLoading } = useOvertimeRequests({
+  const { data, isLoading, error, refetch } = useOvertimeRequests({
     page,
     limit: 20,
     ...(status ? { status } : {}),
     ...(employee ? { employee } : {}),
   });
   const { data: stats } = useOvertimeStats();
-  const { data: empData } = useEmployees({ limit: 500 });
+  // A filter over history: ex-employees stay selectable, in their own group.
+  const { data: filterEmployees = [] } = useActiveEmployees({ includeFormer: true });
 
   const approve = useApproveOvertime();
   const reject = useRejectOvertime();
@@ -427,11 +431,7 @@ function AllRequestsTab({ canApprove }: { canApprove: boolean }): ReactElement {
           className="sm:w-72"
         >
           <option value="">All employees</option>
-          {(empData?.data ?? []).map((emp) => (
-            <option key={emp._id} value={emp._id}>
-              {emp.firstName} {emp.lastName} ({emp.employeeId})
-            </option>
-          ))}
+          <EmployeeFilterOptions employees={filterEmployees} />
         </Select>
       </div>
 
@@ -439,6 +439,8 @@ function AllRequestsTab({ canApprove }: { canApprove: boolean }): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(r) => r._id}
         emptyTitle="No overtime requests"
         emptyDescription={

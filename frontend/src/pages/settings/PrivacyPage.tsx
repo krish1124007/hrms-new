@@ -6,8 +6,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getComplianceStatus } from '@/lib/compliance.api';
-import { clearConsent, readConsent } from '@/components/common/CookieConsent';
+import { clearConsent, readConsent } from '@/lib/cookie-consent';
 import { SUPPORT_EMAIL } from '@/config/brand';
+import { formatDateTime } from '@/lib/format';
 
 /**
  * Settings → Privacy: what this browser stores (and the user's choice about
@@ -88,11 +89,7 @@ export default function PrivacyPage(): ReactElement {
                 <li key={h._id} className="flex items-center justify-between py-2">
                   <span>{prettyEvent(h.metadata?.event ?? h.action)}</span>
                   <span className="text-xs text-muted-foreground">
-                    {new Date(h.createdAt).toLocaleString('en-IN', {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                      timeZone: 'Asia/Kolkata',
-                    })}
+                    {formatDateTime(h.createdAt)}
                   </span>
                 </li>
               ))}

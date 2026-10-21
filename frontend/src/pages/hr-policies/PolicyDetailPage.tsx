@@ -45,7 +45,7 @@ import {
   useUploadPolicyAttachment,
 } from '@/hooks/use-hr-policies';
 import { RichText } from '@/components/common/RichText';
-import { employeesApi } from '@/lib/systemcore.api';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { isNoEmployeeProfile, profileApi } from '@/lib/profile.api';
 import { POLICY_CATEGORIES, type PolicyStatus } from '@/lib/hr-policies.api';
 import { formatDate, formatRelative } from '@/lib/format';
@@ -91,12 +91,7 @@ export default function PolicyDetailPage(): ReactElement {
   const [ackComment, setAckComment] = useState('');
 
   // HR's "record on behalf of" picker — current staff only, loaded on demand.
-  const { data: empData } = useQuery({
-    queryKey: ['employees', 'policy-ack-picker'],
-    queryFn: () => employeesApi.list({ status: 'active', limit: 100 }),
-    enabled: canManage && ackOpen,
-  });
-  const employees = empData?.data ?? [];
+  const { data: employees = [] } = useActiveEmployees({ enabled: canManage && ackOpen });
 
   // The signed-in user's employee record, to find their own acknowledgement.
   const meQ = useQuery({

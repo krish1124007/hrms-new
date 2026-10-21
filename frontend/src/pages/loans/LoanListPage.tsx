@@ -36,7 +36,7 @@ export default function LoanListPage(): ReactElement {
   const [type, setType] = useState<'' | LoanType>('');
   const [status, setStatus] = useState<'' | LoanStatus>('');
 
-  const { data, isLoading } = useLoans({
+  const { data, isLoading, error, refetch } = useLoans({
     page,
     limit: 20,
     ...(search ? { search } : {}),
@@ -193,6 +193,8 @@ export default function LoanListPage(): ReactElement {
         columns={columns}
         data={data?.data ?? []}
         loading={isLoading}
+        error={error}
+        onRetry={() => void refetch()}
         rowKey={(l) => l._id}
         emptyTitle="No loans yet"
         emptyDescription="Create the first loan application to get started"

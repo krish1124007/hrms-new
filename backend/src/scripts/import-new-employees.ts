@@ -145,7 +145,9 @@ async function run() {
           basic: r.salary.basic,
           hra: r.salary.hra,
           specialAllowance: r.salary.other,
-          otherAllowances: { pt: r.salary.pt, net: r.salary.net },
+          // PT and net pay are computed by payroll; storing them here would add
+          // them to grossSalary (employee pre-save hook).
+          otherAllowances: {},
           grossSalary: r.salary.gross
         }
       });

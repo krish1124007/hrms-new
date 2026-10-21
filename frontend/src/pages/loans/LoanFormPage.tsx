@@ -12,7 +12,7 @@ import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Card } from '@/components/ui/card';
 import { useCreateLoan, useLoan, useUpdateLoan } from '@/hooks/use-loans';
-import { useEmployees } from '@/hooks/use-systemcore';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { LOAN_TYPES, type LoanInput } from '@/lib/loans.api';
 import { formatCurrency } from '@/lib/format';
 
@@ -51,8 +51,14 @@ export default function LoanFormPage(): ReactElement {
   const { data: existing, isLoading: loadingLoan } = useLoan(id);
   const create = useCreateLoan();
   const update = useUpdateLoan();
-  const { data: empData } = useEmployees({ limit: 500 });
-  const employees = empData?.data ?? [];
+  // Only people who still work here — plus, on edit, the loan's own employee
+  // so an unrelated edit never drops them from the form.
+  const { data: currentEmployees = [] } = useActiveEmployees();
+  const loanEmployee = existing?.data?.employee;
+  const employees =
+    loanEmployee && !currentEmployees.some((e) => e._id === loanEmployee._id)
+      ? [...currentEmployees, loanEmployee]
+      : currentEmployees;
 
   const {
     register,
