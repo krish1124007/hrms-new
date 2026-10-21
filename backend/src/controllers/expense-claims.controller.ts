@@ -19,6 +19,7 @@ import {
   assertCanDecide,
   assertOwnOrCanDecide,
   isApprover,
+  scopeFilter,
   scopeFilterFor,
 } from '../lib/approvals.js';
 
@@ -467,27 +468,33 @@ export async function expenseReports(req: Request, res: Response): Promise<void>
   const year = Number(q.year ?? new Date().getFullYear());
   const start = new Date(`${year}-01-01`);
   const end = new Date(`${year + 1}-01-01`);
+  // Whose claims the figures cover: everybody for `expenses.approve_all`, a
+  // manager's direct reports and their own otherwise. Aggregations skip the
+  // soft-delete query hook, so deleted claims are excluded here.
+  const scope = { ...(await scopeFilter(req, 'expenses')), isDeleted: { $ne: true } };
+  const inYear = { ...scope, date: { $gte: start, $lt: end } };
+  const settledInYear = { ...inYear, status: { $in: ['approved', 'reimbursed'] } };
 
   const [byStatus, byCategory, byMonth, total] = await Promise.all([
     ExpenseClaim.aggregate([
-      { $match: { date: { $gte: start, $lt: end } } },
+      { $match: inYear },
       { $group: { _id: '$status', n: { $sum: 1 }, amount: { $sum: '$amount' } } },
     ]),
     ExpenseClaim.aggregate([
-      { $match: { status: { $in: ['approved', 'reimbursed'] }, date: { $gte: start, $lt: end } } },
+      { $match: settledInYear },
       { $group: { _id: '$category', amount: { $sum: '$amount' } } },
       { $lookup: { from: 'expensecategories', localField: '_id', foreignField: '_id', as: 'cat' } },
       { $unwind: { path: '$cat', preserveNullAndEmptyArrays: true } },
       { $project: { categoryId: '$_id', name: '$cat.name', amount: 1, _id: 0 } },
     ]),
     ExpenseClaim.aggregate([
-      { $match: { status: { $in: ['approved', 'reimbursed'] }, date: { $gte: start, $lt: end } } },
+      { $match: settledInYear },
       { $group: { _id: { $month: '$date' }, amount: { $sum: '$amount' } } },
       { $project: { month: '$_id', amount: 1, _id: 0 } },
       { $sort: { month: 1 } },
     ]),
     ExpenseClaim.aggregate([
-      { $match: { status: { $in: ['approved', 'reimbursed'] }, date: { $gte: start, $lt: end } } },
+      { $match: settledInYear },
       { $group: { _id: null, amount: { $sum: '$amount' } } },
     ]),
   ]);

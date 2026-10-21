@@ -10,9 +10,10 @@ router.use(authMiddleware);
 
 // ---------- Categories ----------
 // Everyone filing a claim reads the list; the categories themselves (names,
-// limits, receipt rules) are company-wide configuration. Employees hold
-// expenses.create/update/delete for their *own claims*, so writes here are
-// gated on the approver permission instead.
+// limits, receipt rules) are company-wide configuration, written only with
+// `expenses.config` (HR). Employees hold expenses.create/update/delete for
+// their *own claims*, and a manager's expenses.approve is for deciding their
+// reports' claims — neither reaches the categories.
 router.get(
   '/categories',
   requirePermission('expenses.view'),
@@ -21,7 +22,7 @@ router.get(
 );
 router.post(
   '/categories',
-  requirePermission('expenses.approve'),
+  requirePermission('expenses.config'),
   validate(ctrl.createCategorySchema),
   asyncHandler(ctrl.createCategory),
 );
@@ -32,18 +33,20 @@ router.get(
 );
 router.patch(
   '/categories/:id',
-  requirePermission('expenses.approve'),
+  requirePermission('expenses.config'),
   validate(ctrl.updateCategorySchema),
   asyncHandler(ctrl.updateCategory),
 );
 router.delete(
   '/categories/:id',
-  requirePermission('expenses.approve'),
+  requirePermission('expenses.config'),
   asyncHandler(ctrl.deleteCategory),
 );
 
 // ---------- Reports ----------
-router.get('/reports', requirePermission('expenses.view'), asyncHandler(ctrl.expenseReports));
+// Approvers only, scoped like the claim lists: a manager's reports cover their
+// direct reports and themselves, `expenses.approve_all` everybody.
+router.get('/reports', requirePermission('expenses.approve'), asyncHandler(ctrl.expenseReports));
 
 // ---------- Claims ----------
 router.get('/requests/my', requirePermission('expenses.view'), asyncHandler(ctrl.myClaims));

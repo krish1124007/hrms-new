@@ -8,7 +8,8 @@ import { Role, type IRole } from '../models/role.model.js';
 import { Department } from '../models/department.model.js';
 import { Designation } from '../models/designation.model.js';
 import { DocumentModel } from '../models/document.model.js';
-import { ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { AppError, ConflictError, NotFoundError, ValidationAppError } from '../lib/errors.js';
+import { currentEmployeeId, hasPermission } from '../lib/access.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
@@ -64,6 +65,7 @@ export const createEmployeeSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   email: z.string().email(),
+  personalEmail: z.string().trim().toLowerCase().email().optional(),
   phone: z.string().optional(),
   dateOfBirth: z.coerce.date().optional(),
   gender: z.enum(['male', 'female', 'other']).optional(),
@@ -151,11 +153,22 @@ export const listQuerySchema = z.object({
     .enum(['active', 'inactive', 'terminated', 'resigned', 'onNotice'])
     .optional(),
   sort: z.string().optional(),
+  /** `1` / `true`: soft-deleted employees too — honoured for `employees.delete` holders only. */
+  includeDeleted: z.string().optional(),
 });
+
+/**
+ * Soft-deleted employees are shown (`?includeDeleted=1`) only to whoever can
+ * delete — and so restore — them; for everyone else the flag is ignored.
+ */
+function includeDeletedFor(req: Request, flag: unknown): boolean {
+  return (flag === '1' || flag === 'true') && hasPermission(req.user, 'employees.delete');
+}
 
 export async function listEmployees(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
+  const withDeleted = includeDeletedFor(req, q.includeDeleted);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: Record<string, any> = {};
   if (q.status) filter.status = q.status;
@@ -169,17 +182,28 @@ export async function listEmployees(req: Request, res: Response): Promise<void> 
       { employeeId: { $regex: q.search, $options: 'i' } },
     ];
   }
-  const result = await Employee.paginate(filter, {
-    page: q.page,
-    limit: q.limit,
-    sort: q.sort ?? '-createdAt',
-    populate: [
-      { path: 'department', select: 'name code' },
-      { path: 'designation', select: 'name level' },
-      { path: 'shift', select: 'name color' },
-    ],
+  // `Employee.paginate`, with the soft-delete option passed through.
+  const page = q.page as number;
+  const limit = q.limit as number;
+  const [data, total] = await Promise.all([
+    Employee.find(filter)
+      .setOptions({ withDeleted })
+      .sort(q.sort ?? '-createdAt')
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate([
+        { path: 'department', select: 'name code' },
+        { path: 'designation', select: 'name level' },
+        { path: 'shift', select: 'name color' },
+      ])
+      .exec(),
+    Employee.countDocuments(filter).setOptions({ withDeleted }).exec(),
+  ]);
+  res.json({
+    success: true,
+    data,
+    pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
   });
-  res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 
 export async function employeeStats(_req: Request, res: Response): Promise<void> {
@@ -372,6 +396,7 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
 
 export async function getEmployee(req: Request, res: Response): Promise<void> {
   const employee = await Employee.findById(String(req.params.id))
+    .setOptions({ withDeleted: includeDeletedFor(req, req.query.includeDeleted) })
     .populate('department', 'name code')
     .populate('designation', 'name level')
     .populate('shift', 'name color startTime endTime')
@@ -380,6 +405,267 @@ export async function getEmployee(req: Request, res: Response): Promise<void> {
     .exec();
   if (!employee) throw new NotFoundError('Employee not found');
   res.json({ success: true, data: employee });
+}
+
+// ============================================================================
+// SELF-SERVICE PROFILE — GET / PATCH /employees/me
+// ============================================================================
+
+/** A user with no employee record (the seeded admin): there is no profile to show. */
+function noEmployeeProfile(): AppError {
+  return new AppError('No employee profile is linked to this account', 404, 'NO_EMPLOYEE_PROFILE');
+}
+
+/** What the caller's own profile is built from — never salary, bank details or documents. */
+const SELF_FIELDS =
+  'employeeId firstName lastName email personalEmail phone profileImage gender dateOfBirth joiningDate ' +
+  'status isFieldStaff department designation shift reportingManager address emergencyContact';
+
+/** `{ _id, ...picked }` of a populated reference, or null when unset or gone. */
+function refOf<K extends string>(
+  value: unknown,
+  keys: readonly K[],
+): ({ _id: unknown } & Record<K, unknown>) | null {
+  if (!value || typeof value !== 'object' || !('_id' in value)) return null;
+  const doc = value as { _id: unknown } & Record<string, unknown>;
+  const out = { _id: doc._id } as { _id: unknown } & Record<K, unknown>;
+  for (const key of keys) out[key] = (doc[key] ?? null) as never;
+  return out;
+}
+
+/** The `/employees/me` shape — the contract the web and mobile profile screens read. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function selfProfile(emp: any): Record<string, unknown> {
+  return {
+    _id: emp._id,
+    employeeId: emp.employeeId,
+    firstName: emp.firstName,
+    lastName: emp.lastName,
+    email: emp.email,
+    personalEmail: emp.personalEmail ?? null,
+    phone: emp.phone ?? null,
+    avatar: emp.profileImage ?? null,
+    gender: emp.gender ?? null,
+    dateOfBirth: emp.dateOfBirth ?? null,
+    joiningDate: emp.joiningDate ?? null,
+    status: emp.status,
+    isFieldStaff: Boolean(emp.isFieldStaff),
+    department: refOf(emp.department, ['name']),
+    designation: refOf(emp.designation, ['name']),
+    shift: refOf(emp.shift, ['name', 'startTime', 'endTime']),
+    reportingManager: refOf(emp.reportingManager, ['firstName', 'lastName']),
+    address: emp.address ?? {},
+    emergencyContact: emp.emergencyContact ?? {},
+  };
+}
+
+/** The caller's own profile, or 404 NO_EMPLOYEE_PROFILE. */
+async function loadSelfProfile(req: Request): Promise<Record<string, unknown>> {
+  const id = await currentEmployeeId(req);
+  const employee = id
+    ? await Employee.findById(id)
+        .select(SELF_FIELDS)
+        .populate('department', 'name')
+        .populate('designation', 'name')
+        .populate('shift', 'name startTime endTime')
+        .populate('reportingManager', 'firstName lastName')
+        .lean()
+        .exec()
+    : null;
+  if (!employee) throw noEmployeeProfile();
+  return selfProfile(employee);
+}
+
+/** GET /employees/me — any logged-in user's own employee profile. */
+export async function getMyProfile(req: Request, res: Response): Promise<void> {
+  res.json({ success: true, data: await loadSelfProfile(req) });
+}
+
+const selfText = z.string().trim().max(200);
+const selfPhone = z.string().trim().max(30);
+const selfAddressSchema = z
+  .object({
+    line1: selfText.optional(),
+    line2: selfText.optional(),
+    city: selfText.optional(),
+    state: selfText.optional(),
+    country: selfText.optional(),
+    zip: z.string().trim().max(20).optional(),
+  })
+  .strict();
+
+/**
+ * What an employee may change about themselves: contact details only. Strict —
+ * any other key (salary, department, status…) is a 400, never silently dropped.
+ * An empty string clears `phone`, `personalEmail` or `avatar`.
+ */
+export const updateSelfSchema = z
+  .object({
+    phone: selfPhone.optional(),
+    personalEmail: z.union([z.literal(''), z.string().trim().toLowerCase().email()]).optional(),
+    address: z
+      .object({ current: selfAddressSchema.optional(), permanent: selfAddressSchema.optional() })
+      .strict()
+      .optional(),
+    emergencyContact: z
+      .object({ name: selfText.optional(), relation: selfText.optional(), phone: selfPhone.optional() })
+      .strict()
+      .optional(),
+    // A full URL, or a storage path from the upload pipeline (`/uploads/…`).
+    avatar: z
+      .union([
+        z.literal(''),
+        z
+          .string()
+          .trim()
+          .max(2048)
+          .refine((v) => /^https?:\/\//.test(v) || v.startsWith('/'), {
+            message: 'avatar must be a URL or a path starting with /',
+          }),
+      ])
+      .optional(),
+  })
+  .strict();
+
+/** Plain copy of a stored sub-document (or `{}`), for a field-by-field merge. */
+function plainObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  const doc = value as { toObject?: () => Record<string, unknown> };
+  return typeof doc.toObject === 'function' ? doc.toObject() : { ...(value as Record<string, unknown>) };
+}
+
+/**
+ * PATCH /employees/me — the caller updates their own contact details. The
+ * given part of the address / emergency contact is merged into what is
+ * stored; a new avatar is mirrored to the login so the app header matches.
+ */
+export async function updateMyProfile(req: Request, res: Response): Promise<void> {
+  const body = req.body as z.infer<typeof updateSelfSchema>;
+  const id = await currentEmployeeId(req);
+  const employee = id ? await Employee.findById(id).exec() : null;
+  if (!employee) throw noEmployeeProfile();
+
+  if (body.phone !== undefined) employee.set('phone', body.phone || undefined);
+  if (body.personalEmail !== undefined) employee.set('personalEmail', body.personalEmail || undefined);
+  if (body.avatar !== undefined) employee.set('profileImage', body.avatar || undefined);
+  for (const part of ['current', 'permanent'] as const) {
+    const patch = body.address?.[part];
+    if (patch) employee.set(`address.${part}`, { ...plainObject(employee.address?.[part]), ...patch });
+  }
+  if (body.emergencyContact) {
+    employee.set('emergencyContact', { ...plainObject(employee.emergencyContact), ...body.emergencyContact });
+  }
+  await employee.save();
+
+  if (body.avatar !== undefined && employee.userId) {
+    await User.updateOne(
+      { _id: employee.userId },
+      body.avatar ? { $set: { avatar: body.avatar } } : { $unset: { avatar: 1 } },
+    ).exec();
+  }
+  void audit({
+    action: 'update',
+    entity: 'Employee',
+    entityId: String(employee._id),
+    after: body,
+    metadata: { source: 'self-service' },
+  });
+  res.json({ success: true, data: await loadSelfProfile(req) });
+}
+
+// ============================================================================
+// DIRECTORY — colleagues' work contact details, for every logged-in user
+// ============================================================================
+
+/** Still employed: serving notice counts, any exit does not. */
+const EMPLOYED = { status: { $in: ['active', 'onNotice'] } };
+
+const DIRECTORY_FIELDS = 'employeeId firstName lastName profileImage email phone department designation';
+
+const DIRECTORY_POPULATE = [
+  { path: 'department', select: 'name' },
+  { path: 'designation', select: 'name' },
+];
+
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+export const directoryQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+  search: z.string().trim().max(100).optional(),
+  department: z.string().regex(OBJECT_ID, 'Invalid department id').optional(),
+});
+
+/** One directory row — work contact details only. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function directoryRow(emp: any): Record<string, unknown> {
+  return {
+    _id: emp._id,
+    employeeId: emp.employeeId,
+    firstName: emp.firstName,
+    lastName: emp.lastName,
+    avatar: emp.profileImage ?? null,
+    email: emp.email,
+    phone: emp.phone ?? null,
+    department: refOf(emp.department, ['name']),
+    designation: refOf(emp.designation, ['name']),
+  };
+}
+
+/** GET /employees/directory — employed colleagues, searchable by name, e-mail or Employee ID. */
+export async function listDirectory(req: Request, res: Response): Promise<void> {
+  const q = req.query as unknown as z.infer<typeof directoryQuerySchema>;
+  const filter: Record<string, unknown> = { ...EMPLOYED };
+  if (q.department) filter.department = new Types.ObjectId(q.department);
+  const words = (q.search ?? '').split(/\s+/).filter(Boolean).slice(0, 5);
+  if (words.length) {
+    // Every word must match one of the fields, so "asha pat" finds Asha Patel.
+    filter.$and = words.map((word) => {
+      const rx = new RegExp(escapeRegex(word), 'i');
+      return { $or: [{ firstName: rx }, { lastName: rx }, { email: rx }, { employeeId: rx }] };
+    });
+  }
+  const result = await Employee.paginate(filter, {
+    page: q.page,
+    limit: q.limit,
+    sort: 'firstName lastName',
+    select: DIRECTORY_FIELDS,
+    populate: DIRECTORY_POPULATE,
+  });
+  res.json({ success: true, data: result.data.map(directoryRow), pagination: result.pagination });
+}
+
+/** GET /employees/directory/stats — headcount of employed people, in total and per department. */
+export async function directoryStats(_req: Request, res: Response): Promise<void> {
+  const rows = await Employee.aggregate<{ departmentId?: Types.ObjectId | null; name?: string; count: number }>([
+    // Aggregations skip the soft-delete query hook: exclude deleted employees here.
+    { $match: { ...EMPLOYED, isDeleted: { $ne: true } } },
+    { $group: { _id: '$department', count: { $sum: 1 } } },
+    { $lookup: { from: 'departments', localField: '_id', foreignField: '_id', as: 'dept' } },
+    { $unwind: { path: '$dept', preserveNullAndEmptyArrays: true } },
+    { $project: { _id: 0, departmentId: '$_id', name: '$dept.name', count: 1 } },
+    { $sort: { count: -1, name: 1 } },
+  ]);
+  const byDepartment = rows.map((row) => ({
+    departmentId: row.departmentId ? String(row.departmentId) : null,
+    name: row.name ?? (row.departmentId ? 'Unknown department' : 'Unassigned'),
+    count: row.count,
+  }));
+  const total = byDepartment.reduce((sum, row) => sum + row.count, 0);
+  res.json({ success: true, data: { total, byDepartment } });
+}
+
+/** GET /employees/directory/:id — one employed colleague; 404 for anyone who has left or was deleted. */
+export async function getDirectoryEntry(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id);
+  if (!OBJECT_ID.test(id)) throw new NotFoundError('Employee not found');
+  const employee = await Employee.findOne({ _id: new Types.ObjectId(id), ...EMPLOYED })
+    .select(DIRECTORY_FIELDS)
+    .populate(DIRECTORY_POPULATE)
+    .lean()
+    .exec();
+  if (!employee) throw new NotFoundError('Employee not found');
+  res.json({ success: true, data: directoryRow(employee) });
 }
 
 /** How far up a reporting chain the cycle check walks. */

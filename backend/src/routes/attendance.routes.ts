@@ -143,6 +143,13 @@ router.post(
 );
 
 // ---------- GEOFENCE ZONES ----------
+// The zones that apply to the caller — for anyone who checks in. Declared
+// before `/geofences/:id` so "mine" is not read as an id.
+router.get(
+  '/geofences/mine',
+  requirePermission('attendance.checkin'),
+  asyncHandler(ctrl.geofencesMine),
+);
 router.get(
   '/geofences',
   requirePermission('attendance.view'),

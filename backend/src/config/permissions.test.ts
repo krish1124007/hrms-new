@@ -129,6 +129,14 @@ describe('permission catalogue', () => {
     }
   });
 
+  it('lists expenses.config under expenses, and the expense-category routes check it', () => {
+    expect(PERMISSIONS_BY_MODULE.expenses).toContain('expenses.config');
+    const source = fs.readFileSync(path.join(ROUTES_DIR, 'expense-claims.routes.ts'), 'utf8');
+    const categoryWrites = [...source.matchAll(/router\.(post|patch|delete)\(\s*'\/categories[^']*',\s*requirePermission\(([^)]*)\)/g)];
+    expect(categoryWrites).toHaveLength(3);
+    for (const call of categoryWrites) expect(call[2]).toBe("'expenses.config'");
+  });
+
   it('never lists a wildcard and has no duplicates across modules', () => {
     const flat = Object.values(PERMISSIONS_BY_MODULE).flat();
     expect(flat).not.toContain('*');
@@ -171,6 +179,15 @@ describe('DEFAULT_ROLES', () => {
     expect(perms('manager').has('attendance.approve')).toBe(true);
     expect(perms('manager').has('attendance.manage')).toBe(false);
     expect(perms('employee').has('attendance.approve')).toBe(false);
+  });
+
+  it('gives expenses.config (expense categories) to HR only', () => {
+    const has = (slug: string): boolean =>
+      DEFAULT_ROLES.find((role) => role.slug === slug)!.permissions.includes('expenses.config');
+    expect(has('hr_executive')).toBe(true);
+    expect(has('hr_manager')).toBe(true);
+    expect(has('manager')).toBe(false);
+    expect(has('employee')).toBe(false);
   });
 
   it('keeps admin as the wildcard only', () => {

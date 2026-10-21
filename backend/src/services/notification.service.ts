@@ -14,6 +14,7 @@ import { appBaseUrl } from '../lib/app-url.js';
 import { cycleLabel } from '../lib/payroll-cycle.js';
 import { decisionEmail, escapeHtml } from './email-templates.js';
 import { sendMail, type SendMailInput } from './email.service.js';
+import { sendPush, type PushMessage } from './push.service.js';
 
 /* ─────────────── Core ─────────────── */
 
@@ -27,8 +28,22 @@ export interface CreateNotificationParams {
 }
 
 /**
- * Persists a notification record. In the future this can also push via
- * Socket.io and/or Firebase Cloud Messaging.
+ * Push a saved notification to the user's phones without waiting for it: a
+ * push that fails (or throws) is logged and never fails the notification.
+ */
+function pushQuietly(userId: string, msg: PushMessage): void {
+  try {
+    void sendPush(userId, msg).catch((err: unknown) => {
+      logger.warn({ err, userId }, 'notification: push failed');
+    });
+  } catch (err) {
+    logger.warn({ err, userId }, 'notification: push failed');
+  }
+}
+
+/**
+ * Persists a notification record and delivers it live: to the user's open
+ * sockets (web) and, through FCM, to their registered phones. Never throws.
  */
 export async function createNotification(params: CreateNotificationParams): Promise<void> {
   try {
@@ -53,6 +68,16 @@ export async function createNotification(params: CreateNotificationParams): Prom
         createdAt: doc.createdAt,
       });
     }
+
+    pushQuietly(params.userId, {
+      title: doc.title,
+      body: doc.message,
+      data: {
+        type: doc.type,
+        ...(doc.link ? { link: doc.link } : {}),
+        notificationId: String(doc._id),
+      },
+    });
 
     logger.debug(
       { userId: params.userId, type: params.type },
