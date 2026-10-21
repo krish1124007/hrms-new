@@ -24,9 +24,21 @@ export const tokenStorage = {
  * (Money writes carry an `Idempotency-Key`, so retrying after a timeout that
  * went through replays the first result instead of booking twice.)
  */
-export const REQUEST_TIMEOUT_MS = 30_000;
-/** File uploads and downloads (photos, documents, imports, backups) get longer. */
-export const TRANSFER_TIMEOUT_MS = 5 * 60_000;
+export const REQUEST_TIMEOUT_MS = 60_000;
+/** File uploads/downloads and bulk server jobs (payroll runs, imports, backfills) get longer. */
+export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+
+/** Endpoints whose work grows with the company size — never cut off at the default timeout. */
+const LONG_RUNNING: readonly RegExp[] = [
+  /\/payroll\/cycles\/[^/]+\/(process|generate-payslips|lock|mark-paid|settle)$/,
+  /\/attendance\/close-days?$/,
+  /\/leaves\/balances\/(open-year|reset|allocate)/,
+  /\/backups/,
+  /\/(employees|assets|field\/clients)\/import$/,
+  /\/holidays\/(import-calendar|rollover)$/,
+  /\/export\b/,
+  /\/reports?\b/,
+];
 
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -35,12 +47,14 @@ export const api: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-/** A request that moves a file: a multipart body or a binary response. */
-function isTransfer(config: InternalAxiosRequestConfig): boolean {
+/** A request that moves a file (multipart body, binary response) or runs a bulk server job. */
+export function isTransfer(config: Pick<InternalAxiosRequestConfig, 'data' | 'responseType' | 'url'>): boolean {
+  const url = (config.url ?? '').split('?')[0] ?? '';
   return (
     (typeof FormData !== 'undefined' && config.data instanceof FormData) ||
     config.responseType === 'blob' ||
-    config.responseType === 'arraybuffer'
+    config.responseType === 'arraybuffer' ||
+    LONG_RUNNING.some((re) => re.test(url))
   );
 }
 

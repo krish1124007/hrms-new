@@ -5,7 +5,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, tokenStorage } from './axios';
+import { api, isTransfer, tokenStorage } from './axios';
 import { useAuthStore } from '@/stores/auth.store';
 import type { AuthUser } from './auth.api';
 
@@ -82,5 +82,17 @@ describe('api refresh-token failure', () => {
     expect(useAuthStore.getState().user).toBeNull();
     expect(tokenStorage.getAccess()).toBeNull();
     expect(tokenStorage.getRefresh()).toBeNull();
+  });
+});
+
+describe('request timeouts', () => {
+  it('gives bulk server jobs and file transfers the long timeout, plain JSON calls the default', () => {
+    expect(isTransfer({ url: '/payroll/cycles/abc123/process', data: undefined, responseType: undefined })).toBe(true);
+    expect(isTransfer({ url: '/attendance/close-days', data: undefined, responseType: undefined })).toBe(true);
+    expect(isTransfer({ url: '/leaves/balances/open-year', data: undefined, responseType: undefined })).toBe(true);
+    expect(isTransfer({ url: '/employees/export?format=csv', data: undefined, responseType: undefined })).toBe(true);
+    expect(isTransfer({ url: '/field/payments/p1/receipt', data: undefined, responseType: 'blob' })).toBe(true);
+    expect(isTransfer({ url: '/employees', data: undefined, responseType: undefined })).toBe(false);
+    expect(isTransfer({ url: '/payroll/cycles/abc123', data: undefined, responseType: undefined })).toBe(false);
   });
 });
