@@ -908,31 +908,30 @@ export async function leaveReports(req: Request, res: Response): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const q = req.query as any;
   const year = Number(q.year ?? new Date().getFullYear());
+  // Whose leave the figures cover — the same scope as the leave lists: HR
+  // everybody, a manager their direct reports and themselves. Aggregations
+  // skip the soft-delete query hook, so deleted requests are excluded here.
+  const inYear = {
+    ...(await scopeFilter(req, 'leaves')),
+    isDeleted: { $ne: true },
+    startDate: { $gte: new Date(`${year}-01-01`), $lt: new Date(`${year + 1}-01-01`) },
+  };
+  const approvedInYear = { ...inYear, status: 'approved' };
 
   const [byStatus, byType, totalDays] = await Promise.all([
     LeaveRequest.aggregate([
-      { $match: { startDate: { $gte: new Date(`${year}-01-01`), $lt: new Date(`${year + 1}-01-01`) } } },
+      { $match: inYear },
       { $group: { _id: '$status', n: { $sum: 1 }, days: { $sum: '$days' } } },
     ]),
     LeaveRequest.aggregate([
-      {
-        $match: {
-          status: 'approved',
-          startDate: { $gte: new Date(`${year}-01-01`), $lt: new Date(`${year + 1}-01-01`) },
-        },
-      },
+      { $match: approvedInYear },
       { $group: { _id: '$leaveTypeId', days: { $sum: '$days' } } },
       { $lookup: { from: 'leavetypes', localField: '_id', foreignField: '_id', as: 'leaveType' } },
       { $unwind: { path: '$leaveType', preserveNullAndEmptyArrays: true } },
       { $project: { leaveTypeId: '$_id', name: '$leaveType.name', color: '$leaveType.color', days: 1, _id: 0 } },
     ]),
     LeaveRequest.aggregate([
-      {
-        $match: {
-          status: 'approved',
-          startDate: { $gte: new Date(`${year}-01-01`), $lt: new Date(`${year + 1}-01-01`) },
-        },
-      },
+      { $match: approvedInYear },
       { $group: { _id: null, days: { $sum: '$days' } } },
     ]),
   ]);

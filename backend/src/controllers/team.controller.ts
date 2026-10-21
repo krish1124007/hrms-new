@@ -5,6 +5,7 @@ import { Attendance } from '../models/attendance.model.js';
 import { LeaveRequest } from '../models/leave-request.model.js';
 import { getUserId } from '../lib/async-context.js';
 import { ForbiddenError } from '../lib/errors.js';
+import { hasPermission } from '../lib/access.js';
 import { endOfBusinessDay, startOfBusinessDay } from '../lib/business-day.js';
 
 /**
@@ -64,26 +65,27 @@ function mapStatus(att: AttendanceLite | null | undefined): MobileMemberStatus {
   }
 }
 
-export async function teamOverview(_req: Request, res: Response): Promise<void> {
+export async function teamOverview(req: Request, res: Response): Promise<void> {
   const userId = getUserId();
   if (!userId) throw new ForbiddenError('Not authenticated');
 
-  // Find the manager's own employee record. Some users (super-admins,
-  // owners) don't have one — in that case we fall back to "every active
-  // employee" so the screen still has data.
+  // Find the manager's own employee record. Some users (the seeded admin)
+  // don't have one: HR (`attendance.manage`) then sees every active employee
+  // so the screen still has data; anyone else has no team.
   const me = await Employee.findOne({ userId }).lean().exec();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reportFilter: Record<string, any> = me
-    ? { reportingManager: me._id }
-    : { status: 'active' };
+  let reportFilter: Record<string, any> | null = null;
+  if (me) reportFilter = { reportingManager: me._id };
+  else if (hasPermission(req.user, 'attendance.manage')) reportFilter = { status: 'active' };
 
-  const reports = await Employee
-    .find(reportFilter)
-    .select('firstName lastName profileImage designation status userId')
-    .populate('designation', 'name')
-    .lean()
-    .exec();
+  const reports = reportFilter
+    ? await Employee.find(reportFilter)
+        .select('firstName lastName profileImage designation status userId')
+        .populate('designation', 'name')
+        .lean()
+        .exec()
+    : [];
 
   const reportIds = reports.map((r) => r._id as Types.ObjectId);
 
