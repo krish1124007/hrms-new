@@ -22,6 +22,7 @@ import {
   useUpdateGeofence,
 } from '@/hooks/use-attendance';
 import type { GeofenceZone } from '@/lib/attendance.api';
+import { GEOCODE_URL, geocode } from '@/lib/map-config';
 
 /** Renders a simple SVG circle diagram showing the geofence zone visually. */
 function GeoCirclePreview({
@@ -80,15 +81,16 @@ export default function GeofencePage(): ReactElement {
   const [searchQuery, setSearchQuery] = useState('');
   const [isFetchingCoords, setIsFetchingCoords] = useState(false);
 
+  // Address search goes to the operator-configured geocoder (VITE_GEOCODE_URL);
+  // without one the search box is hidden and nothing leaves the network.
   const fetchCoordinates = async () => {
-    if (!searchQuery) return;
+    if (!searchQuery || !GEOCODE_URL) return;
     setIsFetchingCoords(true);
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(searchQuery)}`);
-      const data = await res.json();
-      if (data && data.length > 0) {
-        setLat(Number(data[0].lat).toFixed(5));
-        setLng(Number(data[0].lon).toFixed(5));
+      const hit = await geocode(searchQuery);
+      if (hit) {
+        setLat(hit.lat.toFixed(5));
+        setLng(hit.lng.toFixed(5));
         toast.success("Coordinates found!");
       } else {
         toast.error("Location not found.");
@@ -350,17 +352,22 @@ export default function GeofencePage(): ReactElement {
               <div className="mb-2 space-y-2 rounded-md border border-border p-3 bg-muted/20">
                 <Label className="text-xs font-semibold uppercase text-muted-foreground">Auto-fill Coordinates</Label>
                 <div className="flex gap-2">
-                  <Input 
-                    placeholder="Enter city, address, or landmark..." 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void fetchCoordinates(); } }}
-                  />
-                  <Button type="button" variant="secondary" onClick={() => void fetchCoordinates()} disabled={!searchQuery || isFetchingCoords}>
-                    {isFetchingCoords ? '...' : <Search className="size-4" />}
-                  </Button>
+                  {GEOCODE_URL && (
+                    <>
+                      <Input
+                        placeholder="Enter city, address, or landmark..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void fetchCoordinates(); } }}
+                      />
+                      <Button type="button" variant="secondary" onClick={() => void fetchCoordinates()} disabled={!searchQuery || isFetchingCoords}>
+                        {isFetchingCoords ? '...' : <Search className="size-4" />}
+                      </Button>
+                    </>
+                  )}
                   <Button type="button" variant="outline" onClick={fetchCurrentLocation} disabled={isFetchingCoords} title="Use Current Location">
                     <LocateFixed className="size-4 text-primary" />
+                    {!GEOCODE_URL && <span className="ml-1">Use my current location</span>}
                   </Button>
                 </div>
               </div>

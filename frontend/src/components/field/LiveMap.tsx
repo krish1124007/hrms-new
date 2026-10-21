@@ -1,98 +1,153 @@
-import { useEffect, useMemo, useRef, type ReactElement } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import { useMemo, useState, type ReactElement } from 'react';
+import { Link } from 'react-router-dom';
+import { Marker, Popup } from 'react-leaflet';
+import { MapPin, Radio, RefreshCw, Route, Users } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { useLiveLocations } from '@/hooks/use-live-locations';
+import { formatRelative, formatTime, todayIST } from '@/lib/format';
+import type { LiveLocation } from '@/lib/field.api';
+import { cn } from '@/lib/utils';
+import { FitBounds, MapCanvas } from './MapCanvas';
+import { repIcon } from './map-icons';
 
-// Fix Leaflet's default marker — Vite doesn't bundle the PNGs from leaflet/dist/images
-// the way webpack used to. Point to a CDN-hosted version instead.
-const ICON_RETINA = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png';
-const ICON = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png';
-const ICON_SHADOW = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png';
+/** A rep whose newest point is older than this is drawn grey ("last seen …"). */
+const STALE_MS = 15 * 60_000;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: ICON_RETINA,
-  iconUrl: ICON,
-  shadowUrl: ICON_SHADOW,
-});
+const isStale = (r: LiveLocation, now: number): boolean => now - new Date(r.recordedAt).getTime() > STALE_MS;
 
-export interface LiveMapPoint {
-  id: string;
-  lat: number;
-  lng: number;
-  label: string;
-  sublabel?: string;
-  detail?: string;
-}
-
-interface LiveMapProps {
-  points: LiveMapPoint[];
-  height?: number | string;
+function StatusBadge({ status, reason }: { status: string; reason?: string }): ReactElement {
+  if (status === 'live') {
+    return (
+      <Badge variant="success" title="Updates arrive as reps report them">
+        <Radio className="mr-1 size-3" />
+        Live
+      </Badge>
+    );
+  }
+  if (status === 'polling') {
+    return (
+      <Badge variant="warning" title={reason ? `Live connection unavailable (${reason})` : undefined}>
+        <RefreshCw className="mr-1 size-3" />
+        Polling every 30 s
+      </Badge>
+    );
+  }
+  return <Badge variant="secondary">Connecting…</Badge>;
 }
 
 /**
- * Live map view using OpenStreetMap tiles via Leaflet.
- * Free, no API key required, no usage caps for reasonable traffic.
+ * Where every visible rep is now: one marker per rep from
+ * `GET /field/tracking/live`, moved by the `/field-tracking` socket, polled
+ * every 30 s while the socket is down.
  */
-export function LiveMap({ points, height = 480 }: LiveMapProps): ReactElement {
-  // Centre on India by default if no points; otherwise the bounds-fitter takes over.
-  const initialCentre: [number, number] = useMemo(() => {
-    if (points.length === 0) return [22.9734, 78.6569]; // India
-    return [points[0].lat, points[0].lng];
-  }, [points]);
+export function LiveMap({ height = 520 }: { height?: number | string }): ReactElement {
+  const { reps, status, reason, isLoading, error, dataUpdatedAt } = useLiveLocations();
+  const [selected, setSelected] = useState<string | null>(null);
+  const now = dataUpdatedAt || Date.now();
+
+  const coords = useMemo(() => reps.map((r) => [r.lat, r.lng] as [number, number]), [reps]);
+  // Re-fit when reps join or leave, not when one of them moves.
+  const signature = useMemo(() => reps.map((r) => r.employeeId).sort().join('|'), [reps]);
+  const focus = useMemo(() => {
+    const r = reps.find((x) => x.employeeId === selected);
+    return r ? ([[r.lat, r.lng]] as Array<[number, number]>) : null;
+  }, [reps, selected]);
+
+  const today = todayIST();
 
   return (
-    <div
-      className="overflow-hidden rounded-lg border border-border"
-      style={{ height }}
-    >
-      <MapContainer
-        center={initialCentre}
-        zoom={5}
-        style={{ height: '100%', width: '100%' }}
-        scrollWheelZoom
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <FitBounds points={points} />
-        {points.map((p) => (
-          <Marker key={p.id} position={[p.lat, p.lng]}>
-            <Popup>
-              <div className="space-y-1">
-                <div className="font-semibold">{p.label}</div>
-                {p.sublabel && <div className="text-xs text-gray-500">{p.sublabel}</div>}
-                {p.detail && <div className="text-xs">{p.detail}</div>}
-                <div className="font-mono text-[10px] text-gray-500">
-                  {p.lat.toFixed(5)}, {p.lng.toFixed(5)}
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="space-y-2 lg:col-span-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Users className="size-4 text-muted-foreground" />
+            {reps.length} {reps.length === 1 ? 'rep' : 'reps'} reporting in the last 2 h
+          </div>
+          <StatusBadge status={status} reason={reason} />
+        </div>
+        <MapCanvas height={height}>
+          <FitBounds points={coords} signature={signature} />
+          {focus && <FitBounds points={focus} signature={`focus:${selected}`} maxZoom={15} />}
+          {reps.map((r) => (
+            <Marker
+              key={r.employeeId}
+              position={[r.lat, r.lng]}
+              title={r.name}
+              icon={repIcon(r.name, {
+                onVisit: !!r.onVisit,
+                stale: isStale(r, now),
+                selected: r.employeeId === selected,
+              })}
+              eventHandlers={{ click: () => setSelected(r.employeeId) }}
+            >
+              <Popup>
+                <div className="space-y-1 text-xs">
+                  <div className="text-sm font-semibold">{r.name}</div>
+                  {r.employeeCode && <div className="text-gray-500">{r.employeeCode}</div>}
+                  <div>
+                    Updated {formatTime(r.recordedAt)} ({formatRelative(r.recordedAt)})
+                  </div>
+                  {r.accuracy != null && <div>Accuracy ±{Math.round(r.accuracy)} m</div>}
+                  {r.battery != null && <div>Battery {Math.round(r.battery)}%</div>}
                 </div>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
+              </Popup>
+            </Marker>
+          ))}
+        </MapCanvas>
+        {error ? (
+          <p className="text-sm text-destructive">Couldn&apos;t load locations. Retrying every 30 s.</p>
+        ) : null}
+      </div>
+
+      <div className="rounded-lg border border-border bg-card" data-testid="rep-list">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold">Reps</div>
+        {isLoading ? (
+          <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+        ) : reps.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground">
+            No rep has reported a location in the last 2 hours. Locations come from the mobile app while
+            reps are clocked in and live tracking is switched on.
+          </p>
+        ) : (
+          <ul className="max-h-[520px] divide-y divide-border overflow-y-auto">
+            {reps.map((r) => {
+              const stale = isStale(r, now);
+              return (
+                <li
+                  key={r.employeeId}
+                  className={cn(
+                    'cursor-pointer px-4 py-3 text-sm hover:bg-muted/40',
+                    r.employeeId === selected && 'bg-muted/60',
+                  )}
+                  onClick={() => setSelected(r.employeeId)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-medium">{r.name}</span>
+                    <span className={cn('text-xs', stale ? 'text-muted-foreground' : 'text-success')}>
+                      {formatRelative(r.recordedAt)}
+                    </span>
+                  </div>
+                  {r.employeeCode && <div className="text-xs text-muted-foreground">{r.employeeCode}</div>}
+                  {r.onVisit && (
+                    <div className="mt-1 flex items-center gap-1 text-xs text-warning">
+                      <MapPin className="size-3" />
+                      At {r.onVisit.clientName}
+                    </div>
+                  )}
+                  <Link
+                    to={`/field/trail?employeeId=${encodeURIComponent(r.employeeId)}&date=${today}`}
+                    className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary dark:text-blue-400 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Route className="size-3" />
+                    Today&apos;s trail
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
-}
-
-/** Auto-fit the map to the supplied markers whenever they change. */
-function FitBounds({ points }: { points: LiveMapPoint[] }): null {
-  const map = useMap();
-  // Track previous count so we only re-fit when the set actually changes.
-  const lastSig = useRef('');
-  useEffect(() => {
-    const sig = points.map((p) => `${p.id}:${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join('|');
-    if (sig === lastSig.current) return;
-    lastSig.current = sig;
-    if (points.length === 0) return;
-    if (points.length === 1) {
-      map.setView([points[0].lat, points[0].lng], 14, { animate: true });
-      return;
-    }
-    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
-  }, [points, map]);
-  return null;
 }

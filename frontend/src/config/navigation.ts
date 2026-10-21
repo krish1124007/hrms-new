@@ -20,6 +20,7 @@ import {
   Layers,
   LayoutDashboard,
   Lock,
+  Map as MapIcon,
   type LucideIcon,
   MapPin,
   MapPinned,
@@ -28,11 +29,14 @@ import {
   Package,
   Radar,
   Receipt,
+  Route,
   ScrollText,
   Settings,
   Shield,
   ShieldAlert,
   ShoppingBag,
+  ShoppingCart,
+  Target,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -96,6 +100,10 @@ export const NAV_ACCESS = {
   roles: ['roles.view'],
   audit: ['audit.view'],
   backups: ['backups.view'],
+  /** Field sales: reps, team leads and managers. */
+  fieldView: ['field-sales.view'],
+  /** Field sales management: the product catalogue and the live team map. */
+  fieldManage: ['field-sales.manage'],
   /** The Settings home page and the sidebar group around it. */
   settings: ['roles.view', 'audit.view', 'backups.view', 'settings.manage'],
 } satisfies Record<string, string[]>;
@@ -199,9 +207,46 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
 
-  // The Sales / field-sales section was removed from the navigation on
-  // 2026-07-29. The pages under /field and their APIs are still in the
-  // codebase — restore the group here to bring the module back.
+  {
+    title: 'Field Sales',
+    items: [
+      { label: 'Field Dashboard', to: '/field', icon: LayoutDashboard, module: 'field', permissions: P.fieldView },
+      {
+        label: 'Sales',
+        icon: ShoppingCart,
+        module: 'field',
+        permissions: P.fieldView,
+        children: [
+          { label: 'Clients', to: '/field/clients', icon: Building2, module: 'field', permissions: P.fieldView },
+          { label: 'Visits', to: '/field/visits', icon: MapPin, module: 'field', permissions: P.fieldView },
+          { label: 'Orders', to: '/field/orders', icon: ShoppingCart, module: 'field', permissions: P.fieldView },
+          { label: 'Collections', to: '/field/collections', icon: Receipt, module: 'field', permissions: P.fieldView },
+          { label: 'Products', to: '/field/products', icon: Package, module: 'field', permissions: P.fieldManage },
+        ],
+      },
+      {
+        label: 'Field Team',
+        icon: Users,
+        module: 'field',
+        permissions: P.fieldView,
+        children: [
+          { label: 'Tasks', to: '/field/tasks', icon: ClipboardList, module: 'field', permissions: P.fieldView },
+          { label: 'Targets', to: '/field/targets', icon: Target, module: 'field', permissions: P.fieldView },
+        ],
+      },
+      {
+        label: 'Maps',
+        icon: MapIcon,
+        module: 'field',
+        permissions: P.fieldView,
+        children: [
+          { label: 'Live Map', to: '/field/tracking', icon: Radar, module: 'field', permissions: P.fieldManage },
+          { label: 'Trails', to: '/field/trail', icon: Route, module: 'field', permissions: P.fieldView },
+          { label: 'Client Map', to: '/field/clients/map', icon: MapIcon, module: 'field', permissions: P.fieldView },
+        ],
+      },
+    ],
+  },
 
   {
     title: 'Tools',

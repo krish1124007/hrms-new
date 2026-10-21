@@ -44,6 +44,31 @@ describe('sidebar visibility', () => {
     expect(tos.filter((to) => /^\/(projects|timesheets)\b/.test(to))).toEqual([]);
   });
 
+  it('shows Field Sales only to field-sales holders, management items only with manage', () => {
+    expect(leavesFor(employee()).filter((to) => to.startsWith('/field'))).toEqual([]);
+
+    const rep = leavesFor(employee(['field-sales.view']));
+    expect(rep).toEqual(
+      expect.arrayContaining([
+        '/field',
+        '/field/clients',
+        '/field/visits',
+        '/field/orders',
+        '/field/collections',
+        '/field/tasks',
+        '/field/targets',
+        '/field/trail',
+        '/field/clients/map',
+      ]),
+    );
+    expect(rep).not.toContain('/field/products');
+    expect(rep).not.toContain('/field/tracking');
+
+    const fieldManager = leavesFor(employee(['field-sales.view', 'field-sales.manage']));
+    expect(fieldManager).toContain('/field/products');
+    expect(fieldManager).toContain('/field/tracking');
+  });
+
   it('shows the regularization queue to approvers only', () => {
     const manager: AuthUser = {
       _id: 'm2',

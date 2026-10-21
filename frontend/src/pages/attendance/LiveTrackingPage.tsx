@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAttendanceLiveTracking } from '@/hooks/use-attendance';
-import { LiveMap, type LiveMapPoint } from '@/components/field/LiveMap';
+import { PointsMap, type MapPoint } from '@/components/field/PointsMap';
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -17,9 +17,9 @@ function timeAgo(iso: string): string {
 
 export default function LiveTrackingPage(): ReactElement {
   const { data, isLoading, isFetching } = useAttendanceLiveTracking();
-  const live = data?.data ?? [];
+  const live = useMemo(() => data?.data ?? [], [data]);
 
-  const mapPoints = useMemo<LiveMapPoint[]>(
+  const mapPoints = useMemo<MapPoint[]>(
     () =>
       live.map((p) => ({
         id: p.employeeId,
@@ -70,7 +70,7 @@ export default function LiveTrackingPage(): ReactElement {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
-            <LiveMap points={mapPoints} height={480} />
+            <PointsMap points={mapPoints} height={480} />
           )}
           {!isLoading && live.length === 0 && (
             <p className="mt-3 text-sm text-muted-foreground">
