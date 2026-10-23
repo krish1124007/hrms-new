@@ -211,6 +211,8 @@ export interface VisitPoint {
   accuracy?: number;
   /** Metres from the site's pin. */
   distanceM?: number;
+  /** What the employee noted when checking in (or out) — the arrival note. */
+  notes?: string;
 }
 
 export interface VisitSite {

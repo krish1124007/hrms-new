@@ -456,6 +456,42 @@ describe('VisitDetailPage', () => {
     expect(screen.getByText(/450 m from the pin/i)).toBeInTheDocument();
   });
 
+  it("shows the employee's arrival note with the check-in, never as planning notes", async () => {
+    signIn(['field.view'], 'e9');
+    // Unplanned: the server keeps the check-in note as the visit's notes too.
+    api.getVisit.mockResolvedValue({
+      success: true,
+      data: { ...visit, notes: 'Gate locked, waited 10 min', checkIn: { ...visit.checkIn!, notes: 'Gate locked, waited 10 min' } },
+    });
+    renderWithApp(
+      <Routes>
+        <Route path="/field/visits/:id" element={<VisitDetailPage />} />
+      </Routes>,
+      '/field/visits/v1',
+    );
+    const checkIn = (await screen.findByText('Check-in')).closest('div') as HTMLElement;
+    expect(within(checkIn).getByText(/gate locked, waited 10 min/i)).toBeInTheDocument();
+    expect(screen.queryByText('Planning notes')).toBeNull();
+    expect(screen.getAllByText(/gate locked, waited 10 min/i)).toHaveLength(1);
+  });
+
+  it('shows the planner\'s notes and the arrival note of a planned visit apart', async () => {
+    signIn(['field.view'], 'e9');
+    api.getVisit.mockResolvedValue({
+      success: true,
+      data: { ...visit, plannedDate: '2026-10-22', notes: 'Bring the inspection forms', checkIn: { ...visit.checkIn!, notes: 'Gate locked' } },
+    });
+    renderWithApp(
+      <Routes>
+        <Route path="/field/visits/:id" element={<VisitDetailPage />} />
+      </Routes>,
+      '/field/visits/v1',
+    );
+    const planning = (await screen.findByText('Planning notes')).closest('div') as HTMLElement;
+    expect(within(planning).getByText('Bring the inspection forms')).toBeInTheDocument();
+    expect(within(screen.getByText('Check-in').closest('div') as HTMLElement).getByText(/gate locked/i)).toBeInTheDocument();
+  });
+
   it('shows a dash for a report filed without an outcome', async () => {
     signIn(['field.view'], 'e9');
     api.getVisit.mockResolvedValue({

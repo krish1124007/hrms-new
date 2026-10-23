@@ -42,6 +42,7 @@ function PointFact({ label, point, radiusM }: { label: string; point?: VisitPoin
           'No location'
         )}
       </span>
+      {point.notes ? <span className="mt-0.5 block whitespace-pre-line">“{point.notes}”</span> : null}
     </Fact>
   );
 }
@@ -226,6 +227,8 @@ export default function VisitDetailPage(): ReactElement {
 
   const visit = data.data;
   const cancellable = visit.status === 'planned' || visit.status === 'in_progress';
+  // An unplanned visit keeps its arrival note as the visit's notes too: it shows with the check-in.
+  const planningNotes = visit.notes && visit.notes !== visit.checkIn?.notes ? visit.notes : undefined;
 
   return (
     <div className="space-y-6">
@@ -271,9 +274,9 @@ export default function VisitDetailPage(): ReactElement {
               <PointFact label="Check-out" point={visit.checkOut} radiusM={visit.site?.radiusM ?? 0} />
               <Fact label="Time on site">{formatMinutes(visit.durationMinutes)}</Fact>
               <Fact label="Allowed radius">{visit.site ? `${visit.site.radiusM} m` : '—'}</Fact>
-              {visit.notes && (
+              {planningNotes && (
                 <div className="col-span-2">
-                  <Fact label="Planning notes">{visit.notes}</Fact>
+                  <Fact label={visit.plannedDate ? 'Planning notes' : 'Notes'}>{planningNotes}</Fact>
                 </div>
               )}
               {visit.status === 'cancelled' && visit.cancelReason && (
