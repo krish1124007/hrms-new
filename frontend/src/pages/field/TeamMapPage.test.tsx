@@ -56,6 +56,7 @@ const ROWS: TeamStatusRow[] = [
   {
     employee: emp('e2', 'Asha', 'Rao'),
     status: 'between_sites',
+    currentVisit: null,
     lastPoint: { lat: 19.2, lng: 72.95, at: '2026-10-23T06:10:00.000Z', kind: 'visit_out', siteName: 'Depot 4' },
     visitsToday: 1,
     kmToday: 6,
@@ -63,11 +64,19 @@ const ROWS: TeamStatusRow[] = [
   {
     employee: emp('e3', 'Neel', 'Shah'),
     status: 'day_ended',
+    currentVisit: null,
     lastPoint: { lat: 18.5, lng: 73.8, at: '2026-10-23T12:00:00.000Z', kind: 'day_out' },
     visitsToday: 3,
     kmToday: 22,
   },
-  { employee: emp('e4', 'Meera', 'Iyer'), status: 'not_started', visitsToday: 0, kmToday: 0 },
+  {
+    employee: emp('e4', 'Meera', 'Iyer'),
+    status: 'not_started',
+    currentVisit: null,
+    lastPoint: null,
+    visitsToday: 0,
+    kmToday: 0,
+  },
 ];
 
 function renderPage(): void {

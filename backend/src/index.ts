@@ -14,7 +14,6 @@ import { redis, disconnectRedis } from './config/redis.js';
 
 import { createApp, docsEnabledByDefault } from './app.js';
 import { mailBootProblem } from './lib/mail-boot-check.js';
-import { registerFieldTrackingNamespace } from './sockets/field-tracking.socket.js';
 
 const REDIS_BOOT_TIMEOUT_MS = 5_000;
 
@@ -73,7 +72,6 @@ async function bootstrap(): Promise<void> {
     logger.debug({ id: socket.id }, 'Socket connected');
     socket.on('disconnect', () => logger.debug({ id: socket.id }, 'Socket disconnected'));
   });
-  registerFieldTrackingNamespace(io);
   // Expose io to services that push events (notification.service etc.)
   const { setIO } = await import('./sockets/io-registry.js');
   setIO(io);

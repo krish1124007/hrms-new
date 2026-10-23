@@ -118,10 +118,6 @@ export interface AttendanceConfig {
     /** Who must file the day's expenses before checking out. */
     expenseBeforeCheckout?: ExpenseBeforeCheckout;
   };
-  liveTracking?: {
-    enabled: boolean;
-    intervalSeconds: number;
-  };
   /** Which days the company doesn't work. See `lib/week-off.ts`. */
   weekOff?: WeekOffRule;
 }
@@ -293,8 +289,6 @@ export const attendanceApi = {
     departmentId?: string,
   ): Promise<{ success: boolean; data: Attendance[] }> =>
     (await api.get('/attendance/report', { params: { from, to, departmentId } })).data,
-  liveTracking: async (): Promise<{ success: boolean; data: any[] }> =>
-    (await api.get('/attendance/tracking/live')).data,
 
   // sites
   listSites: async (params?: Record<string, unknown>): Promise<ListResponse<AttendanceSite>> =>

@@ -412,7 +412,7 @@ export default function ExpenseListPage(): ReactElement {
             <TravelBreakdown travel={approvingClaim.travel} />
           )}
           {approvingClaim?._id === approvingId && approvingClaim.visitId && (
-            <LinkedVisit visit={approvingClaim.visitId} />
+            <LinkedVisit visitId={approvingClaim.visitId} />
           )}
           <div>
             <Label htmlFor="ec-accept">Accepted amount (₹)</Label>
@@ -539,7 +539,7 @@ function ClaimDetails({ claim }: { claim: ExpenseClaim }): ReactElement {
           <TravelBreakdown travel={claim.travel} />
         </div>
       )}
-      {claim.visitId && <LinkedVisit visit={claim.visitId} />}
+      {claim.visitId && <LinkedVisit visitId={claim.visitId} />}
       {claim.status === 'rejected' && <RejectionReason reason={claim.rejectedReason} title="Claim rejection reason" />}
     </DialogBody>
   );

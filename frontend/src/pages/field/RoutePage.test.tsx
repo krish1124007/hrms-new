@@ -56,8 +56,7 @@ function route(over: Partial<DayRoute> = {}): DayRoute {
       { fromIndex: 0, toIndex: 1, distanceM: 5000, estimated: false },
       { fromIndex: 2, toIndex: 3, distanceM: 7500, estimated: false },
     ],
-    // Deliberately stale: the page shows the sum of the legs it draws.
-    totalKm: 99,
+    totalKm: 12.5,
     estimated: false,
     ...over,
   };
@@ -82,6 +81,8 @@ beforeEach(() => {
       {
         employee: { _id: 'e1', firstName: 'Ravi', lastName: 'Kumar', employeeId: 'EMP-1' },
         status: 'day_ended',
+        currentVisit: null,
+        lastPoint: POINTS[3],
         visitsToday: 1,
         kmToday: 12.5,
       },
@@ -90,7 +91,7 @@ beforeEach(() => {
 });
 
 describe('RoutePage', () => {
-  it('draws every point and leg and totals the legs', async () => {
+  it("draws every point and leg and shows the server's total", async () => {
     api.dayRoute.mockResolvedValue({ success: true, data: route() });
     renderPage();
     const total = await screen.findByTestId('route-total-km');
@@ -104,7 +105,7 @@ describe('RoutePage', () => {
     expect(screen.queryByText('Estimated')).not.toBeInTheDocument();
   });
 
-  it('marks the route "estimated" when any leg is estimated', async () => {
+  it('marks an estimated route and dashes its estimated legs', async () => {
     api.dayRoute.mockResolvedValue({
       success: true,
       data: route({
@@ -112,6 +113,7 @@ describe('RoutePage', () => {
           { fromIndex: 0, toIndex: 1, distanceM: 5000, estimated: false },
           { fromIndex: 2, toIndex: 3, distanceM: 7500, estimated: true },
         ],
+        estimated: true,
       }),
     });
     renderPage();

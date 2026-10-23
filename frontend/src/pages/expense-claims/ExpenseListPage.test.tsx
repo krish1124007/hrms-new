@@ -39,6 +39,18 @@ const travelClaim: ExpenseClaim = {
     claimedKm: 50,
     estimated: true,
     reason: 'Road closed, took the bypass',
+    points: [
+      { lat: 19.0, lng: 72.8, at: '2026-10-22T03:30:00.000Z', kind: 'day_in' },
+      { lat: 19.03, lng: 72.84, at: '2026-10-22T04:30:00.000Z', kind: 'visit_in', siteName: 'Acme Plant' },
+      { lat: 19.031, lng: 72.841, at: '2026-10-22T05:30:00.000Z', kind: 'visit_out', siteName: 'Acme Plant' },
+      { lat: 19.2, lng: 72.95, at: '2026-10-22T07:00:00.000Z', kind: 'visit_in', siteName: 'Depot 4' },
+      { lat: 19.1, lng: 72.9, at: '2026-10-22T12:00:00.000Z', kind: 'day_out' },
+    ],
+    legs: [
+      { fromIndex: 0, toIndex: 1, distanceM: 12_000, estimated: false },
+      { fromIndex: 2, toIndex: 3, distanceM: 20_300, estimated: true },
+      { fromIndex: 3, toIndex: 4, distanceM: 10_000, estimated: false },
+    ],
   },
 };
 
@@ -60,7 +72,7 @@ describe('ExpenseListPage — travel allowance', () => {
   it('shows the travel breakdown in the claim details', async () => {
     list.mockResolvedValue({
       success: true,
-      data: [{ ...travelClaim, visitId: { _id: 'v7', site: { _id: 's1', name: 'Acme Plant' } } }],
+      data: [{ ...travelClaim, visitId: 'v7' }],
       pagination: { page: 1, limit: 25, total: 1, pages: 1 },
     } as never);
     renderPage();
@@ -79,8 +91,10 @@ describe('ExpenseListPage — travel allowance', () => {
     expect(value('Vehicle')).toBe('Two-wheeler');
     expect(value('Reason')).toBe('Road closed, took the bypass');
     expect(value('Amount')).toContain('₹250');
+    expect(value('Route')).toContain('Acme Plant → Depot 4');
+    expect(value('Route')).toContain('5 points, 3 legs');
 
-    const visit = screen.getByRole('link', { name: /Acme Plant/ });
+    const visit = screen.getByRole('link', { name: 'View visit' });
     expect(visit).toHaveAttribute('href', '/field/visits/v7');
   });
 
@@ -94,7 +108,12 @@ describe('ExpenseListPage — travel allowance', () => {
     await screen.findByText(/50 km · Two-wheeler/);
     await userEvent.click(screen.getByTitle('Approve'));
     const breakdown = await screen.findByTestId('travel-breakdown');
+    // What the approver weighs: calculated vs claimed km, the estimate flag, vehicle, rate and reason.
     expect(breakdown).toHaveTextContent('42.3 km');
+    expect(breakdown).toHaveTextContent('50.0 km');
+    expect(breakdown).toHaveTextContent('Estimated');
+    expect(breakdown).toHaveTextContent('Two-wheeler');
+    expect(breakdown).toHaveTextContent('₹5 / km');
     expect(breakdown).toHaveTextContent('Road closed, took the bypass');
   });
 

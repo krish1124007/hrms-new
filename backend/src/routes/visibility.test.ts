@@ -18,7 +18,6 @@ import { createUser, createEmployeeFor, type RoleSlug } from '../test/factories.
 import type { IEmployee } from '../models/employee.model.js';
 import { Employee } from '../models/employee.model.js';
 import { Attendance } from '../models/attendance.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
 import { GeofenceZone } from '../models/geofence-zone.model.js';
 import { Notice } from '../models/notice.model.js';
 import { ExpenseCategory } from '../models/expense-category.model.js';
@@ -173,40 +172,6 @@ describe('attendance records', () => {
     const hr = await actor('hr_executive');
     const all = await request(app).get('/api/v1/attendance/report').query(range).set(auth(hr.token));
     expect(owners(all.body.data)).toEqual(idsOf(M, A, B));
-  });
-
-  it('the live-location list shows a manager their reports only', async () => {
-    const today = startOfBusinessDay(new Date());
-    // Only field staff are tracked (and shown): make A and B field staff.
-    await Employee.updateMany({ _id: { $in: [A.employee._id, B.employee._id] } }, { $set: { isFieldStaff: true } });
-    for (const who of [A, B]) {
-      // eslint-disable-next-line no-await-in-loop
-      await Attendance.create({
-        employeeId: who.employee._id,
-        date: today,
-        status: 'present',
-        checkIn: { time: new Date() },
-      });
-      // eslint-disable-next-line no-await-in-loop
-      await LocationTrack.create({
-        employeeId: who.employee._id,
-        timestamp: new Date(),
-        location: { type: 'Point', coordinates: [72.8, 21.1] },
-      });
-    }
-
-    const mine = await request(app).get('/api/v1/attendance/tracking/live').set(auth(M.token));
-    expect(mine.status).toBe(200);
-    expect(owners(mine.body.data)).toEqual(idsOf(A));
-
-    const hr = await actor('hr_executive');
-    const all = await request(app).get('/api/v1/attendance/tracking/live').set(auth(hr.token));
-    expect(owners(all.body.data)).toEqual(idsOf(A, B));
-
-    // B is office staff again: their stored fix is no longer shown.
-    await Employee.updateOne({ _id: B.employee._id }, { $set: { isFieldStaff: false } });
-    const fieldOnly = await request(app).get('/api/v1/attendance/tracking/live').set(auth(hr.token));
-    expect(owners(fieldOnly.body.data)).toEqual(idsOf(A));
   });
 });
 

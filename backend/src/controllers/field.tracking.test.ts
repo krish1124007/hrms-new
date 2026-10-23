@@ -2,9 +2,9 @@
  * Continuous tracking is removed (locations only at check-in/check-out): both
  * upload URLs answer 200 `{ ignored: true }` for any body and store nothing,
  * even for clocked-in field staff with live tracking switched on; the live,
- * trail and visit-map reads are gone (the team map uses /field/team/status
- * and /field/route/:employeeId). The `/field-tracking` socket handshake still
- * admits field users only.
+ * trail and visit-map reads — and the attendance live map — are gone (the
+ * team map uses /field/team/status and /field/route/:employeeId). The
+ * `/field-tracking` socket namespace is gone too.
  */
 import request from 'supertest';
 import type { Express } from 'express';
@@ -17,8 +17,6 @@ import { Attendance } from '../models/attendance.model.js';
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { startOfBusinessDay } from '../lib/business-day.js';
-import { socketAuth } from '../sockets/auth.middleware.js';
-import { fieldTrackingAccess } from '../sockets/field-tracking.socket.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const MIN = 60_000;
@@ -95,67 +93,9 @@ describe('live tracking reads are gone', () => {
       expect((await request(app).get(path).set(auth(head.token))).status).toBe(404);
     }
   });
-});
 
-// ─── Socket handshake ──────────────────────────────────────────────────────
-
-interface FakeSocket {
-  id: string;
-  handshake: { auth: Record<string, unknown> };
-  data: Record<string, unknown>;
-  joined: string[];
-  join(room: string | string[]): void;
-}
-
-function fakeSocket(token?: string): FakeSocket {
-  const joined: string[] = [];
-  return {
-    id: 'socket-1',
-    handshake: { auth: token ? { token } : {} },
-    data: {},
-    joined,
-    join(room) {
-      joined.push(...[room].flat());
-    },
-  };
-}
-
-type Middleware = (socket: never, next: (err?: Error) => void) => unknown;
-function run(mw: Middleware, socket: FakeSocket): Promise<Error | undefined> {
-  return new Promise((resolve) => {
-    void mw(socket as never, (err?: Error) => resolve(err));
-  });
-}
-
-describe('socket handshake', () => {
-  it('rejects an inactive user; accepts an active one', async () => {
-    const rep = await fieldActor();
-    const ok = fakeSocket(rep.token);
-    expect(await run(socketAuth as Middleware, ok)).toBeUndefined();
-    expect(ok.data.userId).toBe(String(rep.user._id));
-
-    await User.updateOne({ _id: rep.user._id }, { $set: { status: 'inactive' } });
-    const err = await run(socketAuth as Middleware, fakeSocket(rep.token));
-    expect(err?.message).toBe('USER_INACTIVE');
-  });
-
-  it('joins managers:all for field.manage, reports:<own employee> for view, refuses others', async () => {
-    const head = await fieldActor({ manage: true });
-    const headSocket = fakeSocket(head.token);
-    expect(await run(socketAuth as Middleware, headSocket)).toBeUndefined();
-    expect(await run(fieldTrackingAccess as Middleware, headSocket)).toBeUndefined();
-    expect(headSocket.joined).toContain('managers:all');
-
-    const manager = await fieldActor();
-    const managerSocket = fakeSocket(manager.token);
-    await run(socketAuth as Middleware, managerSocket);
-    expect(await run(fieldTrackingAccess as Middleware, managerSocket)).toBeUndefined();
-    expect(managerSocket.joined).toContain(`reports:${String(manager.employee._id)}`);
-    expect(managerSocket.joined).not.toContain('managers:all');
-
-    const { token } = await createUser({ roleSlug: 'employee' });
-    const plain = fakeSocket(token);
-    await run(socketAuth as Middleware, plain);
-    expect((await run(fieldTrackingAccess as Middleware, plain))?.message).toBe('FORBIDDEN');
+  it('the attendance live map answers 404, even for HR', async () => {
+    const { token } = await createUser({ roleSlug: 'hr_executive' });
+    expect((await request(app).get('/api/v1/attendance/tracking/live').set(auth(token))).status).toBe(404);
   });
 });

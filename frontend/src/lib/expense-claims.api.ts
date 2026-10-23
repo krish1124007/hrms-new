@@ -1,4 +1,6 @@
 import { api } from './axios';
+import type { VehicleType } from './field.api';
+import type { RouteLeg, RoutePoint } from './field-route';
 import type { ListResponse, ItemResponse } from './systemcore.api';
 
 export type ExpenseClaimStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'reimbursed';
@@ -53,7 +55,7 @@ export interface ExpenseReceipt {
 export interface ExpenseTravel {
   /** The IST day travelled, `YYYY-MM-DD`. */
   date: string;
-  vehicleType: 'bike' | 'car' | 'other';
+  vehicleType: VehicleType;
   ratePerKm: number;
   /** Km measured between the day's check-in/out points. */
   computedKm: number;
@@ -63,23 +65,15 @@ export interface ExpenseTravel {
   estimated: boolean;
   /** Why the claimed km differs from the calculation (required above 5 %). */
   reason?: string;
+  /** The day's check-in/out points as measured when the claim was made. */
+  points: RoutePoint[];
+  /** The legs measured between those points (indices into `points`). */
+  legs: RouteLeg[];
 }
-
-/** The field visit an expense belongs to — an id, or populated by the server. */
-export type ExpenseVisitRef =
-  | string
-  | {
-      _id: string;
-      site?: { _id: string; name: string } | null;
-      purpose?: string;
-      checkIn?: { at: string } | null;
-    };
 
 export interface ExpenseClaim {
   _id: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   employeeId: string | { _id: string; firstName: string; lastName: string; employeeId?: string };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   category: string | { _id: string; name: string; code: string };
   amount: number;
   acceptedAmount?: number;
@@ -89,16 +83,15 @@ export interface ExpenseClaim {
   receiptUrls: ExpenseReceipt[];
   paymentMethod?: ExpensePaymentMethod;
   status: ExpenseClaimStatus;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   approvedBy?: string | { _id: string; firstName: string; lastName: string; email: string };
   approvedAt?: string;
   rejectedReason?: string;
   reimbursedAt?: string;
   reimbursementRef?: string;
   /** Set on travel allowance claims. */
-  travel?: ExpenseTravel | null;
-  /** The field visit this expense was incurred at, if linked. */
-  visitId?: ExpenseVisitRef | null;
+  travel?: ExpenseTravel;
+  /** The id of the field visit this expense was incurred at, if linked (never populated). */
+  visitId?: string;
   createdAt: string;
   updatedAt: string;
 }

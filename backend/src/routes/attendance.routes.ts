@@ -224,15 +224,10 @@ router.delete(
   asyncHandler(res.deleteAllowedIP),
 );
 
-// ---------- LIVE TRACKING ----------
+// ---------- LOCATION UPLOADS (retired) ----------
 // Continuous tracking is gone: shipped app builds still post their location
 // queue here (for every user) and get 200 `{ ignored: true }`; nothing is
-// stored. The live map below shows fixes stored before.
+// stored. The field team map (`GET /field/team/status`) replaced the live map.
 router.post('/tracking/batch', tracking.ignoreTrackingBatch);
-router.get(
-  '/tracking/live',
-  requirePermission('attendance.view'),
-  asyncHandler(ctrl.getLiveTracking),
-);
 
 export default router;

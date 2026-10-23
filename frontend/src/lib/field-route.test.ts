@@ -1,30 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { RouteLeg } from './field-reports.api';
-import {
-  formatKm,
-  isRouteEstimated,
-  kmNeedsReason,
-  legsTotalKm,
-  travelAmount,
-} from './field-route';
+import { formatKm, kmNeedsReason, travelAmount, travelSummary } from './field-route';
 
-describe('legsTotalKm', () => {
-  it('adds the legs in kilometres', () => {
-    const legs: RouteLeg[] = [
-      { fromIndex: 0, toIndex: 1, distanceM: 5000, estimated: false },
-      { fromIndex: 1, toIndex: 2, distanceM: 7450, estimated: false },
-    ];
-    expect(legsTotalKm(legs)).toBeCloseTo(12.45);
-    expect(legsTotalKm([])).toBe(0);
-  });
-});
-
-describe('isRouteEstimated', () => {
-  it('is true when the route or any leg is estimated', () => {
-    const leg: RouteLeg = { fromIndex: 0, toIndex: 1, distanceM: 10, estimated: false };
-    expect(isRouteEstimated({ estimated: false, legs: [leg] })).toBe(false);
-    expect(isRouteEstimated({ estimated: false, legs: [leg, { ...leg, estimated: true }] })).toBe(true);
-    expect(isRouteEstimated({ estimated: true, legs: [] })).toBe(true);
+describe('travelSummary', () => {
+  it('says the claimed km and the vehicle', () => {
+    expect(travelSummary({ claimedKm: 50, vehicleType: 'bike' })).toBe('50 km · Two-wheeler');
+    expect(travelSummary({ claimedKm: 12.46, vehicleType: 'car' })).toBe('12.5 km · Car');
   });
 });
 

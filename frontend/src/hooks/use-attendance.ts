@@ -131,13 +131,6 @@ export function useAttendanceDashboard(departmentId?: string) {
     refetchOnWindowFocus: true,
   });
 }
-export function useAttendanceLiveTracking() {
-  return useQuery({
-    queryKey: ['attendance-live-tracking'],
-    queryFn: () => attendanceApi.liveTracking(),
-    refetchInterval: 15_000,
-  });
-}
 export function useRequestRegularization() {
   const qc = useQueryClient();
   return useMutation({
