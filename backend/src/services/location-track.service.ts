@@ -9,7 +9,7 @@
  *
  * The gate ("field staff, consented and clocked in"):
  *   • field staff — only employees HR has flagged `isFieldStaff` are tracked
- *     at all (holding a `field-sales.*` permission does not make anyone field
+ *     at all (holding a `field.*` permission does not make anyone field
  *     staff — HR managers hold one to run the module). Otherwise 403
  *     `NOT_FIELD_STAFF`.
  *   • consent — live tracking is switched on in the attendance config
@@ -23,7 +23,7 @@
  * (shipped apps poll it and must not see errors). Fixes recorded more than
  * 24 h ago are dropped from a batch, not refused with it.
  *
- * Visibility for every read: `field-sales.manage` sees every rep; anyone
+ * Visibility for every read: `field.manage` sees every rep; anyone
  * else sees themselves and their direct reports — and only field staff's
  * fixes are ever shown (rows stored for anyone else before this gate
  * existed stay hidden).
@@ -61,7 +61,7 @@ const OPEN_VISIT_MAX_MS = 12 * HOUR_MS;
 /** How far back a night shift's open check-in can be (same as attendance check-out). */
 const OPEN_PUNCH_LOOKBACK_MS = 36 * HOUR_MS;
 
-const MANAGE = 'field-sales.manage';
+const MANAGE = 'field.manage';
 
 // ─── Request schema ───────────────────────────────────────────────────────
 
@@ -293,7 +293,7 @@ function broadcastLocation(
 
 /**
  * Employee ids whose locations and visits the caller may see: `null` for a
- * `field-sales.manage` holder (everyone), else their own plus their direct
+ * `field.manage` holder (everyone), else their own plus their direct
  * reports' (empty without an employee record).
  */
 export async function visibleRepIds(req: Request): Promise<Types.ObjectId[] | null> {
@@ -343,40 +343,40 @@ export function openVisitSince(now = new Date()): Date {
 
 // ─── Visit pins ───────────────────────────────────────────────────────────
 
-/** A lean visit with `clientId` populated (`name location`), or null when the client is gone. */
+/** A lean visit with `siteId` populated (`name location`), or null when the site is gone. */
 export interface VisitLike {
   _id: Types.ObjectId;
   employeeId: unknown;
-  clientId: unknown;
+  siteId: unknown;
   checkIn?: { time?: Date; location?: { lat?: number; lng?: number } } | null;
   checkOut?: { time?: Date } | null;
   status?: string;
   purpose?: string;
 }
 
-interface PopulatedClient {
+interface PopulatedSite {
   _id: Types.ObjectId;
   name?: string;
   location?: { coordinates?: number[] } | null;
 }
 
 /**
- * A visit as a map pin: where the rep checked in, else the client's own
+ * A visit as a map pin: where the rep checked in, else the site's own
  * location (`lat`/`lng` null when neither is known).
  */
 export function visitPin(v: VisitLike) {
-  const client =
-    v.clientId && typeof v.clientId === 'object' && !(v.clientId instanceof Types.ObjectId)
-      ? (v.clientId as PopulatedClient)
+  const site =
+    v.siteId && typeof v.siteId === 'object' && !(v.siteId instanceof Types.ObjectId)
+      ? (v.siteId as PopulatedSite)
       : null;
   const fix = v.checkIn?.location;
   const hasFix = typeof fix?.lat === 'number' && typeof fix?.lng === 'number';
-  const coords = client?.location?.coordinates;
+  const coords = site?.location?.coordinates;
   return {
     visitId: String(v._id),
     employeeId: idOf(v.employeeId),
-    clientId: idOf(v.clientId),
-    clientName: client?.name ?? null,
+    siteId: idOf(v.siteId),
+    siteName: site?.name ?? null,
     lat: hasFix ? (fix!.lat as number) : (coords?.[1] ?? null),
     lng: hasFix ? (fix!.lng as number) : (coords?.[0] ?? null),
     checkInAt: v.checkIn?.time ?? null,

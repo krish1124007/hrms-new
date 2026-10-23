@@ -11,7 +11,6 @@ import { PayrollCycle } from '../models/payroll-cycle.model.js';
 import { Project } from '../models/project.model.js';
 import { Task } from '../models/task.model.js';
 import { Visit } from '../models/visit.model.js';
-import { ProductOrder } from '../models/product-order.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
 import { logger } from '../config/logger.js';
 import {
@@ -43,7 +42,7 @@ export interface DashboardData {
   payroll?: { lastProcessedMonth: string; totalPayroll: number };
   projects?: { active: number; overdue: number; completedThisMonth: number };
   tasks?: { myPending: number; myOverdue: number; completedThisWeek: number };
-  fieldSales?: { activeAgents: number; visitsToday: number; ordersToday: number };
+  field?: { activeAgents: number; visitsToday: number };
 }
 
 /* ─────────────── Helpers ─────────────── */
@@ -325,12 +324,12 @@ export async function getDashboardData(
     );
   }
 
-  /* ── Field Sales ── */
-  if (enabledModules.includes('fieldSales')) {
+  /* ── Field Visits ── */
+  if (enabledModules.includes('field')) {
     tasks.push(
       (async () => {
         try {
-          const [activeAgents, visitsToday, ordersToday] = await Promise.all([
+          const [activeAgents, visitsToday] = await Promise.all([
             // Agents that have sent a location ping today
             LocationTrack.distinct('employeeId', {
               timestamp: { $gte: todayStart, $lte: todayEnd },
@@ -339,14 +338,10 @@ export async function getDashboardData(
               createdAt: { $gte: todayStart, $lte: todayEnd },
               status: { $ne: 'cancelled' },
             }),
-            ProductOrder.countDocuments({
-              createdAt: { $gte: todayStart, $lte: todayEnd },
-              status: { $ne: 'cancelled' },
-            }),
           ]);
-          data.fieldSales = { activeAgents, visitsToday, ordersToday };
+          data.field = { activeAgents, visitsToday };
         } catch (err) {
-          logger.warn({ err }, 'Dashboard: fieldSales query failed');
+          logger.warn({ err }, 'Dashboard: field query failed');
         }
       })(),
     );

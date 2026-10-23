@@ -8,7 +8,14 @@ import { Role, DEFAULT_ROLES, type IRole } from '../models/role.model.js';
 import { User, type IUser } from '../models/user.model.js';
 import { Employee, type IEmployee } from '../models/employee.model.js';
 
-export type RoleSlug = 'admin' | 'hr_manager' | 'hr_executive' | 'manager' | 'employee';
+export type RoleSlug =
+  | 'admin'
+  | 'hr_manager'
+  | 'hr_executive'
+  | 'manager'
+  | 'employee'
+  | 'field_employee'
+  | 'field_manager';
 
 export const DEFAULT_TEST_PASSWORD = 'Passw0rd!Test#1';
 

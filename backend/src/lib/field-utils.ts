@@ -1,5 +1,5 @@
 /**
- * Small shared pieces of the field-sales controllers: IST day/month windows,
+ * Small shared pieces of the field controllers: IST day/month windows,
  * query-string parsing (ids, date bounds, sort keys), money rounding and
  * great-circle distance.
  */

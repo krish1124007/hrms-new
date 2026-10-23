@@ -11,7 +11,7 @@ import {
   assertFieldRead,
   assertFieldWrite,
   canManageField,
-  fieldScope,
+  listScopeFilter,
   requireOwnEmployeeId,
 } from '../lib/field-access.js';
 import { objectIdString, pageParams, setAndUnset, sortParam } from '../lib/field-utils.js';
@@ -26,7 +26,7 @@ export const createTaskSchema = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(5000).optional(),
   assignedTo: objectIdString,
-  clientId: objectIdString.optional(),
+  siteId: objectIdString.optional(),
   location: z
     .object({
       lat: z.coerce.number().min(-90).max(90).optional(),
@@ -39,12 +39,12 @@ export const createTaskSchema = z.object({
   dueDate: z.coerce.date().optional(),
 });
 
-/** `null` clears an optional field: the description, client, location or due date (never the assignee). */
+/** `null` clears an optional field: the description, site, location or due date (never the assignee). */
 export const updateTaskSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().max(5000).nullable().optional(),
   assignedTo: objectIdString.optional(),
-  clientId: objectIdString.nullable().optional(),
+  siteId: objectIdString.nullable().optional(),
   location: createTaskSchema.shape.location.unwrap().nullable().optional(),
   priority: z.enum(PRIORITIES).optional(),
   status: z.enum(STATUSES).optional(),
@@ -71,7 +71,7 @@ export const myQuerySchema = z.object({ ...pageParams, status: z.enum(STATUSES).
 
 const POPULATE = [
   { path: 'assignedTo', select: 'firstName lastName employeeId' },
-  { path: 'clientId', select: 'name address location' },
+  { path: 'siteId', select: 'name type address location radiusM' },
 ];
 
 async function loadTask(id: string): Promise<IFieldTask> {
@@ -110,7 +110,7 @@ async function notifyAssignee(userId: string | null, task: IFieldTask): Promise<
 
 export async function listTasks(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof listQuerySchema>;
-  const filter: Record<string, unknown> = await fieldScope(req, q.assignedTo, 'assignedTo');
+  const filter: Record<string, unknown> = await listScopeFilter(req, q.assignedTo, 'assignedTo');
   if (q.status) filter.status = q.status;
   if (q.priority) filter.priority = q.priority;
   const result = await FieldTask.paginate(filter, {
@@ -130,7 +130,7 @@ export async function myTasks(req: Request, res: Response): Promise<void> {
     page: q.page,
     limit: q.limit,
     sort: { dueDate: 1, createdAt: -1 },
-    populate: [{ path: 'clientId', select: 'name address location' }],
+    populate: [{ path: 'siteId', select: 'name type address location radiusM' }],
   });
   res.json({ success: true, data: result.data, pagination: result.pagination });
 }
@@ -138,7 +138,7 @@ export async function myTasks(req: Request, res: Response): Promise<void> {
 /** The tasks of the reps the caller can see (field managers: everyone), paginated. */
 export async function teamTasks(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof myQuerySchema>;
-  const filter: Record<string, unknown> = await fieldScope(req, undefined, 'assignedTo');
+  const filter: Record<string, unknown> = await listScopeFilter(req, undefined, 'assignedTo');
   // A rep's "team" is the people who report to them, not themselves.
   if (!canManageField(req)) {
     const self = await requireOwnEmployeeId(req);
@@ -183,7 +183,7 @@ export async function updateTask(req: Request, res: Response): Promise<void> {
   if (set.status && set.status !== task.status) {
     if (CLOSED.includes(task.status)) throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
     if (set.status === 'cancelled' && !manager) {
-      throw new AppError('Only a field sales manager can cancel a task', 403, 'FORBIDDEN');
+      throw new AppError('Only a field manager can cancel a task', 403, 'FORBIDDEN');
     }
     if (set.status === 'completed') set.completedAt = new Date();
   }

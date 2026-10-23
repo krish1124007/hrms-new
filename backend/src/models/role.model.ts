@@ -104,6 +104,9 @@ const HR_EXECUTIVE_PERMISSIONS: string[] = [
   'notices.manage',
   'policies.manage',
   'events.manage',
+  // Field Visits: every employee's visits, sites, routes and reports, and the settings.
+  'field.view',
+  'field.manage',
 ];
 
 /**
@@ -134,14 +137,23 @@ const HR_MANAGER_PERMISSIONS: string[] = [
   'disciplinary.manage',
   'locations.manage',
   'audit.view',
-  'field-sales.view',
-  'field-sales.manage',
   'projects.view',
   'projects.create',
   'projects.update',
   'projects.delete',
   'backups.view',
 ];
+
+/**
+ * Field Visits roles. A field employee is an employee who also checks in at
+ * sites, pins sites and files visit reports (`field.view`: their own records,
+ * plus their direct reports' if they have any). A field manager runs the
+ * field team: a manager who also sees every field employee's visits, sites,
+ * routes and reports and edits the field settings (`field.manage`).
+ */
+const FIELD_EMPLOYEE_PERMISSIONS: string[] = [...EMPLOYEE_PERMISSIONS, 'field.view'];
+
+const FIELD_MANAGER_PERMISSIONS: string[] = [...MANAGER_PERMISSIONS, 'field.view', 'field.manage'];
 
 export const DEFAULT_ROLES: Array<{
   name: string;
@@ -183,6 +195,20 @@ export const DEFAULT_ROLES: Array<{
     slug: 'employee',
     description: 'Standard employee — self-service only',
     permissions: EMPLOYEE_PERMISSIONS,
+    isSystem: true,
+  },
+  {
+    name: 'Field Employee',
+    slug: 'field_employee',
+    description: 'Employee working at sites — check in and out, pin sites, file visit reports, claim travel',
+    permissions: FIELD_EMPLOYEE_PERMISSIONS,
+    isSystem: true,
+  },
+  {
+    name: 'Field Manager',
+    slug: 'field_manager',
+    description: 'Manager of the field team — plans visits, sees every field employee’s visits, routes and reports, edits field settings',
+    permissions: FIELD_MANAGER_PERMISSIONS,
     isSystem: true,
   },
 ];

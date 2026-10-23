@@ -81,7 +81,7 @@ interface LatestFix {
 /**
  * `GET /field/tracking/live` — each visible rep's newest fix of the last 2 h:
  * `{ employeeId, employeeCode, name, avatar, lat, lng, accuracy, speed,
- * heading, battery, recordedAt, onVisit: { visitId, clientId, clientName } | null }`.
+ * heading, battery, recordedAt, onVisit: { visitId, siteId, siteName } | null }`.
  */
 export async function liveTracking(req: Request, res: Response): Promise<void> {
   const now = new Date();
@@ -123,8 +123,8 @@ export async function liveTracking(req: Request, res: Response): Promise<void> {
       status: { $ne: 'cancelled' },
     })
       .sort({ 'checkIn.time': -1 })
-      .select('employeeId clientId checkIn')
-      .populate('clientId', 'name')
+      .select('employeeId siteId checkIn')
+      .populate('siteId', 'name')
       .lean()
       .exec(),
   ]);
@@ -139,7 +139,7 @@ export async function liveTracking(req: Request, res: Response): Promise<void> {
     const emp = byId.get(String(f._id));
     if (!emp) return []; // employee since deleted
     const visit = visitOf.get(String(f._id));
-    const client = visit?.clientId as unknown as { _id: Types.ObjectId; name?: string } | null;
+    const site = visit?.siteId as unknown as { _id: Types.ObjectId; name?: string } | null;
     return [
       {
         employeeId: String(f._id),
@@ -156,8 +156,8 @@ export async function liveTracking(req: Request, res: Response): Promise<void> {
         onVisit: visit
           ? {
               visitId: String(visit._id),
-              clientId: idOf(client),
-              clientName: client?.name ?? null,
+              siteId: idOf(site),
+              siteName: site?.name ?? null,
             }
           : null,
       },
@@ -201,8 +201,8 @@ export async function trackingTrail(req: Request, res: Response): Promise<void> 
       : Promise.resolve([]),
     Visit.find({ employeeId, 'checkIn.time': { $gte: from, $lt: to } })
       .sort({ 'checkIn.time': 1 })
-      .select('employeeId clientId checkIn checkOut status purpose')
-      .populate('clientId', 'name location')
+      .select('employeeId siteId checkIn checkOut status purpose')
+      .populate('siteId', 'name location')
       .lean()
       .exec(),
   ]);

@@ -1236,95 +1236,60 @@ export const swaggerPaths: Record<string, unknown> = {
   '/timesheets/weekly': { get: { tags: ['Timesheets'], summary: 'Get weekly timesheet view', responses: { ...res200('Weekly timesheet') } } },
 
   /* ================================================================
-   * FIELD SALES
+   * FIELD VISITS
    * ================================================================ */
-  '/field/dashboard': { get: { tags: ['Field Sales'], summary: 'Field sales dashboard', responses: { ...res200('Dashboard data') } } },
-  // Clients
-  '/field/clients': {
-    get: { tags: ['Field Sales'], summary: 'List field clients', parameters: [...paginationParams], responses: { ...resList('Clients', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Create field client', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' }, address: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' } } } } } }, responses: { ...res201('Client created') } },
+  // Settings
+  '/field/settings': {
+    get: { tags: ['Field Visits'], summary: 'Field settings (selfie rule, site types, visit purposes, vehicles, checklists, …)', responses: { ...res200('Field settings') } },
+    put: { tags: ['Field Visits'], summary: 'Update field settings (field.manage); any subset', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Saved settings') } },
   },
-  '/field/clients/nearby': { get: { tags: ['Field Sales'], summary: 'Find nearby clients', parameters: [{ name: 'latitude', in: 'query', required: true, schema: { type: 'number' } }, { name: 'longitude', in: 'query', required: true, schema: { type: 'number' } }, { name: 'radius', in: 'query', schema: { type: 'number' } }], responses: { ...res200('Nearby clients') } } },
-  '/field/clients/map': { get: { tags: ['Field Sales'], summary: 'Get clients for map view', responses: { ...res200('Map data') } } },
-  '/field/clients/import': { post: { tags: ['Field Sales'], summary: 'Import clients', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res201('Imported') } } },
-  '/field/clients/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get client', parameters: [idParam()], responses: { ...res200('Client') } },
-    patch: { tags: ['Field Sales'], summary: 'Update client', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete client', parameters: [idParam()], responses: { ...res200('Deleted') } },
+  // Sites
+  '/field/sites': {
+    get: { tags: ['Field Visits'], summary: 'List sites (own/team; all for field.manage); near=lat,lng sorts by distance', parameters: [...paginationParams, { name: 'search', in: 'query', schema: { type: 'string' } }, { name: 'type', in: 'query', schema: { type: 'string' } }, { name: 'assignedTo', in: 'query', schema: { type: 'string' } }, { name: 'near', in: 'query', schema: { type: 'string' } }, { name: 'radiusKm', in: 'query', schema: { type: 'number' } }], responses: { ...resList('Sites', { type: 'object' }) } },
+    post: { tags: ['Field Visits'], summary: 'Pin a site (idempotent by clientRef)', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'type', 'location'], properties: { clientRef: { type: 'string', format: 'uuid' }, capturedAt: { type: 'string', format: 'date-time' }, name: { type: 'string' }, type: { type: 'string' }, location: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' }, accuracy: { type: 'number' } } }, radiusM: { type: 'number' }, address: { type: 'object' }, contactName: { type: 'string' }, contactPhone: { type: 'string' }, notes: { type: 'string' }, photo: { type: 'string', description: 'Upload key' }, assignedTo: { type: 'array', items: { type: 'string' } } } } } } }, responses: { ...res201('Site created'), ...res200('Replay: the stored site') } },
   },
-  '/field/clients/{id}/notes': { post: { tags: ['Field Sales'], summary: 'Add note to client', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } } } } }, responses: { ...res201('Note added') } } },
+  '/field/sites/map': { get: { tags: ['Field Visits'], summary: 'Site pins inside a bounding box (≤ 500)', parameters: [{ name: 'bbox', in: 'query', schema: { type: 'string' }, description: 'minLng,minLat,maxLng,maxLat' }], responses: { ...res200('Pins') } } },
+  '/field/sites/import': { post: { tags: ['Field Visits'], summary: 'Import sites from Excel (field.manage)', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } } } }, responses: { ...res200('{ created, updated, errors }') } } },
+  '/field/sites/{id}': {
+    get: { tags: ['Field Visits'], summary: 'Get a site with its recent visits', parameters: [idParam()], responses: { ...res200('Site') } },
+    patch: { tags: ['Field Visits'], summary: 'Update a site (creator within 24 h, or field.manage)', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
+    delete: { tags: ['Field Visits'], summary: 'Delete a site (field.manage)', parameters: [idParam()], responses: { ...res200('Deleted') } },
+  },
+  // Uploads
+  '/field/uploads/photo': { post: { tags: ['Field Visits'], summary: 'Upload a photo → { url, key }', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', properties: { photo: { type: 'string', format: 'binary' } } } } } }, responses: { ...res201('Uploaded') } } },
+  '/field/uploads/document': { post: { tags: ['Field Visits'], summary: 'Upload a document (pdf, image, doc/docx, xls/xlsx; ≤ 10 MB) → { url, key, name }', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', properties: { document: { type: 'string', format: 'binary' } } } } } }, responses: { ...res201('Uploaded') } } },
   // Visits
   '/field/visits': {
-    get: { tags: ['Field Sales'], summary: 'List visits', parameters: [...paginationParams], responses: { ...resList('Visits', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Schedule visit', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['clientId', 'scheduledDate'], properties: { clientId: { type: 'string' }, scheduledDate: { type: 'string', format: 'date-time' }, purpose: { type: 'string' } } } } } }, responses: { ...res201('Visit scheduled') } },
+    get: { tags: ['Field Visits'], summary: 'List visits', parameters: [...paginationParams], responses: { ...resList('Visits', { type: 'object' }) } },
+    post: { tags: ['Field Visits'], summary: 'Schedule visit', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'scheduledDate'], properties: { siteId: { type: 'string' }, scheduledDate: { type: 'string', format: 'date-time' }, purpose: { type: 'string' } } } } } }, responses: { ...res201('Visit scheduled') } },
   },
-  '/field/visits/today': { get: { tags: ['Field Sales'], summary: 'Get today\'s visits', responses: { ...res200('Today visits') } } },
-  '/field/visits/timeline/{employeeId}': { get: { tags: ['Field Sales'], summary: 'Visit timeline for employee', parameters: [idParam('employeeId', 'Employee ID')], responses: { ...res200('Timeline') } } },
-  '/field/visits/check-in': { post: { tags: ['Field Sales'], summary: 'Check in to visit', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['clientId', 'latitude', 'longitude'], properties: { clientId: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, notes: { type: 'string' } } } } } }, responses: { ...res201('Checked in') } } },
+  '/field/visits/today': { get: { tags: ['Field Visits'], summary: 'Get today\'s visits', responses: { ...res200('Today visits') } } },
+  '/field/visits/timeline/{employeeId}': { get: { tags: ['Field Visits'], summary: 'Visit timeline for employee', parameters: [idParam('employeeId', 'Employee ID')], responses: { ...res200('Timeline') } } },
+  '/field/visits/check-in': { post: { tags: ['Field Visits'], summary: 'Check in to visit', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'latitude', 'longitude'], properties: { siteId: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, notes: { type: 'string' } } } } } }, responses: { ...res201('Checked in') } } },
   '/field/visits/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get visit', parameters: [idParam()], responses: { ...res200('Visit') } },
-    patch: { tags: ['Field Sales'], summary: 'Update visit', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete visit', parameters: [idParam()], responses: { ...res200('Deleted') } },
+    get: { tags: ['Field Visits'], summary: 'Get visit', parameters: [idParam()], responses: { ...res200('Visit') } },
+    patch: { tags: ['Field Visits'], summary: 'Update visit', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
+    delete: { tags: ['Field Visits'], summary: 'Delete visit', parameters: [idParam()], responses: { ...res200('Deleted') } },
   },
-  '/field/visits/{id}/check-out': { post: { tags: ['Field Sales'], summary: 'Check out from visit', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { notes: { type: 'string' }, outcome: { type: 'string' } } } } } }, responses: { ...res200('Checked out') } } },
+  '/field/visits/{id}/check-out': { post: { tags: ['Field Visits'], summary: 'Check out from visit', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { notes: { type: 'string' }, outcome: { type: 'string' } } } } } }, responses: { ...res200('Checked out') } } },
   // Tasks
   '/field/tasks': {
-    get: { tags: ['Field Sales'], summary: 'List field tasks', parameters: [...paginationParams], responses: { ...resList('Tasks', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Create field task', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'assigneeId'], properties: { title: { type: 'string' }, description: { type: 'string' }, assigneeId: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, clientId: { type: 'string' } } } } } }, responses: { ...res201('Task created') } },
+    get: { tags: ['Field Visits'], summary: 'List field tasks', parameters: [...paginationParams], responses: { ...resList('Tasks', { type: 'object' }) } },
+    post: { tags: ['Field Visits'], summary: 'Create field task', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'assigneeId'], properties: { title: { type: 'string' }, description: { type: 'string' }, assigneeId: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, siteId: { type: 'string' } } } } } }, responses: { ...res201('Task created') } },
   },
-  '/field/tasks/my': { get: { tags: ['Field Sales'], summary: 'My field tasks', responses: { ...res200('My tasks') } } },
-  '/field/tasks/team': { get: { tags: ['Field Sales'], summary: 'Team field tasks', responses: { ...res200('Team tasks') } } },
+  '/field/tasks/my': { get: { tags: ['Field Visits'], summary: 'My field tasks', responses: { ...res200('My tasks') } } },
+  '/field/tasks/team': { get: { tags: ['Field Visits'], summary: 'Team field tasks', responses: { ...res200('Team tasks') } } },
   '/field/tasks/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get task', parameters: [idParam()], responses: { ...res200('Task') } },
-    patch: { tags: ['Field Sales'], summary: 'Update task', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete task', parameters: [idParam()], responses: { ...res200('Deleted') } },
+    get: { tags: ['Field Visits'], summary: 'Get task', parameters: [idParam()], responses: { ...res200('Task') } },
+    patch: { tags: ['Field Visits'], summary: 'Update task', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
+    delete: { tags: ['Field Visits'], summary: 'Delete task', parameters: [idParam()], responses: { ...res200('Deleted') } },
   },
-  '/field/tasks/{id}/accept': { patch: { tags: ['Field Sales'], summary: 'Accept task', parameters: [idParam()], responses: { ...res200('Accepted') } } },
-  '/field/tasks/{id}/complete': { patch: { tags: ['Field Sales'], summary: 'Complete task', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { notes: { type: 'string' }, outcome: { type: 'string' } } } } } }, responses: { ...res200('Completed') } } },
-  // Targets
-  '/field/targets': {
-    get: { tags: ['Field Sales'], summary: 'List targets', parameters: [...paginationParams], responses: { ...resList('Targets', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Create target', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['employeeId', 'type', 'value', 'period'], properties: { employeeId: { type: 'string' }, type: { type: 'string', enum: ['revenue', 'visits', 'orders'] }, value: { type: 'number' }, period: { type: 'string', enum: ['daily', 'weekly', 'monthly'] } } } } } }, responses: { ...res201('Target created') } },
-  },
-  '/field/targets/my': { get: { tags: ['Field Sales'], summary: 'My targets', responses: { ...res200('My targets') } } },
-  '/field/targets/leaderboard': { get: { tags: ['Field Sales'], summary: 'Sales leaderboard', responses: { ...res200('Leaderboard') } } },
-  '/field/targets/team-summary': { get: { tags: ['Field Sales'], summary: 'Team target summary', responses: { ...res200('Team summary') } } },
-  '/field/targets/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get target', parameters: [idParam()], responses: { ...res200('Target') } },
-    patch: { tags: ['Field Sales'], summary: 'Update target', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete target', parameters: [idParam()], responses: { ...res200('Deleted') } },
-  },
-  // Orders
-  '/field/orders': {
-    get: { tags: ['Field Sales'], summary: 'List field orders', parameters: [...paginationParams], responses: { ...resList('Orders', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Create field order', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['clientId', 'items'], properties: { clientId: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { productId: { type: 'string' }, quantity: { type: 'number' }, price: { type: 'number' } } } }, notes: { type: 'string' } } } } } }, responses: { ...res201('Order created') } },
-  },
-  '/field/orders/my': { get: { tags: ['Field Sales'], summary: 'My orders', responses: { ...res200('My orders') } } },
-  '/field/orders/reports': { get: { tags: ['Field Sales'], summary: 'Order reports', responses: { ...res200('Reports') } } },
-  '/field/orders/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get order', parameters: [idParam()], responses: { ...res200('Order') } },
-    patch: { tags: ['Field Sales'], summary: 'Update order', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete order', parameters: [idParam()], responses: { ...res200('Deleted') } },
-  },
-  '/field/orders/{id}/status': { patch: { tags: ['Field Sales'], summary: 'Update order status', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled'] } } } } } }, responses: { ...res200('Status updated') } } },
-  // Payments
-  '/field/payments': {
-    get: { tags: ['Field Sales'], summary: 'List field payments', parameters: [...paginationParams], responses: { ...resList('Payments', { type: 'object' }) } },
-    post: { tags: ['Field Sales'], summary: 'Record field payment', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['clientId', 'amount', 'method'], properties: { clientId: { type: 'string' }, orderId: { type: 'string' }, amount: { type: 'number' }, method: { type: 'string', enum: ['cash', 'upi', 'cheque', 'bank-transfer'] }, reference: { type: 'string' } } } } } }, responses: { ...res201('Payment recorded') } },
-  },
-  '/field/payments/my': { get: { tags: ['Field Sales'], summary: 'My collected payments', responses: { ...res200('My payments') } } },
-  '/field/payments/reports/daily': { get: { tags: ['Field Sales'], summary: 'Daily payment report', responses: { ...res200('Daily report') } } },
-  '/field/payments/reports/outstanding': { get: { tags: ['Field Sales'], summary: 'Outstanding payments report', responses: { ...res200('Outstanding report') } } },
-  '/field/payments/{id}': {
-    get: { tags: ['Field Sales'], summary: 'Get payment', parameters: [idParam()], responses: { ...res200('Payment') } },
-    patch: { tags: ['Field Sales'], summary: 'Update payment', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { ...res200('Updated') } },
-    delete: { tags: ['Field Sales'], summary: 'Delete payment', parameters: [idParam()], responses: { ...res200('Deleted') } },
-  },
-  '/field/payments/{id}/verify': { patch: { tags: ['Field Sales'], summary: 'Verify payment', parameters: [idParam()], responses: { ...res200('Verified') } } },
+  '/field/tasks/{id}/accept': { patch: { tags: ['Field Visits'], summary: 'Accept task', parameters: [idParam()], responses: { ...res200('Accepted') } } },
+  '/field/tasks/{id}/complete': { patch: { tags: ['Field Visits'], summary: 'Complete task', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { notes: { type: 'string' }, outcome: { type: 'string' } } } } } }, responses: { ...res200('Completed') } } },
   // Tracking
-  '/field/tracking/batch': { post: { tags: ['Field Sales'], summary: 'Ingest GPS batch', description: 'Upload a batch of GPS coordinates from mobile device.', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['points'], properties: { points: { type: 'array', items: { type: 'object', properties: { latitude: { type: 'number' }, longitude: { type: 'number' }, timestamp: { type: 'string', format: 'date-time' }, accuracy: { type: 'number' }, battery: { type: 'number' } } } } } } } } }, responses: { ...res200('Batch ingested') } } },
-  '/field/tracking/live': { get: { tags: ['Field Sales'], summary: 'Get live locations of field employees', responses: { ...res200('Live locations') } } },
-  '/field/tracking/history/{employeeId}': { get: { tags: ['Field Sales'], summary: 'Get tracking history', parameters: [idParam('employeeId', 'Employee ID')], responses: { ...res200('Tracking history') } } },
+  '/field/tracking/batch': { post: { tags: ['Field Visits'], summary: 'Ingest GPS batch', description: 'Upload a batch of GPS coordinates from mobile device.', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['points'], properties: { points: { type: 'array', items: { type: 'object', properties: { latitude: { type: 'number' }, longitude: { type: 'number' }, timestamp: { type: 'string', format: 'date-time' }, accuracy: { type: 'number' }, battery: { type: 'number' } } } } } } } } }, responses: { ...res200('Batch ingested') } } },
+  '/field/tracking/live': { get: { tags: ['Field Visits'], summary: 'Get live locations of field employees', responses: { ...res200('Live locations') } } },
+  '/field/tracking/history/{employeeId}': { get: { tags: ['Field Visits'], summary: 'Get tracking history', parameters: [idParam('employeeId', 'Employee ID')], responses: { ...res200('Tracking history') } } },
 
   /* ================================================================
    * DOCUMENTS

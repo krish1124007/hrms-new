@@ -45,6 +45,8 @@ await vi.hoisted(async () => {
     // Blank: push stays off, so a developer's Firebase service account in
     // .env can never send a real notification from a test.
     FIREBASE_SERVICE_ACCOUNT_PATH: '',
+    // Blank: no test ever calls Google with a developer's real Maps key.
+    GOOGLE_MAPS_API_KEY: '',
   });
 });
 
