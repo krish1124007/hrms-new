@@ -707,12 +707,14 @@ describe('leave calendar', () => {
 
 describe('field module', () => {
   async function visitFor(employee: IEmployee) {
-    const site = await FieldSite.create({ name: 'Acme', type: 'Branch' });
+    const site = await FieldSite.create({ name: 'Acme', type: 'Branch', assignedTo: [employee._id] });
     return Visit.create({
       employeeId: employee._id,
       siteId: site._id,
-      status: 'in_progress',
-      checkIn: { time: new Date() },
+      purpose: 'Meeting',
+      status: 'completed',
+      checkIn: { time: new Date(Date.now() - 3_600_000) },
+      checkOut: { time: new Date() },
     });
   }
 
@@ -723,7 +725,7 @@ describe('field module', () => {
       403,
     );
     const patch = await request(app)
-      .patch(`/api/v1/field/visits/${id}`)
+      .patch(`/api/v1/field/visits/${id}/report`)
       .set(auth(A.token))
       .send({ notes: 'x' });
     expect(patch.status).toBe(403);
@@ -742,17 +744,17 @@ describe('field module', () => {
     ).toBe(200);
   });
 
-  it('updateVisit ignores a body employeeId from a rep (cannot hand a visit to someone else)', async () => {
+  it('a report edit ignores a body employeeId from a rep (cannot hand a visit to someone else)', async () => {
     const mine = await visitFor(A.employee);
     const res = await request(app)
-      .patch(`/api/v1/field/visits/${mine._id}`)
+      .patch(`/api/v1/field/visits/${mine._id}/report`)
       .set(auth(A.token))
       .send({ employeeId: String(B.employee._id), notes: 'moved?' });
     expect(res.status).toBe(200);
     expect(String(res.body.data.employeeId)).toBe(String(A.employee._id));
     const stored = await Visit.findById(mine._id).lean();
     expect(String(stored?.employeeId)).toBe(String(A.employee._id));
-    expect(stored?.notes).toBe('moved?');
+    expect(stored?.report?.notes).toBe('moved?');
   });
 
   it('lists only the caller’s own visits and ignores ?employeeId=', async () => {
@@ -766,19 +768,25 @@ describe('field module', () => {
     expect((res.body.data as Array<{ _id: string }>).map((v) => v._id)).toEqual([String(mine._id)]);
   });
 
-  it('createVisit ignores a body employeeId', async () => {
-    const site = await FieldSite.create({ name: 'Acme', type: 'Branch' });
-    const visit = await request(app)
-      .post('/api/v1/field/visits')
+  it('a rep cannot plan a visit for someone who is not their direct report', async () => {
+    const site = await FieldSite.create({ name: 'Acme', type: 'Branch', assignedTo: [A.employee._id, B.employee._id] });
+    const tomorrow = new Date(Date.now() + 86_400_000 + 19_800_000).toISOString().slice(0, 10);
+    const forB = await request(app)
+      .post('/api/v1/field/visits/plan')
       .set(auth(A.token))
-      .send({ employeeId: String(B.employee._id), siteId: String(site._id) });
+      .send({ employeeId: String(B.employee._id), siteId: String(site._id), plannedDate: tomorrow, purpose: 'Meeting' });
+    expect(forB.status).toBe(403);
+    const visit = await request(app)
+      .post('/api/v1/field/visits/plan')
+      .set(auth(A.token))
+      .send({ siteId: String(site._id), plannedDate: tomorrow, purpose: 'Meeting' });
     expect(visit.status).toBe(201);
     expect(String(visit.body.data.employeeId)).toBe(String(A.employee._id));
     // ...and B cannot read it.
     expect((await request(app).get(`/api/v1/field/visits/${visit.body.data._id}`).set(auth(B.token))).status).toBe(403);
   });
 
-  it("403 on another employee's task, timeline and tracking history", async () => {
+  it("403 on another employee's task and tracking history", async () => {
     const task = await FieldTask.create({ title: 'Deliver', assignedTo: B.employee._id });
     const id = String(task._id);
     expect((await request(app).get(`/api/v1/field/tasks/${id}`).set(auth(A.token))).status).toBe(
@@ -805,10 +813,6 @@ describe('field module', () => {
       .get(`/api/v1/field/tracking/history/${B.employee._id}`)
       .set(auth(A.token));
     expect(history.status).toBe(403);
-    const timeline = await request(app)
-      .get(`/api/v1/field/visits/timeline/${B.employee._id}`)
-      .set(auth(A.token));
-    expect(timeline.status).toBe(403);
     const live = await request(app).get('/api/v1/field/tracking/live').set(auth(A.token));
     expect(live.status).toBe(200);
     expect(live.body.data).toEqual([]);

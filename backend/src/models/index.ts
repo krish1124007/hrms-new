@@ -29,6 +29,7 @@ export * from './payroll-record.model.js';
 export * from './field-site.model.js';
 export * from './field-settings.model.js';
 export * from './visit.model.js';
+export * from './visit-schedule.model.js';
 export * from './field-task.model.js';
 export * from './location-track.model.js';
 export * from './notice.model.js';

@@ -1,8 +1,8 @@
 /**
  * Field visits data integrity: who may see and change which visit or task,
  * the visit lifecycle, IST day boundaries, field tasks, photo upload and
- * list hygiene. (The visit engine's contract tests live with Task 2's
- * field.visits tests; sites in field.sites.test.ts.)
+ * list hygiene. (The visit engine's contract tests are field.visits /
+ * field.offline / field.schedules; sites in field.sites.test.ts.)
  */
 import request from 'supertest';
 import type { Express } from 'express';
@@ -15,6 +15,8 @@ import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
 import { FieldTask } from '../models/field-task.model.js';
 import { Notification } from '../models/notification.model.js';
+import { updateFieldSettings } from '../services/field-settings.service.js';
+import { DAY_MS, startOfBusinessDay } from '../lib/business-day.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -46,14 +48,18 @@ beforeEach(async () => {
   A = await rep();
   B = await rep();
   M = await fieldManager();
+  // The selfie rule has its own tests (field.visits); these check-ins go without one.
+  await updateFieldSettings({ selfieRequired: false });
 });
 
 /** Mumbai. */
 const MUMBAI = { lat: 19.076, lng: 72.8777 };
+/** `YYYY-MM-DD` of the IST day `n` days from today. */
+const ymdIn = (n: number) => new Date(startOfBusinessDay().getTime() + n * DAY_MS).toISOString().slice(0, 10);
 const newSite = (extra: Record<string, unknown> = {}) => FieldSite.create({ name: 'Acme Plant', type: 'Project site', ...extra });
 
 const checkIn = (actor: Actor, body: Record<string, unknown>) =>
-  request(app).post('/api/v1/field/visits/check-in').set(auth(actor.token)).send(body);
+  request(app).post('/api/v1/field/visits/check-in').set(auth(actor.token)).send({ purpose: 'Meeting', ...body });
 
 const checkOut = (actor: Actor, visitId: string, body: Record<string, unknown> = {}) =>
   request(app).post(`/api/v1/field/visits/${visitId}/check-out`).set(auth(actor.token)).send(body);
@@ -66,15 +72,16 @@ describe('ownership', () => {
 
     const path = `/api/v1/field/visits/${visit.body.data._id}`;
     expect((await request(app).get(path).set(auth(B.token))).status).toBe(403);
-    expect((await request(app).patch(path).set(auth(B.token)).send({ notes: 'mine now' })).status).toBe(403);
+    expect((await request(app).patch(`${path}/report`).set(auth(B.token)).send({ notes: 'mine now' })).status).toBe(403);
     expect((await checkOut(B, visit.body.data._id)).status).toBe(403);
-    expect((await Visit.findById(visit.body.data._id).lean())?.notes).toBeUndefined();
+    expect((await request(app).post(`${path}/cancel`).set(auth(B.token)).send({ reason: 'no' })).status).toBe(403);
+    expect((await Visit.findById(visit.body.data._id).lean())?.status).toBe('in_progress');
   });
 
   it('employeeId in the body is ignored for a rep', async () => {
     const site = await newSite();
     const visit = await checkIn(A, { siteId: String(site._id), employeeId: String(B.employee._id) });
-    expect(String(visit.body.data.employeeId)).toBe(String(A.employee._id));
+    expect(visit.body.data.employee._id).toBe(String(A.employee._id));
   });
 
   it("a team lead sees their direct reports' records but cannot change them", async () => {
@@ -85,8 +92,9 @@ describe('ownership', () => {
     const stranger = await checkIn(B, { siteId: String(site._id) });
 
     expect((await request(app).get(`/api/v1/field/visits/${theirs.body.data._id}`).set(auth(L.token))).status).toBe(200);
+    expect((await checkOut(L, theirs.body.data._id)).status).toBe(403);
     expect(
-      (await request(app).patch(`/api/v1/field/visits/${theirs.body.data._id}`).set(auth(L.token)).send({ notes: 'x' }))
+      (await request(app).patch(`/api/v1/field/visits/${theirs.body.data._id}/report`).set(auth(L.token)).send({ notes: 'x' }))
         .status,
     ).toBe(403);
     expect((await request(app).get(`/api/v1/field/visits/${stranger.body.data._id}`).set(auth(L.token))).status).toBe(
@@ -119,7 +127,8 @@ describe('visit lifecycle', () => {
     const out = await checkOut(A, first.body.data._id, { notes: 'Met the owner' });
     expect(out.status).toBe(200);
     expect(out.body.data.status).toBe('completed');
-    expect(out.body.data.duration).toBeGreaterThanOrEqual(0);
+    expect(out.body.data.durationMinutes).toBeGreaterThanOrEqual(0);
+    expect(out.body.data.checkOut.notes).toBe('Met the owner');
 
     const again = await checkOut(A, first.body.data._id);
     expect(again.status).toBe(409);
@@ -131,39 +140,29 @@ describe('visit lifecycle', () => {
     expect(await FieldSite.findById(site._id).lean()).toMatchObject({ visitCount: 2 });
   });
 
-  it('completed requires a check-in', async () => {
-    const site = await newSite();
+  it('check-out requires a check-in', async () => {
+    const site = await newSite({ assignedTo: [A.employee._id] });
     const planned = await request(app)
-      .post('/api/v1/field/visits')
+      .post('/api/v1/field/visits/plan')
       .set(auth(A.token))
-      .send({ siteId: String(site._id) });
+      .send({ siteId: String(site._id), plannedDate: ymdIn(1), purpose: 'Audit' });
     expect(planned.status).toBe(201);
-    expect(planned.body.data.status).toBe('scheduled');
-    const done = await request(app)
-      .patch(`/api/v1/field/visits/${planned.body.data._id}`)
-      .set(auth(A.token))
-      .send({ status: 'completed' });
-    expect(done.status).toBe(409);
-    expect(done.body.error.code).toBe('VISIT_NOT_CHECKED_IN');
-    expect((await checkOut(A, planned.body.data._id)).body.error.code).toBe('VISIT_NOT_CHECKED_IN');
-
-    const asCompleted = await request(app)
-      .post('/api/v1/field/visits')
-      .set(auth(A.token))
-      .send({ siteId: String(site._id), status: 'completed' });
-    expect(asCompleted.status).toBe(400);
+    expect(planned.body.data.status).toBe('planned');
+    const out = await checkOut(A, planned.body.data._id);
+    expect(out.status).toBe(409);
+    expect(out.body.error.code).toBe('VISIT_NOT_CHECKED_IN');
   });
 
   it('checking in to a planned visit starts that visit', async () => {
-    const site = await newSite();
+    const site = await newSite({ assignedTo: [A.employee._id] });
     const planned = await request(app)
-      .post('/api/v1/field/visits')
+      .post('/api/v1/field/visits/plan')
       .set(auth(A.token))
-      .send({ siteId: String(site._id), purpose: 'service' });
-    const started = await checkIn(A, { siteId: String(site._id), visitId: planned.body.data._id });
+      .send({ siteId: String(site._id), plannedDate: ymdIn(1), purpose: 'Maintenance' });
+    const started = await checkIn(A, { visitId: planned.body.data._id, purpose: undefined });
     expect(started.status).toBe(201);
     expect(started.body.data._id).toBe(planned.body.data._id);
-    expect(started.body.data.status).toBe('in_progress');
+    expect(started.body.data).toMatchObject({ status: 'in_progress', purpose: 'Maintenance' });
     expect(await Visit.countDocuments({})).toBe(1);
   });
 
@@ -171,50 +170,36 @@ describe('visit lifecycle', () => {
     const located = await newSite({ location: { type: 'Point', coordinates: [MUMBAI.lng, MUMBAI.lat] } });
     const far = await checkIn(A, { siteId: String(located._id), location: { lat: MUMBAI.lat + 0.009, lng: MUMBAI.lng } });
     expect(far.status).toBe(201);
-    expect(far.body.data.locationMismatch).toBe(true);
-    expect(far.body.data.distanceFromClientM).toBeGreaterThan(950);
-    expect(far.body.data.distanceFromClientM).toBeLessThan(1050);
+    expect(far.body.data.flags.awayFromSite).toBe(true);
+    expect(far.body.data.checkIn.distanceM).toBeGreaterThan(950);
+    expect(far.body.data.checkIn.distanceM).toBeLessThan(1050);
     await checkOut(A, far.body.data._id);
 
     const near = await checkIn(A, { siteId: String(located._id), location: MUMBAI });
-    expect(near.body.data.locationMismatch).toBe(false);
-    expect(near.body.data.distanceFromClientM).toBe(0);
+    expect(near.body.data.flags.awayFromSite).toBe(false);
+    expect(near.body.data.checkIn.distanceM).toBe(0);
     await checkOut(A, near.body.data._id);
 
     const unlocated = await newSite({ name: 'Nowhere' });
     const unknown = await checkIn(A, { siteId: String(unlocated._id), location: MUMBAI });
-    expect(unknown.body.data.locationMismatch).toBe(false);
-    expect(unknown.body.data.distanceFromClientM ?? null).toBeNull();
+    expect(unknown.body.data.flags.awayFromSite).toBe(false);
+    expect(unknown.body.data.checkIn.distanceM ?? null).toBeNull();
   });
 
-  it('accepts the mobile check-in and check-out payloads', async () => {
+  it('check-in notes and check-out notes are kept apart', async () => {
     const site = await newSite();
-    const res = await checkIn(A, {
-      siteId: String(site._id),
-      purpose: 'follow_up',
-      location: MUMBAI,
-      notes: 'Walk-in',
-    });
+    const res = await checkIn(A, { siteId: String(site._id), location: MUMBAI, notes: 'Walk-in' });
     expect(res.status).toBe(201);
-    expect(res.body.data.purpose).toBe('followup');
     expect(res.body.data.checkIn.location).toMatchObject(MUMBAI);
     expect(res.body.data.notes).toBe('Walk-in');
 
-    const out = await checkOut(A, res.body.data._id, {
-      outcome: 'successful',
-      followUpDate: '2026-11-02',
-      notes: 'Will call back',
-      location: MUMBAI,
-    });
+    const out = await checkOut(A, res.body.data._id, { notes: 'Will call back', location: MUMBAI, report: { outcome: 'other' } });
     expect(out.status).toBe(200);
-    expect(out.body.data.outcome).toBe('positive');
-    expect(out.body.data.nextFollowUpDate).toBeTruthy();
-    // Check-out notes are stored apart: the check-in notes survive.
     expect(out.body.data.notes).toBe('Walk-in');
     expect(out.body.data.checkOut.notes).toBe('Will call back');
     expect(out.body.data.checkOut.location).toMatchObject(MUMBAI);
     const shown = await request(app).get(`/api/v1/field/visits/${res.body.data._id}`).set(auth(M.token));
-    expect(shown.body.data).toMatchObject({ notes: 'Walk-in', checkOut: { notes: 'Will call back' } });
+    expect(shown.body.data).toMatchObject({ notes: 'Walk-in', checkOut: { notes: 'Will call back' }, report: { outcome: 'other' } });
   });
 
   it('404 for an unknown site', async () => {
@@ -231,7 +216,7 @@ describe('IST day boundaries', () => {
     else process.env.TZ = realTZ;
   });
 
-  it("'today' at 00:30 IST counts a visit made at 00:15 IST, not one at 23:50 IST the day before", async () => {
+  it('my day at 00:30 IST holds a visit made at 00:15 IST, not one at 23:50 IST the day before', async () => {
     process.env.TZ = 'UTC'; // production servers run on UTC
     const site = await newSite();
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -241,11 +226,16 @@ describe('IST day boundaries', () => {
     await checkOut(A, yesterday.body.data._id);
 
     vi.setSystemTime(new Date('2026-10-20T18:45:00Z')); // 00:15 IST, 21 Oct
-    expect((await checkIn(A, { siteId: String(site._id) })).status).toBe(201);
+    const early = await checkIn(A, { siteId: String(site._id) });
+    expect(early.status).toBe(201);
 
     vi.setSystemTime(new Date('2026-10-20T19:00:00Z')); // 00:30 IST, 21 Oct
-    const today = await request(app).get('/api/v1/field/visits/today').set(auth(A.token));
-    expect(today.body.data).toHaveLength(1);
+    const today = await request(app).get('/api/v1/field/my-day').set(auth(A.token));
+    expect(today.body.data.date).toBe('2026-10-21');
+    expect(today.body.data.inProgress._id).toBe(early.body.data._id);
+    expect(today.body.data.completed).toHaveLength(0);
+    const before = await request(app).get('/api/v1/field/my-day').query({ date: '2026-10-20' }).set(auth(A.token));
+    expect(before.body.data.completed.map((v: { _id: string }) => v._id)).toEqual([yesterday.body.data._id]);
   });
 });
 
@@ -348,9 +338,9 @@ describe('field photo upload', () => {
 
     // Attached to a check-in, the stored form is kept and handed back signed.
     const site = await newSite();
-    const visit = await checkIn(A, { siteId: String(site._id), photo: res.body.data.url });
+    const visit = await checkIn(A, { siteId: String(site._id), selfieKey: res.body.data.url });
     expect(visit.status).toBe(201);
-    expect(visit.body.data.checkIn.photo).toContain('sig=');
+    expect(visit.body.data.checkIn.selfieUrl).toContain('sig=');
     expect((await Visit.findById(visit.body.data._id).lean())?.checkIn?.photo).toMatch(/^\/uploads\/field-photos\//);
   });
 
@@ -387,19 +377,20 @@ describe('list endpoints', () => {
 });
 
 describe('check-in without a location fix', () => {
-  it('is flagged locationMissing at a site with a pin, never refused', async () => {
+  it('is flagged noGps, never refused', async () => {
     const pinned = await newSite({ location: { type: 'Point', coordinates: [MUMBAI.lng, MUMBAI.lat] } });
     const blind = await checkIn(A, { siteId: String(pinned._id) });
     expect(blind.status).toBe(201);
-    expect(blind.body.data).toMatchObject({ locationMissing: true, locationMismatch: false });
+    expect(blind.body.data.flags).toMatchObject({ noGps: true, awayFromSite: false });
     await checkOut(A, blind.body.data._id);
 
     const located = await checkIn(A, { siteId: String(pinned._id), location: MUMBAI });
-    expect(located.body.data.locationMissing).toBe(false);
+    expect(located.body.data.flags.noGps).toBe(false);
     await checkOut(A, located.body.data._id);
 
-    const unpinned = await newSite({ name: 'No pin' });
-    const nothingToCompare = await checkIn(A, { siteId: String(unpinned._id) });
-    expect(nothingToCompare.body.data.locationMissing).toBe(false);
+    // A 0,0 "fix" is a phone without GPS.
+    const zero = await checkIn(A, { siteId: String(pinned._id), location: { lat: 0, lng: 0 } });
+    expect(zero.status).toBe(201);
+    expect(zero.body.data.flags.noGps).toBe(true);
   });
 });

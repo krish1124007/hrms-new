@@ -15,6 +15,7 @@ import * as XLSX from 'xlsx';
 import { z } from 'zod';
 import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
+import { serializeVisit, VISIT_POPULATE } from '../services/field-visits.service.js';
 import { Employee } from '../models/employee.model.js';
 import { AppError, ForbiddenError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
@@ -192,30 +193,15 @@ export async function getSite(req: Request, res: Response): Promise<void> {
   await assertSiteRead(req, site);
   const scope = await fieldScope(req);
   await site.populate(SITE_POPULATE);
-  const visits = await Visit.find({ siteId: site._id, ...scopeFilter(scope) })
-    .sort({ createdAt: -1 })
+  // History: visits that happened (or were missed); not plans or cancellations.
+  const visits = await Visit.find({ siteId: site._id, status: { $nin: ['planned', 'cancelled'] }, ...scopeFilter(scope) })
+    .sort({ day: -1, 'checkIn.time': -1, createdAt: -1 })
     .limit(RECENT_VISITS)
-    .populate('employeeId', 'firstName lastName employeeId')
+    .populate(VISIT_POPULATE)
     .lean()
     .exec();
-  const recentVisits = visits.map((raw) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const v = raw as any;
-    const emp = v.employeeId && typeof v.employeeId === 'object' && 'firstName' in v.employeeId ? v.employeeId : null;
-    const at = (point: { at?: Date; time?: Date } | undefined) => point?.at ?? point?.time ?? null;
-    return {
-      _id: String(v._id),
-      employee: emp
-        ? { _id: String(emp._id), firstName: emp.firstName, lastName: emp.lastName, employeeId: emp.employeeId ?? '' }
-        : null,
-      purpose: v.purpose ?? null,
-      status: v.status,
-      checkIn: at(v.checkIn) ? { at: at(v.checkIn) } : null,
-      checkOut: at(v.checkOut) ? { at: at(v.checkOut) } : null,
-      durationMinutes: v.durationMinutes ?? v.duration ?? null,
-      createdAt: v.createdAt,
-    };
-  });
+  // The same shape as GET /field/visits.
+  const recentVisits = visits.map(serializeVisit);
   res.json({ success: true, data: { ...serializeSite(site), recentVisits } });
 }
 
