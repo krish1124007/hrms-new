@@ -7,6 +7,7 @@ import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { RequireAuth } from '@/components/common/RequireAuth';
 import { RequirePermission } from '@/components/common/RequirePermission';
 import { NAV_ACCESS } from '@/config/navigation';
+import { FIELD_PATHS } from '@/lib/field-links';
 
 const NotFoundPage = lazy(() => import('@/components/common/NotFoundPage'));
 
@@ -57,8 +58,10 @@ const VisitDetailPage = lazy(() => import('@/pages/field/VisitDetailPage'));
 const PlanningPage = lazy(() => import('@/pages/field/PlanningPage'));
 const FieldTasksPage = lazy(() => import('@/pages/field/FieldTasksPage'));
 const FieldSettingsPage = lazy(() => import('@/pages/field/FieldSettingsPage'));
-const TeamMapPage = lazy(() => import('@/pages/field/LiveTrackingPage'));
-const RoutePage = lazy(() => import('@/pages/field/TrailPage'));
+const TeamMapPage = lazy(() => import('@/pages/field/TeamMapPage'));
+const RoutePage = lazy(() => import('@/pages/field/RoutePage'));
+const FieldReportsPage = lazy(() => import('@/pages/field/ReportsPage'));
+const TravelClaimsPage = lazy(() => import('@/pages/field/TravelClaimsPage'));
 
 // Tools
 const DocumentsPage = lazy(() => import('@/pages/documents/DocumentsPage'));
@@ -203,20 +206,22 @@ export function AppRouter(): ReactElement {
             <Route path="/field/my-day" element={guard(NAV_ACCESS.fieldView, <MyDayPage />)} />
             <Route path="/field/sites" element={guard(NAV_ACCESS.fieldView, <SitesPage />)} />
             <Route path="/field/sites/:id" element={guard(NAV_ACCESS.fieldView, <SiteDetailPage />)} />
-            <Route path="/field/visits" element={guard(NAV_ACCESS.fieldView, <VisitsPage />)} />
-            <Route path="/field/visits/:id" element={guard(NAV_ACCESS.fieldView, <VisitDetailPage />)} />
+            <Route path={FIELD_PATHS.visits} element={guard(NAV_ACCESS.fieldView, <VisitsPage />)} />
+            <Route path={`${FIELD_PATHS.visits}/:id`} element={guard(NAV_ACCESS.fieldView, <VisitDetailPage />)} />
             <Route path="/field/planning" element={guard(NAV_ACCESS.fieldView, <PlanningPage />)} />
             <Route path="/field/tasks" element={guard(NAV_ACCESS.fieldView, <FieldTasksPage />)} />
             {/* Task notifications link to /field/tasks/<id>. */}
             <Route path="/field/tasks/:id" element={<Navigate to="/field/tasks" replace />} />
-            <Route path="/field/team-map" element={guard(NAV_ACCESS.fieldView, <TeamMapPage />)} />
-            <Route path="/field/routes" element={guard(NAV_ACCESS.fieldView, <RoutePage />)} />
+            <Route path={FIELD_PATHS.teamMap} element={guard(NAV_ACCESS.fieldView, <TeamMapPage />)} />
+            <Route path={FIELD_PATHS.routes} element={guard(NAV_ACCESS.fieldView, <RoutePage />)} />
+            <Route path={FIELD_PATHS.reports} element={guard(NAV_ACCESS.fieldView, <FieldReportsPage />)} />
+            <Route path={FIELD_PATHS.travel} element={guard(NAV_ACCESS.fieldView, <TravelClaimsPage />)} />
             <Route path="/field/settings" element={guard(NAV_ACCESS.fieldManage, <FieldSettingsPage />)} />
             {/* Old field paths, kept for bookmarks. */}
             <Route path="/field/clients" element={<Navigate to="/field/sites" replace />} />
             <Route path="/field/clients/map" element={<Navigate to="/field/sites?view=map" replace />} />
-            <Route path="/field/tracking" element={<Navigate to="/field/team-map" replace />} />
-            <Route path="/field/trail" element={<Navigate to="/field/routes" replace />} />
+            <Route path="/field/tracking" element={<Navigate to={FIELD_PATHS.teamMap} replace />} />
+            <Route path="/field/trail" element={<Navigate to={FIELD_PATHS.routes} replace />} />
 
             {/* Payroll */}
             <Route path="/payroll" element={guard(NAV_ACCESS.payrollAdmin, <PayrollDashboardPage />)} />

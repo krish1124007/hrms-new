@@ -41,6 +41,7 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
+import { FIELD_PATHS } from '@/lib/field-links';
 
 /**
  * Navigation schema.
@@ -217,13 +218,13 @@ export const NAV_GROUPS: NavGroup[] = [
       // Self-service: the signed-in employee's own day (admins have no employee record).
       { label: 'My day', to: '/field/my-day', icon: CalendarCheck, module: 'field', permissions: P.fieldView, excludeRoles: ['admin'] },
       { label: 'Sites', to: '/field/sites', icon: Building2, module: 'field', permissions: P.fieldView },
-      { label: 'Visits', to: '/field/visits', icon: MapPin, module: 'field', permissions: P.fieldView },
+      { label: 'Visits', to: FIELD_PATHS.visits, icon: MapPin, module: 'field', permissions: P.fieldView },
       // Team pages: managers (and field.manage holders), not the field employees themselves.
       { label: 'Planning', to: '/field/planning', icon: CalendarClock, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
-      { label: 'Team map', to: '/field/team-map', icon: MapIcon, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
-      { label: 'Routes', to: '/field/routes', icon: Route, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
-      { label: 'Reports', to: '/field/reports', icon: FileBarChart, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
-      { label: 'Travel allowance', to: '/field/travel', icon: Car, module: 'field', permissions: P.fieldView, excludeRoles: ['admin'] },
+      { label: 'Team map', to: FIELD_PATHS.teamMap, icon: MapIcon, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Routes', to: FIELD_PATHS.routes, icon: Route, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Reports', to: FIELD_PATHS.reports, icon: FileBarChart, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Travel allowance', to: FIELD_PATHS.travel, icon: Car, module: 'field', permissions: P.fieldView, excludeRoles: ['admin'] },
       { label: 'Settings', to: '/field/settings', icon: Settings, module: 'field', permissions: P.fieldManage },
     ],
   },

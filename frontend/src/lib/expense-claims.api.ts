@@ -49,6 +49,32 @@ export interface ExpenseReceipt {
   uploadedAt: string;
 }
 
+/** How a travel allowance claim was worked out (claims made from `POST /field/travel/claims`). */
+export interface ExpenseTravel {
+  /** The IST day travelled, `YYYY-MM-DD`. */
+  date: string;
+  vehicleType: 'bike' | 'car' | 'other';
+  ratePerKm: number;
+  /** Km measured between the day's check-in/out points. */
+  computedKm: number;
+  /** Km the employee claimed (equal to `computedKm` unless corrected). */
+  claimedKm: number;
+  /** Road distance was unavailable for part of the day — straight line × 1.3. */
+  estimated: boolean;
+  /** Why the claimed km differs from the calculation (required above 5 %). */
+  reason?: string;
+}
+
+/** The field visit an expense belongs to — an id, or populated by the server. */
+export type ExpenseVisitRef =
+  | string
+  | {
+      _id: string;
+      site?: { _id: string; name: string } | null;
+      purpose?: string;
+      checkIn?: { at: string } | null;
+    };
+
 export interface ExpenseClaim {
   _id: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,6 +95,10 @@ export interface ExpenseClaim {
   rejectedReason?: string;
   reimbursedAt?: string;
   reimbursementRef?: string;
+  /** Set on travel allowance claims. */
+  travel?: ExpenseTravel | null;
+  /** The field visit this expense was incurred at, if linked. */
+  visitId?: ExpenseVisitRef | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +113,8 @@ export interface ExpenseClaimInput {
   receiptUrls?: { name: string; fileUrl: string }[];
   paymentMethod?: ExpensePaymentMethod;
   status?: 'draft' | 'pending';
+  /** Link the expense to the field visit it belongs to. */
+  visitId?: string;
 }
 
 export interface ExpenseReports {

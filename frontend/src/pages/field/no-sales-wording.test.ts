@@ -18,16 +18,13 @@ const FIELD_SOURCES = import.meta.glob<string>(
 
 const ALL_SOURCES = import.meta.glob<string>('../../**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true });
 
-/** Files the team-map / routes rework (a separate change) replaces wholesale. */
-const REWORKED_ELSEWHERE = /\/(LiveTrackingPage|TrailPage|LiveMap|TrailMap)\.(test\.)?tsx$/;
-
 const isTest = (path: string): boolean => /\.test\.tsx?$/.test(path);
 
 const SALES_WORDS = /\b(sales?|orders?|products?|receipts?|leaderboard|cart)\b/i;
 
 describe('field module wording', () => {
   it('has no sales, order or product wording in field pages, components, hooks or API', () => {
-    const files = Object.entries(FIELD_SOURCES).filter(([path]) => !isTest(path) && !REWORKED_ELSEWHERE.test(path));
+    const files = Object.entries(FIELD_SOURCES).filter(([path]) => !isTest(path));
     expect(files.length).toBeGreaterThan(10);
     const offenders = files.flatMap(([path, text]) =>
       text

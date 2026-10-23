@@ -328,13 +328,3 @@ export function useCompleteFieldTask() {
     },
   });
 }
-
-/* ── Tracking (day route page) ── */
-
-export function useTrail(employeeId: string | undefined, date: string) {
-  return useQuery({
-    queryKey: ['field-trail', employeeId, date],
-    queryFn: () => fieldApi.trail(employeeId as string, date),
-    enabled: !!employeeId,
-  });
-}

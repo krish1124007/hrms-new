@@ -377,73 +377,6 @@ export interface TaskCompletionInput {
 }
 
 /* ──────────────────────────────────────────────────────────── */
-/* Tracking — kept for the team map and day route pages until    */
-/* they move to `/team/status` and `/route/:employeeId`.         */
-/* ──────────────────────────────────────────────────────────── */
-
-/** A person's newest point in the last 2 h (`GET /field/tracking/live`). */
-export interface LiveLocation {
-  employeeId: string;
-  employeeCode?: string;
-  name: string;
-  avatar?: string | null;
-  lat: number;
-  lng: number;
-  accuracy?: number | null;
-  speed?: number | null;
-  heading?: number | null;
-  battery?: number | null;
-  recordedAt: string;
-  onVisit?: { visitId: string; clientId: string; clientName: string } | null;
-}
-
-/** The socket's `location:update` payload. */
-export interface LocationUpdate {
-  employeeId: string;
-  name: string;
-  avatar?: string | null;
-  lat: number;
-  lng: number;
-  accuracy?: number | null;
-  recordedAt: string;
-}
-
-export interface TrailPoint {
-  lat: number;
-  lng: number;
-  accuracy?: number | null;
-  speed?: number | null;
-  heading?: number | null;
-  recordedAt: string;
-}
-
-/** A visit pin on the day route. */
-export interface VisitPin {
-  visitId: string;
-  employeeId: string;
-  employeeName?: string;
-  clientId: string;
-  clientName: string;
-  lat: number | null;
-  lng: number | null;
-  checkInAt: string | null;
-  checkOutAt: string | null;
-  status: string;
-  purpose: string;
-}
-
-export interface Trail {
-  employeeId: string;
-  name: string;
-  avatar?: string | null;
-  /** IST day, `YYYY-MM-DD`. */
-  date: string;
-  points: TrailPoint[];
-  truncated: boolean;
-  visits: VisitPin[];
-}
-
-/* ──────────────────────────────────────────────────────────── */
 /* API                                                           */
 /* ──────────────────────────────────────────────────────────── */
 
@@ -513,9 +446,4 @@ export const fieldApi = {
   completeTask: async (id: string, input: TaskCompletionInput): Promise<ItemResponse<FieldTask>> =>
     (await api.patch(`/field/tasks/${id}/complete`, input)).data,
 
-  // tracking (team map / day route pages)
-  liveTracking: async (): Promise<Ok<LiveLocation[]>> => (await api.get('/field/tracking/live')).data,
-  /** One person's points and visits on an IST day (`YYYY-MM-DD`; default today). */
-  trail: async (employeeId: string, date?: string): Promise<Ok<Trail>> =>
-    (await api.get(`/field/tracking/${employeeId}/trail`, { params: date ? { date } : undefined })).data,
 };
