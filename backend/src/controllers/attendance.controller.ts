@@ -45,8 +45,6 @@ import {
   notifyRegularizationDecision,
   reportingManagerUserId,
 } from '../services/notification.service.js';
-import { LocationTrack } from '../models/location-track.model.js';
-import { fieldStaffAmong } from '../services/location-track.service.js';
 
 // ============================================================================
 // CONFIG
@@ -1649,69 +1647,3 @@ export async function attendanceReport(req: Request, res: Response): Promise<voi
   void audit({ action: 'export', entity: 'Attendance' });
   res.json({ success: true, data: records });
 }
-
-// ============================================================================
-// LIVE TRACKING
-// ============================================================================
-
-// The location upload (`POST /attendance/tracking/batch`) is the field ingest:
-// `controllers/field-tracking.controller.ts` → `services/location-track.service.ts`
-// (one schema, one consented + clocked-in gate, one store and broadcast).
-
-export async function getLiveTracking(req: Request, res: Response): Promise<void> {
-  // Same day label as every other attendance query — with the old
-  // server-local version this looked up *yesterday* between 00:00 and 05:30
-  // IST and showed a stale set of "currently working" people.
-  const start = startOfBusinessDay(new Date());
-
-  // HR sees everybody on the map; a manager their direct reports and themselves.
-  const todayRecords = await Attendance.find({
-    ...(await scopeFilter(req, 'attendance')),
-    date: start,
-    'checkIn.time': { $exists: true },
-    'checkOut.time': { $exists: false }
-  }).distinct('employeeId');
-
-  if (todayRecords.length === 0) {
-    res.json({ success: true, data: [] });
-    return;
-  }
-
-  const docs = await LocationTrack.aggregate([
-    { $match: { timestamp: { $gte: start }, employeeId: { $in: todayRecords } } },
-    { $sort: { timestamp: -1 } },
-    {
-      $group: {
-        _id: '$employeeId',
-        timestamp: { $first: '$timestamp' },
-        location: { $first: '$location' },
-        battery: { $first: '$battery' },
-        activity: { $first: '$activity' },
-        speed: { $first: '$speed' },
-      },
-    },
-  ]);
-
-  // Only field staff are tracked; fixes stored for anyone else before the
-  // ingest checked it stay hidden.
-  const staff = await fieldStaffAmong(docs.map((d) => d._id));
-  const empIds = docs.map((d) => d._id).filter((id) => staff.has(String(id)));
-  const employees = await Employee.find({ _id: { $in: empIds } })
-    .select('firstName lastName employeeId avatar department')
-    .exec();
-  const empMap = new Map(employees.map((e) => [String(e._id), e]));
-
-  const enriched = docs.filter((d) => staff.has(String(d._id))).map((d) => ({
-    employeeId: d._id,
-    employee: empMap.get(String(d._id)),
-    timestamp: d.timestamp,
-    lng: d.location.coordinates[0],
-    lat: d.location.coordinates[1],
-    battery: d.battery,
-    activity: d.activity,
-    speed: d.speed,
-  }));
-
-  res.json({ success: true, data: enriched });
-}
-

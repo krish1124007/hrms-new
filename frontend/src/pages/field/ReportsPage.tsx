@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { VisitFlagBadges, VisitStatusBadge } from '@/components/field/FieldBits';
 import { EstimatedBadge } from '@/components/field/RouteMap';
 import {
   useDailyReport,
@@ -23,18 +24,20 @@ import {
   type ReportDownload,
 } from '@/hooks/use-field-reports';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
-import type {
-  DailyReport,
-  ExceptionRow,
-  ExceptionType,
-  FieldEmployeeRef,
-  FieldReportKind,
-  ReportFormat,
-  SiteReportRow,
-  SummaryGroupBy,
-  SummaryRow,
+import {
+  MAX_REPORT_DAYS,
+  type DailyReport,
+  type ExceptionRow,
+  type ExceptionType,
+  type FieldEmployeeRef,
+  type FieldReportKind,
+  type ReportFormat,
+  type SiteReportRow,
+  type SummaryGroupBy,
+  type SummaryRow,
 } from '@/lib/field-reports.api';
 import { visitLink } from '@/lib/field-links';
+import { OUTCOME_LABEL } from '@/lib/field-visits';
 import { formatKm } from '@/lib/field-route';
 import { apiErrorMessage } from '@/lib/api-error';
 import { formatDate, formatDateTime, formatTime, todayIST } from '@/lib/format';
@@ -62,9 +65,22 @@ const EXCEPTION_LABEL: Record<ExceptionType, string> = {
   synced_late: 'Synced late',
 };
 
-const personName = (e?: FieldEmployeeRef | null): string => (e ? `${e.firstName} ${e.lastName}`.trim() : '—');
-const dayLabel = (date: string): string =>
-  formatDate(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00+05:30` : date);
+const personName = (e: FieldEmployeeRef | null): string => (e ? `${e.firstName} ${e.lastName}`.trim() : '—');
+/** `YYYY-MM-DD` (an IST day) as a date label. */
+const dayLabel = (date: string): string => formatDate(`${date}T12:00:00+05:30`);
+
+/** Days from `from` to `to`, both included (as the server counts a report range). */
+function rangeDays(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+/** Why the server would refuse a report range, or null. */
+function rangeProblem(from: string, to: string): string | null {
+  if (!from || !to) return 'Pick both dates';
+  if (from > to) return '"From" must not be after "To"';
+  if (rangeDays(from, to) > MAX_REPORT_DAYS) return `A report can cover at most ${MAX_REPORT_DAYS} days`;
+  return null;
+}
 
 /** `200` minutes → `3 h 20 m`. */
 function formatMinutes(min: number): string {
@@ -100,7 +116,7 @@ export default function ReportsPage(): ReactElement {
     if (first) setEmployeeId(first._id);
   }, [employeeId, people, profile?._id]);
 
-  const rangeError = !from || !to ? 'Pick both dates' : from > to ? '"From" must not be after "To"' : null;
+  const rangeError = rangeProblem(from, to);
   const range = rangeError ? null : { from, to };
 
   const request: ReportDownload | null =
@@ -292,10 +308,9 @@ function DailyTab({
 }
 
 function DailyTimeline({ report }: { report: DailyReport }): ReactElement {
-  const visits = report.visits ?? [];
+  const { visits } = report;
   const completed = visits.filter((v) => v.status === 'completed').length;
   const minutes = visits.reduce((s, v) => s + (v.durationMinutes ?? 0), 0);
-  const estimated = !!report.estimated || (report.legs ?? []).some((l) => l.estimated);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
@@ -305,8 +320,8 @@ function DailyTimeline({ report }: { report: DailyReport }): ReactElement {
         <div className="rounded-lg border border-border bg-card px-3 py-2">
           <div className="text-xs text-muted-foreground">Distance</div>
           <div className="flex items-center gap-2 font-semibold">
-            {formatKm(report.totalKm ?? 0)}
-            {estimated && <EstimatedBadge />}
+            {formatKm(report.totalKm)}
+            {report.estimated && <EstimatedBadge />}
           </div>
         </div>
       </div>
@@ -314,77 +329,52 @@ function DailyTimeline({ report }: { report: DailyReport }): ReactElement {
         <EmptyState
           icon={BarChart3}
           title="No visits"
-          description={`${report.employee ? personName(report.employee) : 'This person'} has no visits on ${dayLabel(report.date)}.`}
+          description={`${personName(report.employee)} has no visits on ${dayLabel(report.date)}.`}
         />
       ) : (
         <ol className="space-y-3">
-          {visits.map((v, i) => {
-            const flags = Object.entries(v.flags ?? {})
-              .filter(([, on]) => on)
-              .map(([k]) => k);
-            return (
-              <li key={v._id} className="rounded-lg border border-border bg-card p-4 text-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{i + 1}</span>
-                    <Link to={visitLink(v._id)} className="font-semibold text-primary hover:underline">
-                      {v.site?.name ?? 'Unknown site'}
-                    </Link>
-                    {v.purpose && <span className="text-muted-foreground">· {v.purpose}</span>}
-                    <Badge variant={v.status === 'completed' ? 'success' : v.status === 'missed' ? 'destructive' : 'secondary'}>
-                      {v.status.replace(/_/g, ' ')}
-                    </Badge>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {v.checkIn?.at ? formatTime(v.checkIn.at) : '—'} – {v.checkOut?.at ? formatTime(v.checkOut.at) : 'open'}
-                    {v.durationMinutes != null ? ` · ${formatMinutes(v.durationMinutes)}` : ''}
-                  </span>
+          {visits.map((v, i) => (
+            <li key={v._id} className="rounded-lg border border-border bg-card p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-muted-foreground">{i + 1}</span>
+                  <Link to={visitLink(v._id)} className="font-semibold text-primary hover:underline">
+                    {v.site?.name ?? 'Unknown site'}
+                  </Link>
+                  {v.purpose && <span className="text-muted-foreground">· {v.purpose}</span>}
+                  <VisitStatusBadge status={v.status} />
                 </div>
-                {flags.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {flags.map((f) => (
-                      <Badge key={f} variant="warning">
-                        {flagLabel(f)}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-                {v.report && (
-                  <div className="mt-2 space-y-1 text-muted-foreground">
-                    {v.report.notes && <p className="whitespace-pre-line text-foreground">{v.report.notes}</p>}
-                    <p className="text-xs">
-                      {[
-                        v.report.outcome && `Outcome: ${v.report.outcome.replace(/_/g, ' ')}`,
-                        v.report.nextAction && `Next: ${v.report.nextAction}`,
-                        v.report.peopleMet?.length && `Met ${v.report.peopleMet.map((p) => p.name).join(', ')}`,
-                        v.report.photos?.length && `${v.report.photos.length} photo${v.report.photos.length === 1 ? '' : 's'}`,
-                        v.report.documents?.length &&
-                          `${v.report.documents.length} document${v.report.documents.length === 1 ? '' : 's'}`,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                )}
-              </li>
-            );
-          })}
+                <span className="text-xs text-muted-foreground">
+                  {v.checkIn ? formatTime(v.checkIn.at) : '—'} – {v.checkOut ? formatTime(v.checkOut.at) : v.checkIn ? 'open' : '—'}
+                  {v.durationMinutes != null ? ` · ${formatMinutes(v.durationMinutes)}` : ''}
+                </span>
+              </div>
+              <VisitFlagBadges flags={v.flags} className="mt-2" />
+              {v.report && (
+                <div className="mt-2 space-y-1 text-muted-foreground">
+                  {v.report.notes && <p className="whitespace-pre-line text-foreground">{v.report.notes}</p>}
+                  <p className="text-xs">
+                    {[
+                      v.report.outcome && `Outcome: ${OUTCOME_LABEL[v.report.outcome]}`,
+                      v.report.nextAction && `Next: ${v.report.nextAction}`,
+                      v.report.peopleMet.length > 0 && `Met ${v.report.peopleMet.map((p) => p.name).join(', ')}`,
+                      v.report.photos.length > 0 &&
+                        `${v.report.photos.length} photo${v.report.photos.length === 1 ? '' : 's'}`,
+                      v.report.documents.length > 0 &&
+                        `${v.report.documents.length} document${v.report.documents.length === 1 ? '' : 's'}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </div>
+              )}
+            </li>
+          ))}
         </ol>
       )}
     </div>
   );
 }
-
-const FLAG_LABEL: Record<string, string> = {
-  awayFromSite: 'Away from site',
-  noGps: 'No GPS',
-  noSelfie: 'No selfie',
-  shortVisit: 'Short visit',
-  autoClosed: 'Auto-closed',
-  syncedLate: 'Synced late',
-  capturedOffline: 'Captured offline',
-};
-const flagLabel = (f: string): string => FLAG_LABEL[f] ?? f;
 
 /* ── Summary ── */
 
@@ -402,7 +392,7 @@ function SummaryTab({
     { key: 'completed', header: 'Completed', cell: (r) => r.completed },
     { key: 'missed', header: 'Missed', cell: (r) => r.missed },
     { key: 'minutes', header: 'Time on site', cell: (r) => formatMinutes(r.minutesOnSite) },
-    { key: 'km', header: 'Km', cell: (r) => formatKm(r.km ?? 0) },
+    { key: 'km', header: 'Km', cell: (r) => formatKm(r.km) },
   ];
   return (
     <DataTable
@@ -429,18 +419,17 @@ function ExceptionsTab({ params }: { params: { from: string; to: string } | null
     {
       key: 'type',
       header: 'Exception',
-      cell: (r) => <Badge variant="warning">{EXCEPTION_LABEL[r.type] ?? r.type}</Badge>,
+      cell: (r) => <Badge variant="warning">{EXCEPTION_LABEL[r.type]}</Badge>,
     },
-    { key: 'detail', header: 'Detail', cell: (r) => r.detail || '—' },
+    { key: 'detail', header: 'Detail', cell: (r) => r.detail },
     {
       key: 'visit',
       header: '',
-      cell: (r) =>
-        r.visitId ? (
-          <Link to={visitLink(r.visitId)} className="text-xs font-medium text-primary hover:underline">
-            View visit
-          </Link>
-        ) : null,
+      cell: (r) => (
+        <Link to={visitLink(r.visitId)} className="text-xs font-medium text-primary hover:underline">
+          View visit
+        </Link>
+      ),
     },
   ];
   return (
@@ -450,7 +439,7 @@ function ExceptionsTab({ params }: { params: { from: string; to: string } | null
       loading={!!params && q.isLoading}
       error={q.error}
       onRetry={() => void q.refetch()}
-      rowKey={(r) => `${r.visitId ?? r.employee?._id ?? ''}:${r.date}:${r.type}`}
+      rowKey={(r) => `${r.visitId}:${r.type}`}
       emptyTitle="No exceptions"
       emptyDescription="Every visit in this range was at its site, with GPS and a selfie, and on time."
     />
@@ -462,17 +451,21 @@ function ExceptionsTab({ params }: { params: { from: string; to: string } | null
 function SitesTab({ params }: { params: { from: string; to: string } | null }): ReactElement {
   const q = useSitesReport(params);
   const columns: DataTableColumn<SiteReportRow>[] = [
-    { key: 'site', header: 'Site', cell: (r) => r.site?.name ?? '—' },
-    { key: 'type', header: 'Type', cell: (r) => r.site?.type ?? '—' },
+    { key: 'site', header: 'Site', cell: (r) => r.site.name },
+    { key: 'type', header: 'Type', cell: (r) => r.site.type || '—' },
     { key: 'visits', header: 'Visits', cell: (r) => r.visits },
-    { key: 'last', header: 'Last visit', cell: (r) => (r.lastVisitAt ? formatDateTime(r.lastVisitAt) : '—') },
+    { key: 'last', header: 'Last visit', cell: (r) => formatDateTime(r.lastVisitAt) },
     {
       key: 'employees',
       header: 'Visited by',
-      cell: (r) =>
-        Array.isArray(r.employees)
-          ? r.employees.map(personName).join(', ') || '—'
-          : `${r.employees} ${r.employees === 1 ? 'person' : 'people'}`,
+      cell: (r) => (
+        <div className="flex flex-col">
+          <span>{r.employees.map(personName).join(', ') || '—'}</span>
+          <span className="text-xs text-muted-foreground" data-testid="site-people">
+            {r.employeeCount} {r.employeeCount === 1 ? 'person' : 'people'}
+          </span>
+        </div>
+      ),
     },
   ];
   return (
@@ -482,7 +475,7 @@ function SitesTab({ params }: { params: { from: string; to: string } | null }): 
       loading={!!params && q.isLoading}
       error={q.error}
       onRetry={() => void q.refetch()}
-      rowKey={(r) => r.site?._id ?? r.site?.name ?? ''}
+      rowKey={(r) => r.site._id}
       emptyTitle="No site visits"
       emptyDescription="No site was visited between these dates."
     />

@@ -115,7 +115,6 @@ const GeofencePage = lazy(() => import('@/pages/attendance/GeofencePage'));
 const QRCodesPage = lazy(() => import('@/pages/attendance/QRCodesPage'));
 const AllowedIPsPage = lazy(() => import('@/pages/attendance/AllowedIPsPage'));
 const AttendanceTimesheetPage = lazy(() => import('@/pages/attendance/TimesheetPage'));
-const AttendanceLiveTrackingPage = lazy(() => import('@/pages/attendance/LiveTrackingPage'));
 
 function RouteFallback(): ReactElement {
   return (
@@ -199,7 +198,8 @@ export function AppRouter(): ReactElement {
             <Route path="/attendance/geofences" element={guard(NAV_ACCESS.attendanceConfig, <GeofencePage />)} />
             <Route path="/attendance/qr-codes" element={guard(NAV_ACCESS.attendanceConfig, <QRCodesPage />)} />
             <Route path="/attendance/allowed-ips" element={guard(NAV_ACCESS.attendanceConfig, <AllowedIPsPage />)} />
-            <Route path="/attendance/live-tracking" element={guard(NAV_ACCESS.attendanceView, <AttendanceLiveTrackingPage />)} />
+            {/* Continuous tracking is gone; the field team map shows each person's last check-in/out. */}
+            <Route path="/attendance/live-tracking" element={<Navigate to={FIELD_PATHS.teamMap} replace />} />
 
             {/* Field Visits — field.view (own + direct reports) or field.manage (everyone); settings need field.manage */}
             <Route path="/field" element={<Navigate to="/field/visits" replace />} />

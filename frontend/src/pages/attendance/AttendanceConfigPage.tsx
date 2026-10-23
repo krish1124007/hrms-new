@@ -56,8 +56,6 @@ export default function AttendanceConfigPage(): ReactElement {
   const [requireNoteOnLate, setRequireNoteOnLate] = useState(false);
   const [expenseRule, setExpenseRule] = useState<ExpenseBeforeCheckout>('all');
   const [freeLateDays, setFreeLateDays] = useState(3);
-  const [trackingEnabled, setTrackingEnabled] = useState(false);
-  const [trackingIntervalMin, setTrackingIntervalMin] = useState(2);
   const [weekOff, setWeekOff] = useState<WeekOffRule>(DEFAULT_WEEK_OFF_RULE);
 
   useEffect(() => {
@@ -73,8 +71,6 @@ export default function AttendanceConfigPage(): ReactElement {
       setRequireNoteOnLate(c.settings.requireNoteOnLateCheckIn ?? false);
       setExpenseRule(c.settings.expenseBeforeCheckout ?? 'all');
       setFreeLateDays(c.settings.freeLateDaysPerMonth ?? 3);
-      setTrackingEnabled(c.liveTracking?.enabled ?? false);
-      setTrackingIntervalMin(Math.max(1, Math.round((c.liveTracking?.intervalSeconds ?? 120) / 60)));
       setWeekOff({
         fullDaysOff: c.weekOff?.fullDaysOff ?? DEFAULT_WEEK_OFF_RULE.fullDaysOff,
         partialDaysOff: c.weekOff?.partialDaysOff ?? DEFAULT_WEEK_OFF_RULE.partialDaysOff,
@@ -142,10 +138,6 @@ export default function AttendanceConfigPage(): ReactElement {
         requireNoteOnLateCheckIn: requireNoteOnLate,
         freeLateDaysPerMonth: freeLateDays,
         expenseBeforeCheckout: expenseRule,
-      },
-      liveTracking: {
-        enabled: trackingEnabled,
-        intervalSeconds: Math.max(30, Math.round(trackingIntervalMin * 60)),
       },
       weekOff: {
         fullDaysOff: weekOff.fullDaysOff,
@@ -375,46 +367,6 @@ export default function AttendanceConfigPage(): ReactElement {
               />
               <span className="text-sm">Require location on check-in & check-out</span>
             </label>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Live location tracking</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-muted/50">
-              <input
-                type="checkbox"
-                className="mt-1 size-4"
-                checked={trackingEnabled}
-                onChange={(e) => setTrackingEnabled(e.target.checked)}
-              />
-              <div>
-                <p className="font-medium">Track employee location while clocked in</p>
-                <p className="text-xs text-muted-foreground">
-                  When enabled, the mobile app records each employee's location at the interval
-                  below — from check-in until check-out — provided the employee grants location
-                  permission. Turn this off to stop all tracking immediately.
-                </p>
-              </div>
-            </label>
-          </div>
-          <div className="sm:col-span-2">
-            <Label htmlFor="track-interval">Tracking interval (minutes)</Label>
-            <Input
-              id="track-interval"
-              type="number"
-              min={1}
-              value={trackingIntervalMin}
-              disabled={!trackingEnabled}
-              onChange={(e) => setTrackingIntervalMin(Number(e.target.value))}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              How often a location point is captured and uploaded. Default 2 minutes (minimum 1).
-            </p>
           </div>
         </CardContent>
       </Card>

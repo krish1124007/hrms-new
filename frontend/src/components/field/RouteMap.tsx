@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from 'react';
 import { Marker, Polyline, Popup } from 'react-leaflet';
 import { Badge } from '@/components/ui/badge';
 import type { DayRoute, RoutePoint } from '@/lib/field-reports.api';
-import { formatKm, isRouteEstimated, legsTotalKm, pointKindLabel } from '@/lib/field-route';
+import { formatKm, pointKindLabel } from '@/lib/field-route';
 import { formatTime } from '@/lib/format';
 import { FitBounds, MapCanvas } from './MapCanvas';
 import { pointIcon } from './team-map-icons';
@@ -28,7 +28,7 @@ export function EstimatedBadge(): ReactElement {
  * Lines join the points directly; the km beside them is what was measured.
  */
 export function RouteMap({ route, height = 520 }: { route: DayRoute; height?: number | string }): ReactElement {
-  const { points, legs } = route;
+  const { points, legs, totalKm, estimated } = route;
   const coords = useMemo(() => points.map((p) => [p.lat, p.lng] as [number, number]), [points]);
   const icons = useMemo(() => points.map((p, i) => pointIcon(i + 1, p.kind)), [points]);
   const lines = useMemo(
@@ -44,8 +44,6 @@ export function RouteMap({ route, height = 520 }: { route: DayRoute; height?: nu
         .filter((x): x is NonNullable<typeof x> => x !== null),
     [legs, points],
   );
-  const totalKm = useMemo(() => legsTotalKm(legs), [legs]);
-  const estimated = isRouteEstimated(route);
   const visits = points.filter((p) => p.kind === 'visit_in').length;
 
   return (

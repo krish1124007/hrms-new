@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { apiErrorCode } from '@/lib/api-error';
 import { saveBlob } from '@/lib/backups.api';
 import {
   fieldReportsApi,
@@ -45,13 +46,19 @@ export function useTravelDay(date: string, enabled = true) {
   });
 }
 
+const VEHICLES_KEY = ['field', 'settings', 'vehicles'];
+
 export function useFieldVehicles() {
   return useQuery({
-    queryKey: ['field', 'settings', 'vehicles'],
+    queryKey: VEHICLES_KEY,
     queryFn: () => fieldReportsApi.vehicles(),
     staleTime: 5 * 60_000,
   });
 }
+
+/** Refusals that mean the page is showing stale vehicles, or a stale day. */
+const STALE_VEHICLES = new Set(['UNKNOWN_VEHICLE', 'VEHICLE_RATE_NOT_SET']);
+const STALE_DAY = new Set(['TA_ALREADY_CLAIMED', 'NO_FIELD_WORK']);
 
 export function useCreateTravelClaim() {
   const qc = useQueryClient();
@@ -61,6 +68,12 @@ export function useCreateTravelClaim() {
       void qc.invalidateQueries({ queryKey: ['field', 'travel-day'] });
       void qc.invalidateQueries({ queryKey: ['expense-claims'] });
       toast.success('Travel claim submitted for approval');
+    },
+    // The global handler toasts the (plain-English) reason; refresh what it says changed.
+    onError: (err) => {
+      const code = apiErrorCode(err) ?? '';
+      if (STALE_VEHICLES.has(code)) void qc.invalidateQueries({ queryKey: VEHICLES_KEY });
+      if (STALE_DAY.has(code)) void qc.invalidateQueries({ queryKey: ['field', 'travel-day'] });
     },
   });
 }

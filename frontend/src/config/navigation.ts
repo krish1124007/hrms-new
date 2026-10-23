@@ -30,7 +30,6 @@ import {
   Megaphone,
   PartyPopper,
   Package,
-  Radar,
   Receipt,
   Route,
   ScrollText,
@@ -152,7 +151,6 @@ export const NAV_GROUPS: NavGroup[] = [
         module: 'attendance',
         children: [
           { label: 'Dashboard', to: '/attendance', icon: LayoutDashboard, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
-          { label: 'Live Tracking', to: '/attendance/live-tracking', icon: Radar, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
           { label: 'My Attendance', to: '/attendance/my', icon: CalendarDays, module: 'attendance', excludeRoles: ['admin'] },
           // Self-service for everyone; the page adds the team view for `overtime.view`.
           { label: 'Overtime', to: '/overtime', icon: Clock3, module: 'attendance' },

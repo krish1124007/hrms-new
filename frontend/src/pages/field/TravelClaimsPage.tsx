@@ -16,9 +16,10 @@ import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
 import { EstimatedBadge } from '@/components/field/RouteMap';
 import { useCreateTravelClaim, useFieldVehicles, useTravelDay } from '@/hooks/use-field-reports';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
+import type { ExpenseClaimStatus } from '@/lib/expense-claims.api';
 import type { FieldVehicle, TravelClaimInput, TravelDay } from '@/lib/field-reports.api';
 import { routeLink } from '@/lib/field-links';
-import { formatKm, formatRupees, isRouteEstimated, kmNeedsReason, travelAmount } from '@/lib/field-route';
+import { formatKm, formatRupees, kmNeedsReason, travelAmount } from '@/lib/field-route';
 import { addDaysToKey } from '@/lib/business-day';
 import { apiErrorMessage } from '@/lib/api-error';
 import { formatDate, todayIST } from '@/lib/format';
@@ -27,8 +28,12 @@ const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 const dayLabel = (date: string): string => formatDate(`${date}T12:00:00+05:30`);
+/** The server refuses a claim for a vehicle without a rate (it would come to ₹0). */
+const hasRate = (v: FieldVehicle): boolean => v.ratePerKm > 0;
+/** The most km the server accepts for one day. */
+const MAX_CLAIM_KM = 5000;
 
-const CLAIM_VARIANT: Record<string, 'success' | 'warning' | 'destructive' | 'secondary' | 'default'> = {
+const CLAIM_VARIANT: Record<ExpenseClaimStatus, 'success' | 'warning' | 'destructive' | 'secondary' | 'default'> = {
   draft: 'secondary',
   pending: 'warning',
   approved: 'success',
@@ -127,7 +132,7 @@ function DistanceCard({ day, employeeId }: { day: TravelDay; employeeId?: string
       <CardContent className="space-y-3">
         <div className="flex items-center gap-2 text-3xl font-bold tracking-tight">
           {formatKm(day.totalKm)}
-          {isRouteEstimated(day) && <EstimatedBadge />}
+          {day.estimated && <EstimatedBadge />}
         </div>
         <p className="text-sm text-muted-foreground">
           Measured between your day check-in, each visit&apos;s check-in and check-out, and your day check-out
@@ -167,7 +172,7 @@ function ClaimCard({
         <CardContent className="space-y-3 text-sm">
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground">Status</span>
-            <Badge variant={CLAIM_VARIANT[claim.status] ?? 'secondary'}>{claim.status}</Badge>
+            <Badge variant={CLAIM_VARIANT[claim.status]}>{claim.status}</Badge>
           </div>
           <dl className="grid grid-cols-2 gap-2">
             <dt className="text-muted-foreground">Kilometres claimed</dt>
@@ -193,6 +198,17 @@ function ClaimCard({
         icon={Bike}
         title="No completed visit on this day"
         description="Travel allowance is claimed for days with at least one completed site visit."
+      />
+    );
+  }
+
+  // Every vehicle at ₹0/km: any claim would be ₹0, which the server refuses.
+  if (!vehiclesLoading && !vehiclesError && vehicles.length > 0 && !vehicles.some(hasRate)) {
+    return (
+      <EmptyState
+        icon={Bike}
+        title="Vehicle rates are not set yet"
+        description="No vehicle has a rate per km, so a claim would come to ₹0. Ask HR to set the vehicle rates in Field settings, then claim this day."
       />
     );
   }
@@ -223,21 +239,26 @@ function TravelClaimForm({
 }): ReactElement {
   const create = useCreateTravelClaim();
   const computed = day.totalKm;
-  const [vehicleType, setVehicleType] = useState<string>(() => (vehicles.length === 1 ? vehicles[0].type : ''));
+  const rated = vehicles.filter(hasRate);
+  const unrated = vehicles.filter((v) => !hasRate(v));
+  const [vehicleType, setVehicleType] = useState<string>(() => (rated.length === 1 ? rated[0].type : ''));
   const [km, setKm] = useState(() => String(round1(computed)));
   const [reason, setReason] = useState('');
   const [confirming, setConfirming] = useState(false);
 
-  const vehicle = vehicles.find((v) => v.type === vehicleType);
+  // Only a vehicle with a rate can be claimed for (the server answers VEHICLE_RATE_NOT_SET otherwise).
+  const vehicle = rated.find((v) => v.type === vehicleType);
   const claimed = km.trim() === '' ? Number.NaN : Number(km);
-  const kmValid = Number.isFinite(claimed) && claimed >= 0;
+  const kmValid = Number.isFinite(claimed) && claimed >= 0 && claimed <= MAX_CLAIM_KM;
   // Untouched (or only re-typed to the shown value) → the server's own calculation.
   const changed = kmValid && Math.abs(claimed - round1(computed)) >= 0.05;
   const needsReason = changed && kmNeedsReason(computed, claimed);
   const reasonMissing = needsReason && !reason.trim();
   const kmForAmount = changed ? claimed : computed;
-  const amount = vehicle ? travelAmount(kmForAmount, vehicle.ratePerKm) : null;
-  const canSubmit = !!vehicle && kmValid && !reasonMissing && !create.isPending;
+  const amount = vehicle && kmValid ? travelAmount(kmForAmount, vehicle.ratePerKm) : null;
+  // A ₹0 claim is refused by the server (NOTHING_TO_CLAIM) — never offer it.
+  const nothingToClaim = amount === 0;
+  const canSubmit = !!vehicle && kmValid && !reasonMissing && !nothingToClaim && !create.isPending;
 
   const payload = useMemo((): TravelClaimInput | null => {
     if (!vehicle) return null;
@@ -274,8 +295,8 @@ function TravelClaimForm({
           >
             <option value="">{vehiclesLoading ? 'Loading…' : '— Select —'}</option>
             {vehicles.map((v) => (
-              <option key={v.type} value={v.type}>
-                {v.label} — {formatRupees(v.ratePerKm)}/km
+              <option key={v.type} value={v.type} disabled={!hasRate(v)}>
+                {v.label} — {hasRate(v) ? `${formatRupees(v.ratePerKm)}/km` : 'rate not set'}
               </option>
             ))}
           </Select>
@@ -283,11 +304,14 @@ function TravelClaimForm({
             <p className="text-xs text-destructive">
               {vehiclesError
                 ? `Couldn't load the vehicle rates: ${apiErrorMessage(vehiclesError)}`
-                : 'No vehicle rates are set up yet. Ask HR to add them in the field settings.'}
+                : 'No vehicles are set up yet. Ask HR to add them, with a rate per km, in Field settings.'}
             </p>
           )}
-          {vehicle && vehicle.ratePerKm === 0 && (
-            <p className="text-xs text-warning">The rate for this vehicle is ₹0/km, so the claim would be ₹0.</p>
+          {unrated.length > 0 && rated.length > 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="unrated-vehicles">
+              No rate per km is set for {unrated.map((v) => v.label).join(', ')}, so {unrated.length === 1 ? 'it' : 'they'}{' '}
+              can&apos;t be claimed. Ask HR to set the rate in Field settings.
+            </p>
           )}
         </div>
 
@@ -304,7 +328,9 @@ function TravelClaimForm({
             aria-invalid={!kmValid || reasonMissing}
           />
           {!kmValid ? (
-            <p className="text-xs text-destructive">Enter the km travelled (0 or more).</p>
+            <p className="text-xs text-destructive">
+              Enter the km travelled (0 to {MAX_CLAIM_KM.toLocaleString('en-IN')}).
+            </p>
           ) : (
             <p className="text-xs text-muted-foreground">
               Calculated: {formatKm(computed)}. Change it only if the calculation is wrong; your approver sees both.
@@ -337,6 +363,11 @@ function TravelClaimForm({
             {amount === null ? '—' : formatRupees(amount)}
           </span>
         </div>
+        {nothingToClaim && vehicle && (
+          <p role="alert" className="text-sm text-destructive">
+            {formatKm(kmForAmount)} at {formatRupees(vehicle.ratePerKm)}/km comes to ₹0, so there is nothing to claim.
+          </p>
+        )}
 
         <Button className="w-full" disabled={!canSubmit} onClick={() => setConfirming(true)}>
           Submit claim
