@@ -1255,3 +1255,146 @@ The app is a separate git repository (`dhrms-iosfinal/`, ignored by this one); i
    receipt PDF (`react-native-blob-util` or `react-native-fs`; the app shares the receipt as text),
    keeping the MMKV encryption key in Keychain/Keystore (`react-native-keychain`; it sits in a
    separate MMKV file), and the reset-password deep link.
+
+## Field Visits — sites, check-in/out, work reports, travel allowance (replaces Field Sales)
+
+For deploying the `field-visits` work on the same server, after everything above is in place. Paths
+and the `mongosh hrms` database name are as above.
+
+What changes: Field Sales is deleted (orders, products, payments/receipts, targets, leaderboard: code,
+screens and their empty collections). Clients become **Sites** that anyone in the field can pin from
+the phone. Employees check in and out at a site with GPS (and a selfie while the company setting
+"selfie required" is on), file a work report (notes, photos, documents, people met, outcome,
+follow-up, checklist), and it all works offline and syncs later with the original time and place.
+Managers plan visits (one-off and recurring), see the team map (last check-in/out point and status),
+day routes, daily/summary/exception/site reports with Excel and PDF, and approve a **travel allowance
+by km** that goes through normal expense approval. Location is recorded only at check-in and check-out:
+continuous tracking is gone. The database gets three migrations.
+
+**Prerequisite:** `field-visits` is merged into the branch the server tracks and pushed. Note the commit
+you are on, for rollback (G):
+
+```bash
+cd /var/www/hrms-new && git rev-parse --short HEAD
+```
+
+Order: **A → B → C → D**, then tell people (E) and verify (F). Ship the **backend before the new app**
+(H): the app installed on phones today talks to Field Sales endpoints that no longer exist.
+
+### A. Before you deploy: data checks
+
+1. **No sales data left.** The first migration stops, changing nothing, if any sales collection still
+   holds a document. Check (all must print 0, or the collection must not exist):
+
+   ```bash
+   mongosh hrms --quiet --eval 'for (const c of ["products","productorders","paymentcollections","salestargets"]) print(c, db.getCollectionNames().includes(c) ? db[c].countDocuments({}) : "absent")'
+   ```
+
+   If something is there, export it (`mongoexport --db hrms --collection <name> --out <name>.json`)
+   and delete it before the deploy — the business decision was to delete sales completely.
+2. **Open visits.** Production had none; confirm:
+   `mongosh hrms --quiet --eval 'db.visits.countDocuments({status:"in_progress"})'` → `0`. (Two open
+   visits for one employee on one day stop the second migration with a list.)
+3. **Backup** as in section 4 before migrating (`mongodump --db hrms --out ~/backup-field-visits`).
+
+### B. Configuration
+
+1. **Google Cloud key (server).** In the company's Google Cloud project, with billing on, enable
+   **Routes API** and **Geocoding API**. Create an API key restricted to those two APIs and to this
+   server's IP address. Put it in `/var/www/hrms-new/backend/.env`:
+
+   ```
+   GOOGLE_MAPS_API_KEY=<the key>
+   ```
+
+   Optional: without it the server makes no Google calls, km fall back to a straight line × 1.3 and
+   are marked *estimated*, and pinned sites keep the address the employee typed. Never commit the key.
+   Set a budget alert in Google Cloud; a large first summary report asks Google once per uncached
+   employee-day (results are cached).
+2. **Removed:** `FIELD_VISIT_RADIUS_M` (each site carries its own radius, default 200 m). Delete it from
+   `.env` if present; it is ignored.
+3. **Google Cloud key (Android app).** A second key for **Maps SDK for Android**, restricted to Android
+   apps with the package name and the release keystore's SHA-1. It goes into the app build (H), not the
+   server.
+
+### C. Pull, install, seed, migrate, restart
+
+```bash
+cd /var/www/hrms-new && git checkout -- backend/package-lock.json && git pull && cd backend && npm ci --omit=dev && npm run build
+node dist/scripts/seed.js
+npm run migrate:up
+npm run migrate:status
+pm2 restart all
+cd ../frontend && npm ci && npm run build
+```
+
+(Use the same build/publish steps for `backend/dist` and `frontend/dist` as in section 4 if the server
+builds differently.)
+
+- **Seed** refreshes the system roles and adds **Field Employee** (own visits) and **Field Manager**
+  (their team). Expect `Roles: 2 created, … refreshed`.
+- **Migrations** (each prints `MIGRATED UP: <file>`):
+  - `20261023000001-field-visits-foundation`: prints `field visits: N client(s) copied to sites; dropped …`.
+    Clients become sites (same ids, so old visits/tasks still point at them), `field-sales.*`
+    permissions are renamed to `field.view` / `field.manage` in roles and users (never stripped), the
+    empty sales collections and `counters` are dropped. Stops first, changing nothing, on A.1.
+  - `20261023000002-field-visits-indexes`: prints `field visits engine: N legacy visit(s) reshaped, N
+    day(s) filled in; indexes built` (offline replay, one open visit per employee per day, schedules).
+  - `20261023000005-field-team-travel`: the built-in Field Manager role keeps `field.view` (self + direct
+    reports) and loses `field.manage` (everybody + settings), which stays with HR/admin; builds the
+    one-travel-claim-per-day index and the route cache index.
+
+  All three are idempotent; after fixing data, run `npm run migrate:up` again. `migrate:status` must
+  show no `PENDING`.
+- **Restart** and check `pm2 logs backend --lines 30 --nostream` for `API listening` and the `field`
+  queue (nightly job 00:15 IST: plans recurring visits 7 days ahead, marks yesterday's unvisited plans
+  *missed*, auto-closes visits left open on previous days).
+
+### D. Once, after the deploy
+
+1. **Field settings** (web → Field Visits → Settings, as HR/admin): site types and visit purposes your
+   team uses, "selfie required" (on by default), short-visit minutes (5), auto-close time (23:30),
+   offline max age (7 days), "first check-in counts as attendance" (on), **vehicle rates in ₹/km**
+   (the defaults are ₹0, and the server refuses ₹0 travel claims until a rate is set), checklists.
+2. **Roles.** Give field staff the **Field Employee** role and their managers **Field Manager**. Field
+   managers see only their direct reports, so set *reporting manager* on the field employees (today only
+   4 of 98 employees have one). HR/admin see everyone.
+3. **Sites.** Check the site(s) copied from clients; import more from Excel (Sites → Import) or let
+   employees pin them from the phone.
+
+### E. What changes for users
+
+- Field employees: Field tab in the app → *My day* (planned visits, pin a new site, check in/out),
+  work report at check-out, *Sites near me* with a map, travel allowance for a day in one tap. Works
+  without network; the app syncs when it is back and shows what is still waiting.
+- Managers: web → Field Visits: team map, routes, visits, planning and recurring visits, reports with
+  Excel/PDF; travel claims arrive in normal expense approval showing computed vs claimed km.
+- Gone: orders, products, payments/receipts, targets, leaderboard, live tracking.
+
+### F. Verify
+
+1. `curl -s https://<host>/api/v1/health` → 200. `GET /api/v1/field/settings` (signed in) → 200.
+2. Old endpoints answer 404: `/api/v1/field/orders`, `/api/v1/field/products`, `/api/v1/field/payments`.
+3. `POST /api/v1/field/tracking/batch` → 200 `{ ignored: true }` (old app versions keep working).
+4. With a test field employee on a phone: pin a site → check in → check out with a report → see it on the
+   web (visit, team map, daily report, Excel/PDF export) → claim travel allowance → approve it in
+   Expenses.
+5. Next morning: `pm2 logs backend --nostream | grep field-nightly` shows the job ran.
+
+### G. Rollback
+
+`git checkout <noted commit>`, rebuild, `pm2 restart all`. Migrations: `npx migrate-mongo down -f
+migrate-mongo-config.cjs` once per Field Visits migration (newest first) restores the field manager's
+`field.manage`, the visits' one-open-visit index and `clientId`, and the permission names; dropped sales
+collections were empty and are not restored. Visits and sites created after the deploy stay in the
+database.
+
+### H. Mobile release (`dhrms-iosfinal/`)
+
+1. Backend first (A–F).
+2. Android: put the Maps SDK key (B.3) in `android/local.properties` as `GOOGLE_MAPS_API_KEY=<key>`
+   (git-ignored) and set `"mapsEnabled": true` in `app.json`; without the key keep it `false` (lists
+   instead of maps). iOS map: later, when the iOS project is on this machine.
+3. Bump the version (`package.json`, `app.json`, `versionCode`/`versionName`), check `npm run
+   type-check` and `npx jest`, build with the release keystore, try it on a phone (including airplane
+   mode: check in and out offline, then reconnect).
