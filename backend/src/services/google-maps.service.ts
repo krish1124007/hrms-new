@@ -4,13 +4,17 @@
  *
  * Key: env `GOOGLE_MAPS_API_KEY` (a server key with the Routes and Geocoding
  * APIs enabled). Unset → no Google call is ever made: addresses stay as
- * entered and distances use the fallback. Every call has a 3 s timeout; any
- * failure falls back. The key is never logged (the geocoding URL carries it,
- * so URLs are never logged either).
+ * entered and distances use the fallback. Every call has a 3 s timeout that
+ * covers the whole exchange, body included; any failure falls back. The key
+ * is never logged or returned (the geocoding URL carries it, so URLs are
+ * never logged either).
  *
  * Fallback distance: the great-circle distance × 1.3, marked `estimated`.
  * Road distances are cached in-process (LRU) by coordinates rounded to
- * 4 decimals (≈ 11 m), so recomputing a day's route costs no new calls.
+ * 4 decimals (≈ 11 m), so recomputing a day's route costs no new calls. A
+ * leg Google failed (HTTP error, timeout, no route) is not asked again for
+ * 10 minutes. After 5 failed calls in a row (HTTP error, timeout, network)
+ * an API is left alone for 5 minutes (circuit breaker), then tried again.
  */
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
@@ -40,6 +44,12 @@ export interface RouteDistances {
 export const ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 export const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 export const GOOGLE_TIMEOUT_MS = 3000;
+/** A leg Google could not measure is not asked again for this long. */
+export const FAILURE_TTL_MS = 10 * 60 * 1000;
+/** This many failed calls in a row open the circuit breaker… */
+export const BREAKER_THRESHOLD = 5;
+/** …for this long: no calls to that API, every answer is the fallback. */
+export const BREAKER_OPEN_MS = 5 * 60 * 1000;
 /** Straight-line distance × this approximates the road distance when Google is unavailable. */
 export const FALLBACK_ROAD_FACTOR = 1.3;
 const CACHE_MAX = 2000;
@@ -69,14 +79,40 @@ class Lru<V> {
 }
 
 const legCache = new Lru<number>(CACHE_MAX);
+/** Legs that failed → when they may be asked again (epoch ms). */
+const legFailures = new Lru<number>(CACHE_MAX);
 const geocodeCache = new Lru<Address>(CACHE_MAX);
 
 const round = (p: LatLng): string => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
 
-/** Tests: forget every cached distance and address. */
+/** Consecutive failed calls to one API; open (no calls) for a while after too many. */
+class CircuitBreaker {
+  private failures = 0;
+  private openUntil = 0;
+  /** True while calls are held back. */
+  isOpen(): boolean {
+    return Date.now() < this.openUntil;
+  }
+  success(): void {
+    this.failures = 0;
+    this.openUntil = 0;
+  }
+  failure(): void {
+    this.failures += 1;
+    if (this.failures >= BREAKER_THRESHOLD) this.openUntil = Date.now() + BREAKER_OPEN_MS;
+  }
+}
+
+const routesBreaker = new CircuitBreaker();
+const geocodeBreaker = new CircuitBreaker();
+
+/** Tests: forget every cached distance, address and failure. */
 export function clearGoogleMapsCache(): void {
   legCache.clear();
+  legFailures.clear();
   geocodeCache.clear();
+  routesBreaker.success();
+  geocodeBreaker.success();
 }
 
 function apiKey(): string | undefined {
@@ -84,12 +120,28 @@ function apiKey(): string | undefined {
   return key && key.trim() !== '' ? key.trim() : undefined;
 }
 
-/** `fetch` with the 3 s timeout. */
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * `fetch` + the JSON body, all within the 3 s timeout (a body that stalls
+ * after the headers is aborted too). `body` is null for a non-2xx answer.
+ * Rejects on a timeout or a network failure.
+ */
+async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; body: T | null }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GOOGLE_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException('Google did not answer in time', 'TimeoutError'));
+    }, GOOGLE_TIMEOUT_MS);
+  });
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const res = await Promise.race([fetch(url, { ...init, signal: controller.signal }), timeout]);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      return { ok: false, status: res.status, body: null };
+    }
+    const body = await Promise.race([res.json() as Promise<T>, timeout]);
+    return { ok: true, status: res.status, body };
   } finally {
     clearTimeout(timer);
   }
@@ -100,14 +152,25 @@ export function estimatedLegMeters(a: LatLng, b: LatLng): number {
   return Math.round(distanceMeters(a, b) * FALLBACK_ROAD_FACTOR);
 }
 
-/** One leg's road distance from the Routes API, or null on any failure. */
+/**
+ * One leg's road distance from the Routes API, or null on any failure. A
+ * failed leg is remembered for FAILURE_TTL_MS (no call meanwhile); while the
+ * breaker is open no call is made at all.
+ */
 async function routeLeg(a: LatLng, b: LatLng, key: string): Promise<number | null> {
   const cacheKey = `${round(a)}>${round(b)}`;
   const hit = legCache.get(cacheKey);
   if (hit !== undefined) return hit;
+  const failedUntil = legFailures.get(cacheKey);
+  if (failedUntil !== undefined && failedUntil > Date.now()) return null;
+  if (routesBreaker.isOpen()) return null;
+  const failed = (): null => {
+    legFailures.set(cacheKey, Date.now() + FAILURE_TTL_MS);
+    return null;
+  };
   const waypoint = (p: LatLng) => ({ location: { latLng: { latitude: p.lat, longitude: p.lng } } });
   try {
-    const res = await fetchWithTimeout(ROUTES_URL, {
+    const res = await fetchJson<{ routes?: Array<{ distanceMeters?: number }> }>(ROUTES_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -117,20 +180,23 @@ async function routeLeg(a: LatLng, b: LatLng, key: string): Promise<number | nul
       body: JSON.stringify({ origin: waypoint(a), destination: waypoint(b), travelMode: 'DRIVE' }),
     });
     if (!res.ok) {
+      routesBreaker.failure();
       logger.warn({ status: res.status }, 'Google Routes API request failed; using the estimate');
-      return null;
+      return failed();
     }
-    const body = (await res.json()) as { routes?: Array<{ distanceMeters?: number }> };
-    const route = body.routes?.[0];
-    if (!route) return null;
+    // Google answered: the API works, even when this leg has no route.
+    routesBreaker.success();
+    const route = res.body?.routes?.[0];
+    if (!route) return failed();
     // A zero-length route has no distanceMeters (proto3 default).
     const metres = Math.round(Number(route.distanceMeters ?? 0));
-    if (!Number.isFinite(metres) || metres < 0) return null;
+    if (!Number.isFinite(metres) || metres < 0) return failed();
     legCache.set(cacheKey, metres);
     return metres;
   } catch (err) {
+    routesBreaker.failure();
     logger.warn({ reason: (err as Error)?.name ?? 'error' }, 'Google Routes API unreachable; using the estimate');
-    return null;
+    return failed();
   }
 }
 
@@ -181,22 +247,28 @@ async function reverseGeocode(lat: number, lng: number): Promise<Address | null>
   const cacheKey = round({ lat, lng });
   const hit = geocodeCache.get(cacheKey);
   if (hit) return { ...hit };
+  if (geocodeBreaker.isOpen()) return null;
   const url = `${GEOCODE_URL}?latlng=${encodeURIComponent(`${lat},${lng}`)}&key=${encodeURIComponent(key)}`;
   try {
-    const res = await fetchWithTimeout(url);
-    if (!res.ok) {
+    const res = await fetchJson<{
+      status?: string;
+      results?: Array<{ formatted_address?: string; address_components?: GeocodeComponent[] }>;
+    }>(url);
+    if (!res.ok || !res.body) {
+      geocodeBreaker.failure();
       logger.warn({ status: res.status }, 'Google Geocoding request failed');
       return null;
     }
-    const body = (await res.json()) as {
-      status?: string;
-      results?: Array<{ formatted_address?: string; address_components?: GeocodeComponent[] }>;
-    };
+    const body = res.body;
     const first = body.results?.[0];
     if (body.status !== 'OK' || !first) {
+      // REQUEST_DENIED / OVER_QUERY_LIMIT: the key or the quota, not this point.
+      if (body.status === 'REQUEST_DENIED' || body.status === 'OVER_QUERY_LIMIT') geocodeBreaker.failure();
+      else geocodeBreaker.success();
       if (body.status !== 'ZERO_RESULTS') logger.warn({ status: body.status }, 'Google Geocoding returned no address');
       return null;
     }
+    geocodeBreaker.success();
     const components = first.address_components ?? [];
     const part = (...types: string[]): string => {
       for (const type of types) {
@@ -214,6 +286,7 @@ async function reverseGeocode(lat: number, lng: number): Promise<Address | null>
     geocodeCache.set(cacheKey, address);
     return { ...address };
   } catch (err) {
+    geocodeBreaker.failure();
     logger.warn({ reason: (err as Error)?.name ?? 'error' }, 'Google Geocoding unreachable');
     return null;
   }

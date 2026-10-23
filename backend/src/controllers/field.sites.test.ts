@@ -161,12 +161,16 @@ describe('POST /field/sites — pinning', () => {
     expect(lower.body.data.type).toBe('Project site');
   });
 
-  it('honours capturedAt within offlineMaxAgeDays; 8 days old → 400 CAPTURED_AT_INVALID', async () => {
+  it('honours capturedAt within offlineMaxAgeDays; 8 days old → 400 CAPTURED_AT_INVALID; a future one → arrival time', async () => {
     const old = await pin(rep, pinBody({ capturedAt: new Date(Date.now() - 8 * DAY_MS).toISOString() }));
     expect(old.status).toBe(400);
     expect(old.body.error.code).toBe('CAPTURED_AT_INVALID');
+    const before = Date.now();
     const future = await pin(rep, pinBody({ capturedAt: new Date(Date.now() + 10 * 60_000).toISOString() }));
-    expect(future.status).toBe(400);
+    expect(future.status).toBe(201);
+    const stored = (await FieldSite.findById(future.body.data._id).lean())?.capturedAt?.getTime() ?? 0;
+    expect(stored).toBeGreaterThanOrEqual(before);
+    expect(stored).toBeLessThanOrEqual(Date.now());
 
     const at = new Date(Date.now() - 3 * DAY_MS);
     const ok = await pin(rep, pinBody({ capturedAt: at.toISOString() }));

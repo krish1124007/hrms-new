@@ -33,12 +33,16 @@ describe('acceptCapturedAt', () => {
     expect(acceptCapturedAt(ahead.toISOString(), settings, NOW).toISOString()).toBe(NOW.toISOString());
   });
 
-  it('400 CAPTURED_AT_INVALID: 8 days old, further in the future, or not a date', () => {
-    for (const value of [
-      new Date(NOW.getTime() - 8 * DAY_MS).toISOString(),
-      new Date(NOW.getTime() + 3 * MIN).toISOString(),
-      'yesterday-ish',
-    ]) {
+  it('a phone clock running minutes or hours fast is not honoured: captured now, never refused', () => {
+    for (const ahead of [3 * MIN, 5 * MIN, 2 * 60 * MIN]) {
+      const at = new Date(NOW.getTime() + ahead).toISOString();
+      expect(acceptCapturedAt(at, settings, NOW).toISOString()).toBe(NOW.toISOString());
+      expect(captureTimes(at, settings, NOW)).toEqual({ capturedAt: NOW, receivedAt: NOW, syncedLate: false });
+    }
+  });
+
+  it('400 CAPTURED_AT_INVALID: 8 days old, or not a date', () => {
+    for (const value of [new Date(NOW.getTime() - 8 * DAY_MS).toISOString(), 'yesterday-ish']) {
       expect(() => acceptCapturedAt(value, settings, NOW)).toThrow(
         expect.objectContaining({ statusCode: 400, code: 'CAPTURED_AT_INVALID' }),
       );

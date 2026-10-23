@@ -181,13 +181,26 @@ describe('captured offline, synced days later', () => {
     expect(closed.body.data.status).toBe('completed');
   });
 
-  it('older than offlineMaxAgeDays, or in the future → 400 CAPTURED_AT_INVALID', async () => {
+  it('older than offlineMaxAgeDays → 400 CAPTURED_AT_INVALID', async () => {
     const site = await pinnedSite([rep.employee]);
     const tooOld = await checkIn({ clientRef: randomUUID(), capturedAt: new Date(Date.now() - 8 * DAY_MS).toISOString(), siteId: String(site._id), purpose: 'Meeting' });
     expect(tooOld.status).toBe(400);
     expect(tooOld.body.error.code).toBe('CAPTURED_AT_INVALID');
-    const future = await checkIn({ clientRef: randomUUID(), capturedAt: new Date(Date.now() + 3_600_000).toISOString(), siteId: String(site._id), purpose: 'Meeting' });
-    expect(future.status).toBe(400);
+  });
+
+  it('a capturedAt ahead of the server (phone clock fast) is not honoured: the arrival time is used, nothing flagged', async () => {
+    const site = await pinnedSite([rep.employee]);
+    const sent = new Date(Date.now() + 5 * 60_000).toISOString();
+    const before = Date.now();
+    const future = await checkIn({ clientRef: randomUUID(), capturedAt: sent, siteId: String(site._id), purpose: 'Meeting' });
+    expect(future.status).toBe(201);
+    const at = new Date(future.body.data.checkIn.at).getTime();
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(Date.now());
+    expect(future.body.data.flags).toMatchObject({ syncedLate: false, capturedOffline: false });
+    const out = await checkOut(future.body.data._id, { clientRef: randomUUID(), capturedAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+    expect(out.status).toBe(200);
+    expect(new Date(out.body.data.checkOut.at).getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('a check-out captured before the check-in → 400 CHECKOUT_BEFORE_CHECKIN', async () => {

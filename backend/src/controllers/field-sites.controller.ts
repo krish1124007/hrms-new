@@ -249,7 +249,7 @@ export async function updateSite(req: Request, res: Response): Promise<void> {
     else if (body[key] !== undefined) set[key] = body[key];
   }
   if (body.photo === null) unset.photo = '';
-  else if (body.photo) set.photo = await fieldFileRef(body.photo, 'photo');
+  else if (body.photo) set.photo = await fieldFileRef(body.photo, 'photo', { userId: req.user?._id, keep: [site.photo] });
   if (body.assignedTo !== undefined) set.assignedTo = await checkAssignees(await fieldScope(req), body.assignedTo);
 
   const update: Record<string, unknown> = {};

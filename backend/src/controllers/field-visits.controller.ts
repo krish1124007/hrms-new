@@ -27,6 +27,8 @@ import {
   CAPTURED_OFFLINE_AFTER_MS,
   REPORT_EDIT_WINDOW_MS,
   VISIT_POPULATE,
+  autoCloseInstant,
+  autoCloseOpenVisits,
   canonicalPurpose,
   compactUpdate,
   dayWindow,
@@ -45,7 +47,7 @@ import {
   ymdSchema,
   type ResolvedReport,
 } from '../services/field-visits.service.js';
-import { ensureDayCheckIn } from '../services/attendance-field-link.service.js';
+import { ensureDayCheckIn, extendFieldDayCheckOut } from '../services/attendance-field-link.service.js';
 
 /*
  * Visits (contract "Visits" / "My day"). Lifecycle: `planned` → `in_progress`
@@ -154,6 +156,14 @@ export const myDayQuerySchema = z.object({ date: ymdSchema.optional() });
 const isDuplicateKey = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 
+/** True when a duplicate-key error came from the unique index over `field`. */
+function duplicateOn(err: unknown, field: string): boolean {
+  if (!isDuplicateKey(err)) return false;
+  const e = err as { keyPattern?: Record<string, unknown>; message?: unknown };
+  if (e.keyPattern) return field in e.keyPattern;
+  return typeof e.message === 'string' && e.message.includes(field);
+}
+
 function alreadyOpen(visitId?: unknown): AppError {
   return new AppError(
     'You already have a visit in progress — check out of it first',
@@ -161,6 +171,21 @@ function alreadyOpen(visitId?: unknown): AppError {
     'VISIT_ALREADY_OPEN',
     visitId ? { visitId: String(visitId) } : undefined,
   );
+}
+
+function selfieUsed(): AppError {
+  return new AppError('This selfie was already used for another check-in — take a new one', 409, 'SELFIE_ALREADY_USED');
+}
+
+/**
+ * A capture made offline: `capturedAt` was sent and is more than 2 min older
+ * than its arrival (the `capturedOffline` flag). Such a capture is checked
+ * against what the settings and plans were when it was made: where they
+ * changed since, it degrades instead of being refused (the mobile queue
+ * gives up on a 4xx, and the visit would be lost).
+ */
+function wasCapturedOffline(sent: string | undefined, at: Date, receivedAt: Date): boolean {
+  return sent !== undefined && receivedAt.getTime() - at.getTime() > CAPTURED_OFFLINE_AFTER_MS;
 }
 
 async function sendVisit(res: Response, id: unknown, status = 200): Promise<void> {
@@ -182,11 +207,29 @@ async function visitByRef(employeeId: Types.ObjectId, ref: string | undefined) {
 }
 
 /** The first check-in of a day counts as attendance (setting). Never fails the visit. */
-async function linkAttendance(employeeId: Types.ObjectId, visitId: unknown, at: Date, location?: { lat: number; lng: number; accuracy?: number }) {
+async function linkAttendance(
+  employeeId: Types.ObjectId,
+  visitId: unknown,
+  point: { time?: Date; location?: { lat: number; lng: number; accuracy?: number } | null; photo?: string | null },
+) {
+  if (!point.time) return;
   try {
-    await ensureDayCheckIn(employeeId, at, location, { method: 'field_visit', visitId: String(visitId) });
+    await ensureDayCheckIn(employeeId, point.time, point.location ?? undefined, {
+      method: 'field_visit',
+      visitId: String(visitId),
+      ...(point.photo ? { photo: point.photo } : {}),
+    });
   } catch (err) {
     logger.error({ err, visitId: String(visitId) }, 'field visit: attendance check-in failed');
+  }
+}
+
+/** A visit checked in at `inAt` was checked out at `out`: an auto-closed field attendance day may end later. Never fails. */
+async function extendAttendance(employeeId: Types.ObjectId, visitId: unknown, inAt: Date, out: Date) {
+  try {
+    await extendFieldDayCheckOut(employeeId, inAt, out);
+  } catch (err) {
+    logger.error({ err, visitId: String(visitId) }, 'field visit: extending the attendance check-out failed');
   }
 }
 
@@ -376,15 +419,27 @@ export async function deleteVisit(req: Request, res: Response): Promise<void> {
 
 /* ── Check-in ── */
 
+type LeanVisit = IVisit & { _id: Types.ObjectId };
+
 /**
  * POST /field/visits/check-in — the caller starts a visit: a planned one
  * (`visitId`), at a site (`siteId`), or at a new site pinned in the same step
  * (`newSite`). Flags (never refusals): `awayFromSite` beyond the site radius,
  * `noGps`, `noSelfie` (when the selfie is optional), `syncedLate` /
  * `capturedOffline` for offline captures. A selfie is required unless the
- * settings say otherwise (400 SELFIE_REQUIRED). 409 VISIT_ALREADY_OPEN while
- * another visit that began before `capturedAt` is still open. The first
+ * settings say otherwise (400 SELFIE_REQUIRED); it must be the caller's own
+ * upload and proves one check-in only (409 SELFIE_ALREADY_USED — the visit
+ * write marks it used, so a refused check-in leaves it unused). Visits of
+ * earlier days still open are auto-closed first; then 409 VISIT_ALREADY_OPEN
+ * while another visit that began before `capturedAt` is still open. The first
  * check-in of a day counts as the day's attendance check-in (setting).
+ *
+ * Captured offline (see `wasCapturedOffline`), what changed since degrades
+ * instead of being refused: an unknown purpose is kept as sent, an unknown
+ * type of a pinned site becomes "Other", a missing selfie is accepted (with
+ * `noSelfie`), a planned visit cancelled meanwhile is started anyway (back to
+ * in progress, its `cancelReason` kept), a deleted planned visit becomes an
+ * unplanned visit at its site, and a deleted site still takes the visit.
  */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkInSchema>;
@@ -394,37 +449,55 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
   // A replay answers with what the first attempt stored.
   const replay = await visitByRef(self, body.clientRef);
   if (replay) {
-    if (settings.visitCountsAsAttendance && replay.checkIn?.time) {
-      await linkAttendance(self, replay._id, replay.checkIn.time, replay.checkIn.location ?? undefined);
-    }
+    if (settings.visitCountsAsAttendance && replay.checkIn?.time) await linkAttendance(self, replay._id, replay.checkIn);
     await sendVisit(res, replay._id);
     return;
   }
 
   const times = captureTimes(body.capturedAt, settings);
   const at = times.capturedAt;
+  const offline = wasCapturedOffline(body.capturedAt, at, times.receivedAt);
 
   // What is being started.
-  let planned: (IVisit & { _id: Types.ObjectId }) | null = null;
+  let planned: LeanVisit | null = null;
   let site: Awaited<ReturnType<typeof loadSite>> | null = null;
+  let plannedPurpose = 'Other';
   if (body.visitId) {
-    planned = (await loadVisit(body.visitId)) as unknown as IVisit & { _id: Types.ObjectId };
-    if (String(planned.employeeId) !== String(self)) {
+    const found = Types.ObjectId.isValid(body.visitId)
+      ? ((await Visit.findById(body.visitId).setOptions({ withDeleted: true }).lean().exec()) as LeanVisit | null)
+      : null;
+    if (!found || (found.isDeleted && !offline)) throw new NotFoundError('Visit not found');
+    if (String(found.employeeId) !== String(self)) {
       throw new ForbiddenError('Only the employee it is planned for can start this visit');
     }
-    if (planned.status !== 'planned' && planned.status !== 'missed') {
-      throw new AppError('This visit has already been started or closed', 409, 'VISIT_NOT_PLANNED');
+    plannedPurpose = found.purpose || 'Other';
+    const startable =
+      found.status === 'planned' ||
+      found.status === 'missed' ||
+      // Cancelled after the employee had started it offline.
+      (offline && found.status === 'cancelled' && !found.checkIn?.time);
+    // Deleted after it was started offline: an unplanned visit at its site (planned stays null).
+    if (!found.isDeleted) {
+      if (!startable) throw new AppError('This visit has already been started or closed', 409, 'VISIT_NOT_PLANNED');
+      planned = found;
     }
-    site = await loadSite(String(planned.siteId));
+    site = await loadSite(String(found.siteId), { withDeleted: offline });
   } else if (body.siteId) {
-    site = await loadSite(body.siteId);
+    site = await loadSite(body.siteId, { withDeleted: offline });
   }
-  const purpose = body.purpose ? canonicalPurpose(body.purpose, settings) : (planned?.purpose ?? 'Other');
+  const purpose = body.purpose ? canonicalPurpose(body.purpose, settings, offline) : plannedPurpose;
 
-  if (settings.selfieRequired && !body.selfieKey) {
+  if (settings.selfieRequired && !body.selfieKey && !offline) {
     throw new AppError('A selfie is required to check in', 400, 'SELFIE_REQUIRED');
   }
-  const selfie = body.selfieKey ? await fieldFileRef(body.selfieKey, 'photo') : undefined;
+  const selfie = body.selfieKey ? await fieldFileRef(body.selfieKey, 'photo', { userId: req.user?._id }) : undefined;
+  // One check-in per selfie (the unique index enforces it again in the write below).
+  if (selfie && (await Visit.exists({ 'checkIn.photo': selfie }).setOptions({ withDeleted: true }).exec())) {
+    throw selfieUsed();
+  }
+
+  // Visits of earlier days still open (synced after that night's run) end at their day's auto-close.
+  await autoCloseOpenVisits(startOfBusinessDay(times.receivedAt), settings, times.receivedAt, { employeeId: self });
 
   // One open visit at a time (at the moment of this capture).
   const open = await Visit.findOne({
@@ -442,9 +515,9 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     const created = await createFieldSite(
       req,
       { ...body.newSite, capturedAt: body.newSite.capturedAt ?? body.capturedAt },
-      { clientRef: body.clientRef, createdVia: 'mobile_pin' },
+      { clientRef: body.clientRef, createdVia: 'mobile_pin', lenientType: offline },
     );
-    site = await loadSite(String(created.site._id));
+    site = await loadSite(String(created.site._id), { withDeleted: offline });
   }
   if (!site) throw new ValidationAppError('Send exactly one of visitId, siteId or newSite');
 
@@ -458,7 +531,7 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     noGps: !location,
     noSelfie: !selfie,
     syncedLate: times.syncedLate,
-    capturedOffline: body.capturedAt !== undefined && times.receivedAt.getTime() - at.getTime() > CAPTURED_OFFLINE_AFTER_MS,
+    capturedOffline: offline,
   };
   const point = {
     time: at,
@@ -476,7 +549,11 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
   try {
     if (planned) {
       const doc = await Visit.findOneAndUpdate(
-        { _id: planned._id, status: { $in: ['planned', 'missed'] } },
+        {
+          _id: planned._id,
+          status: { $in: offline ? ['planned', 'missed', 'cancelled'] : ['planned', 'missed'] },
+          'checkIn.time': null,
+        },
         { $set: { status: 'in_progress', day, purpose, checkIn: point, flags, ...(body.clientRef ? { clientRef: body.clientRef } : {}) } },
         { new: true },
       ).exec();
@@ -502,29 +579,141 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     }
   } catch (err) {
     if (!isDuplicateKey(err)) throw err;
-    // The same check-in raced itself (its record wins), or a second open visit that day.
+    // The same check-in raced itself (its record wins), the selfie went to a
+    // parallel check-in, or a second open visit that day.
     const winner = await visitByRef(self, body.clientRef);
     if (winner) return sendVisit(res, winner._id);
+    if (duplicateOn(err, 'checkIn.photo')) throw selfieUsed();
     throw alreadyOpen();
   }
 
   await recordSiteVisit(site._id, at);
-  if (settings.visitCountsAsAttendance) await linkAttendance(self, visitId, at, location);
-  void audit({ action: 'create', entity: 'Visit', entityId: String(visitId), after: { status: 'in_progress', clientRef: body.clientRef } });
+  if (settings.visitCountsAsAttendance) await linkAttendance(self, visitId, point);
+  void audit({
+    action: 'create',
+    entity: 'Visit',
+    entityId: String(visitId),
+    after: { status: 'in_progress', clientRef: body.clientRef, ...(planned?.status === 'cancelled' ? { restartedCancelled: true } : {}) },
+  });
   await sendVisit(res, visitId, 201);
 }
 
 /* ── Check-out ── */
 
 /**
+ * How a check-out lands:
+ *  - `close`: an open visit ends at the captured time;
+ *  - `autoClose`: an open visit of an earlier day than the capture ends at
+ *    its own day's auto-close time (`autoClosed`), not across days;
+ *  - `replace`: an auto-closed visit, captured before the auto-close ran on
+ *    its own day — the real check-out replaces the automatic one;
+ *  - `keep`: an auto-closed visit, captured after the auto-close ran (or on
+ *    a later day) — the auto-close stands; only the work report (and notes)
+ *    sent with it is added.
+ */
+type CheckOutMode = 'close' | 'autoClose' | 'replace' | 'keep';
+
+interface CheckOutInput {
+  body: z.infer<typeof checkOutSchema>;
+  settings: Awaited<ReturnType<typeof getFieldSettings>>;
+  times: ReturnType<typeof captureTimes>;
+  offline: boolean;
+  report: ResolvedReport | undefined;
+}
+
+/** The conditional write for `mode` on `visit` (as last read); null when the visit no longer matches. */
+async function writeCheckOut(mode: CheckOutMode, visit: LeanVisit, input: CheckOutInput) {
+  const { body, settings, times, offline, report } = input;
+  const at = times.capturedAt;
+  const now = times.receivedAt;
+  const inAt = visit.checkIn!.time!;
+  const ref = body.clientRef;
+  // A duplicate of this same check-out (same clientRef) must not apply twice.
+  const notThisRef = ref ? { 'checkOut.clientRef': { $ne: ref } } : {};
+  const autoClosed = { _id: visit._id, status: 'completed', 'flags.autoClosed': true, ...notThisRef };
+  const withReport = ($set: Record<string, unknown>): Record<string, Record<string, unknown>> => {
+    if (!report) return { $set };
+    const r = reportUpdate(report, visit.report, now);
+    return compactUpdate({ ...r, $set: { ...$set, ...r.$set } });
+  };
+
+  if (mode === 'keep') {
+    const $set: Record<string, unknown> = {};
+    if (ref) $set['checkOut.clientRef'] = ref;
+    if (body.notes && !visit.checkOut?.notes) $set['checkOut.notes'] = body.notes;
+    if (!report && Object.keys($set).length === 0) return Visit.findOne(autoClosed).exec();
+    return Visit.findOneAndUpdate(autoClosed, withReport($set), { new: true }).exec();
+  }
+
+  const lateFlags: Record<string, unknown> = {};
+  if (times.syncedLate) lateFlags['flags.syncedLate'] = true;
+  if (offline) lateFlags['flags.capturedOffline'] = true;
+  const capture = {
+    ...(body.notes ? { notes: body.notes } : {}),
+    ...(body.capturedAt ? { capturedAt: new Date(body.capturedAt) } : {}),
+    receivedAt: now,
+    ...(ref ? { clientRef: ref } : {}),
+  };
+
+  if (mode === 'autoClose') {
+    // The location was taken on a later day: it is no part of this visit (nor of its day's route).
+    const day = visit.day ?? startOfBusinessDay(inAt);
+    const closeAt = autoCloseInstant(day, inAt, settings);
+    const minutes = Math.max(0, Math.round((closeAt.getTime() - inAt.getTime()) / 60_000));
+    const $set = {
+      status: 'completed',
+      day,
+      checkOut: { time: closeAt, ...capture },
+      durationMinutes: minutes,
+      'flags.autoClosed': true,
+      'flags.shortVisit': settings.shortVisitMinutes > 0 && minutes < settings.shortVisitMinutes,
+      ...lateFlags,
+    };
+    return Visit.findOneAndUpdate({ _id: visit._id, status: 'in_progress' }, withReport($set), { new: true }).exec();
+  }
+
+  const site = await loadSite(String(visit.siteId), { withDeleted: true }).catch(() => null);
+  const location = body.location ?? undefined;
+  const pin = site ? siteLatLng(site.location) : null;
+  const distanceM = location && pin ? Math.round(distanceMeters(location, pin)) : undefined;
+  const minutes = Math.max(0, Math.round((at.getTime() - inAt.getTime()) / 60_000));
+  const $set = {
+    status: 'completed',
+    checkOut: {
+      time: at,
+      ...(location ? { location } : {}),
+      ...(distanceM !== undefined ? { distanceM } : {}),
+      ...capture,
+    },
+    durationMinutes: minutes,
+    'flags.shortVisit': settings.shortVisitMinutes > 0 && minutes < settings.shortVisitMinutes,
+    'flags.autoClosed': false,
+    ...lateFlags,
+  };
+  return Visit.findOneAndUpdate(
+    mode === 'replace' ? autoClosed : { _id: visit._id, status: 'in_progress' },
+    withReport($set),
+    { new: true },
+  ).exec();
+}
+
+/**
  * POST /field/visits/:id/check-out — the visit's employee closes it, with the
  * work report. `durationMinutes` from check-in to `capturedAt`; `shortVisit`
- * below the settings minimum. A check-out that arrives (offline) after the
- * nightly auto-close replaces the automatic one and clears `autoClosed`.
+ * below the settings minimum.
+ *
+ * A check-out captured on a later day than the visit's day stores that day's
+ * auto-close instead (`autoClosed`, at the `autoCloseTime` — never a
+ * cross-day duration). For a visit already auto-closed: a check-out captured
+ * on its day before the auto-close ran replaces it; any later one leaves it
+ * as it is and only adds the work report (and notes) it carries — 200 with
+ * the visit either way. A replay (same `clientRef`) answers 200 unchanged.
+ * Captured offline, a checklist that changed meanwhile is degraded (see
+ * `resolveReport`) instead of refusing the check-out.
  */
 export async function checkOut(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkOutSchema>;
-  const visit = await loadVisit(String(req.params.id));
+  const visit = (await loadVisit(String(req.params.id))) as unknown as LeanVisit;
   const self = await currentEmployeeId(req);
   if (!self || String(visit.employeeId) !== String(self)) {
     throw new ForbiddenError('Only the employee on the visit can check out of it');
@@ -535,8 +724,7 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
   if (visit.status === 'planned' || visit.status === 'missed' || !visit.checkIn?.time) {
     throw new AppError('Check in to the visit before checking out', 409, 'VISIT_NOT_CHECKED_IN');
   }
-  const replacingAutoClose = visit.status === 'completed' && visit.flags?.autoClosed === true;
-  if (visit.status === 'completed' && !replacingAutoClose) {
+  if (visit.status === 'completed' && !visit.flags?.autoClosed) {
     throw new AppError('This visit is already checked out', 409, 'VISIT_ALREADY_CHECKED_OUT');
   }
 
@@ -547,60 +735,48 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
   if (at.getTime() < inAt.getTime()) {
     throw new AppError('The check-out time is before the check-in', 400, 'CHECKOUT_BEFORE_CHECKIN');
   }
-  const report: ResolvedReport | undefined = body.report ? await resolveReport(body.report, settings) : undefined;
+  const offline = wasCapturedOffline(body.capturedAt, at, times.receivedAt);
+  const report: ResolvedReport | undefined = body.report
+    ? await resolveReport(body.report, settings, { userId: req.user?._id, existing: visit.report, lenient: offline })
+    : undefined;
+  const input: CheckOutInput = { body, settings, times, offline, report };
 
-  const site = await loadSite(String(visit.siteId)).catch(() => null);
-  const location = body.location ?? undefined;
-  const pin = site ? siteLatLng(site.location) : null;
-  const distanceM = location && pin ? Math.round(distanceMeters(location, pin)) : undefined;
-  const minutes = Math.max(0, Math.round((at.getTime() - inAt.getTime()) / 60_000));
-  const now = times.receivedAt;
-
-  const $set: Record<string, unknown> = {
-    status: 'completed',
-    checkOut: {
-      time: at,
-      ...(location ? { location } : {}),
-      ...(distanceM !== undefined ? { distanceM } : {}),
-      ...(body.notes ? { notes: body.notes } : {}),
-      ...(body.capturedAt ? { capturedAt: new Date(body.capturedAt) } : {}),
-      receivedAt: now,
-      ...(body.clientRef ? { clientRef: body.clientRef } : {}),
-    },
-    durationMinutes: minutes,
-    'flags.shortVisit': settings.shortVisitMinutes > 0 && minutes < settings.shortVisitMinutes,
-    'flags.autoClosed': false,
+  const day = visit.day ?? startOfBusinessDay(inAt);
+  // Captured on a later day than the visit's: it ends at its own day's auto-close.
+  const laterDay = startOfBusinessDay(at).getTime() > day.getTime();
+  /** An auto-closed visit is replaced only by a check-out of its day captured before the auto-close ran. */
+  const replaces = (v: LeanVisit): boolean => {
+    const ranAt = v.checkOut?.receivedAt;
+    return !laterDay && ranAt instanceof Date && at.getTime() <= ranAt.getTime();
   };
-  if (times.syncedLate) $set['flags.syncedLate'] = true;
-  if (body.capturedAt !== undefined && now.getTime() - at.getTime() > CAPTURED_OFFLINE_AFTER_MS) {
-    $set['flags.capturedOffline'] = true;
-  }
-  let update: Record<string, Record<string, unknown>> = { $set };
-  if (report) {
-    const r = reportUpdate(report, visit.report, now);
-    update = compactUpdate({ ...r, $set: { ...$set, ...r.$set } });
-  }
 
-  const doc = await Visit.findOneAndUpdate(
-    replacingAutoClose
-      ? { _id: visit._id, status: 'completed', 'flags.autoClosed': true }
-      : { _id: visit._id, status: 'in_progress' },
-    update,
-    { new: true },
-  ).exec();
+  let base = visit;
+  let mode: CheckOutMode = visit.status === 'completed' ? (replaces(visit) ? 'replace' : 'keep') : laterDay ? 'autoClose' : 'close';
+  let doc = await writeCheckOut(mode, base, input);
   if (!doc) {
-    // A parallel request closed it: the same check-out (replay) or another one.
-    const now2 = await Visit.findById(visit._id).select('checkOut').lean().exec();
-    if (body.clientRef && now2?.checkOut?.clientRef === body.clientRef) return sendVisit(res, visit._id);
-    throw new AppError('This visit is already checked out', 409, 'VISIT_ALREADY_CHECKED_OUT');
+    // Changed meanwhile: this same check-out (a duplicate), the nightly auto-close, or another check-out.
+    const current = (await Visit.findById(visit._id).lean().exec()) as LeanVisit | null;
+    if (body.clientRef && current?.checkOut?.clientRef === body.clientRef) return sendVisit(res, visit._id);
+    if (current?.status === 'completed' && current.flags?.autoClosed) {
+      base = current;
+      mode = replaces(current) ? 'replace' : 'keep';
+      doc = await writeCheckOut(mode, base, input);
+    }
+    if (!doc) {
+      if (current?.status === 'cancelled') throw new AppError('The visit was cancelled', 409, 'VISIT_CLOSED');
+      throw new AppError('This visit is already checked out', 409, 'VISIT_ALREADY_CHECKED_OUT');
+    }
   }
   void audit({
     action: 'update',
     entity: 'Visit',
     entityId: String(doc._id),
-    after: { status: 'completed', durationMinutes: minutes, replacedAutoClose: replacingAutoClose },
+    after: { status: 'completed', durationMinutes: doc.durationMinutes, checkOut: mode, replacedAutoClose: mode === 'replace' },
   });
-  if (report) await afterReport(doc._id, !visit.report?.submittedAt, req.user?._id);
+  if (report) await afterReport(doc._id, !base.report?.submittedAt, req.user?._id);
+  if (settings.visitCountsAsAttendance && (mode === 'close' || mode === 'replace')) {
+    await extendAttendance(self, doc._id, inAt, at);
+  }
   await sendVisit(res, doc._id);
 }
 
@@ -608,10 +784,13 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
 
 /**
  * PATCH /field/visits/:id/report — merge report fields into a checked-out
- * visit (sent fields replace theirs; photos and documents are added). The
- * employee may edit within 48 h of the check-out (measured to the edit's
- * `capturedAt`, so an edit made offline in time still lands); a field
- * manager any time. The first report filed notifies the reporting manager.
+ * visit (sent fields replace theirs; photos and documents are added;
+ * checklist answers merge by item into those stored for the same checklist,
+ * the required items checked on the merged set). The employee may edit
+ * within 48 h of the check-out (measured to the edit's `capturedAt`, so an
+ * edit made offline in time still lands); a field manager any time. The
+ * first report filed notifies the reporting manager. A replay (same
+ * `clientRef`, also when two copies race) answers 200 and applies nothing.
  */
 export async function updateReport(req: Request, res: Response): Promise<void> {
   const { clientRef: ref, capturedAt: editedAt, ...fields } = req.body as z.infer<typeof reportPatchSchema>;
@@ -626,19 +805,36 @@ export async function updateReport(req: Request, res: Response): Promise<void> {
     throw new AppError('File the report after checking out of the visit', 409, 'VISIT_NOT_CHECKED_OUT');
   }
   const settings = await getFieldSettings();
+  const now = new Date();
+  let edited = now;
   if (!manage) {
-    const edited = acceptCapturedAt(editedAt, settings);
+    edited = acceptCapturedAt(editedAt, settings, now);
     const out = Math.max(visit.checkOut.time.getTime(), visit.checkOut.receivedAt?.getTime() ?? 0);
     if (edited.getTime() > out + REPORT_EDIT_WINDOW_MS) {
       throw new AppError('The report can be edited only within 48 hours of the check-out', 403, 'EDIT_WINDOW_CLOSED');
     }
+  } else if (editedAt) {
+    const sent = new Date(editedAt);
+    if (!Number.isNaN(sent.getTime()) && sent.getTime() < now.getTime()) edited = sent;
   }
-  const report = await resolveReport(fields, settings);
-  const now = new Date();
+  const report = await resolveReport(fields, settings, {
+    userId: req.user?._id,
+    existing: visit.report,
+    lenient: wasCapturedOffline(editedAt, edited, now),
+  });
   const r = reportUpdate(report, visit.report, now);
   const update = compactUpdate({ ...r, $push: { ...r.$push, ...(ref ? pushReportRef(ref) : {}) } });
-  const doc = await Visit.findOneAndUpdate({ _id: visit._id, status: 'completed' }, update, { new: true }).exec();
-  if (!doc) throw new AppError('The visit changed meanwhile — reload and try again', 409, 'VISIT_CHANGED');
+  const doc = await Visit.findOneAndUpdate(
+    { _id: visit._id, status: 'completed', ...(ref ? { reportClientRefs: { $ne: ref } } : {}) },
+    update,
+    { new: true },
+  ).exec();
+  if (!doc) {
+    // A copy of this same edit (same clientRef) was applied meanwhile: a replay.
+    const current = await Visit.findById(visit._id).select('reportClientRefs').lean().exec();
+    if (ref && (current?.reportClientRefs ?? []).includes(ref)) return sendVisit(res, visit._id);
+    throw new AppError('The visit changed meanwhile — reload and try again', 409, 'VISIT_CHANGED');
+  }
   void audit({ action: 'update', entity: 'Visit', entityId: String(doc._id), after: { report: Object.keys(fields) } });
   await afterReport(doc._id, !visit.report?.submittedAt, req.user?._id);
   await sendVisit(res, doc._id);

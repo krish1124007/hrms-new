@@ -158,6 +158,28 @@ function autoCheckoutInstant(day: Date, checkIn: Date, autoCheckoutTime: string)
   return out.getTime() >= checkIn.getTime() ? out : checkIn;
 }
 
+/** The configured `autoCheckoutTime`, or 23:59 when unset or invalid. */
+function autoCheckoutTimeOf(cfg: IAttendanceConfig | null): string {
+  return HHMM.test(cfg?.settings.autoCheckoutTime ?? '') ? cfg!.settings.autoCheckoutTime! : DEFAULT_AUTO_CHECKOUT_TIME;
+}
+
+/**
+ * Where the day-close closes a check-in of business day `day` that is still
+ * open once the day is over: an overnight shift at its end + grace, any other
+ * at the auto-checkout time (never before the check-in). Null when an
+ * overnight shift has no usable times. (Used for days that are already
+ * closed, e.g. a field visit captured offline that syncs days later.)
+ */
+export function autoCheckoutFor(day: Date, checkIn: Date, shift: IShift | null, cfg: IAttendanceConfig | null): Date | null {
+  if (isOvernightShift(shift)) {
+    const window = shiftWindow(startOfBusinessDay(day), shift);
+    if (!window) return null;
+    const end = new Date(window.end.getTime() + (shift?.graceMinutes ?? 0) * 60_000);
+    return end.getTime() >= checkIn.getTime() ? end : checkIn;
+  }
+  return autoCheckoutInstant(startOfBusinessDay(day), checkIn, autoCheckoutTimeOf(cfg));
+}
+
 /**
  * Close the business day containing `dateIST` (any instant; it is resolved to
  * its calendar day in the business timezone). With `dryRun`, returns the
@@ -312,9 +334,7 @@ export async function closeBusinessDay(
   }).exec();
 
   if (openRows.length > 0) {
-    const autoCheckoutTime = HHMM.test(cfg?.settings.autoCheckoutTime ?? '')
-      ? cfg!.settings.autoCheckoutTime!
-      : DEFAULT_AUTO_CHECKOUT_TIME;
+    const autoCheckoutTime = autoCheckoutTimeOf(cfg);
     const owners = await Employee.find({ _id: { $in: openRows.map((r) => r.employeeId) } })
       .setOptions({ withDeleted: true })
       .select('_id shift')
@@ -453,8 +473,13 @@ export async function applyScheduledExits(
   return result;
 }
 
-/** Stamp the auto check-out on `row` and recompute its hours (in memory). */
-function closeOpenRow(
+/**
+ * Stamp the auto check-out on `row` at `out` and recompute it (in memory), as
+ * the day-close does: open breaks end
+ * there, hours and shift rules recomputed, no overtime or early leave (an
+ * assumed time is evidence of neither). Mutates `row`; the caller saves it.
+ */
+export function closeOpenRow(
   row: IAttendance,
   out: Date,
   shift: IShift | null,

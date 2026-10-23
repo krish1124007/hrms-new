@@ -138,4 +138,23 @@ describe('migration 20261023000002 — field visit engine', () => {
     await expect(engine.up(db())).rejects.toThrow(/two open visits/);
     expect(await indexNames('visits')).not.toContain('one_open_visit_per_employee_day');
   });
+
+  it('aborts before changing any data: legacy visits keep their shape, no day is filled in', async () => {
+    const visits = db().collection('visits');
+    const rep = new Types.ObjectId();
+    // Two open legacy visits on one IST day (neither has `day` yet) and a legacy scheduled one.
+    const { insertedIds } = await visits.insertMany([
+      { employeeId: rep, siteId: new Types.ObjectId(), status: 'in_progress', purpose: 'service', isDeleted: false, checkIn: { time: new Date('2026-10-21T05:00:00Z') }, locationMissing: true },
+      { employeeId: rep, siteId: new Types.ObjectId(), status: 'in_progress', purpose: 'other', isDeleted: false, checkIn: { time: new Date('2026-10-21T09:00:00Z') } },
+      { employeeId: rep, siteId: new Types.ObjectId(), status: 'scheduled', purpose: 'delivery', isPlanned: true, isDeleted: false, createdAt: new Date('2026-10-20T19:00:00Z') },
+    ]);
+    await expect(engine.up(db())).rejects.toThrow(/two open visits/);
+    const [a, b, planned] = await Promise.all(Object.values(insertedIds).map((id) => visits.findOne({ _id: id })));
+    expect(a).toMatchObject({ purpose: 'service', locationMissing: true });
+    expect(a).not.toHaveProperty('flags');
+    expect(a).not.toHaveProperty('day');
+    expect(b).not.toHaveProperty('day');
+    expect(planned).toMatchObject({ status: 'scheduled', purpose: 'delivery', isPlanned: true });
+    expect(planned).not.toHaveProperty('day');
+  });
 });

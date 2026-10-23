@@ -20,6 +20,7 @@ import {
   googleMaps,
   type LatLng,
 } from '../services/google-maps.service.js';
+import { ROUTE_RETRY_AFTER_MS } from '../services/field-route.service.js';
 import { createUser } from '../test/factories.js';
 import {
   PLACES,
@@ -264,8 +265,24 @@ describe('GET /field/route/:employeeId', () => {
     expect(legs.every((l: { estimated: boolean }) => l.estimated)).toBe(true);
     expect(legs[0].distanceM).toBe(estimatedLegMeters(PLACES.home, PLACES.siteA));
     expect(totalKm).toBe(km(legs.reduce((s: number, l: { distanceM: number }) => s + l.distanceM, 0)));
-    // A failed Google answer is not kept: the next request tries again.
-    expect(await FieldDayRoute.countDocuments()).toBe(0);
+
+    // A failed Google answer is kept for 10 minutes only: no new calls meanwhile…
+    const stored = await FieldDayRoute.findOne().lean();
+    expect(stored?.estimated).toBe(true);
+    expect(stored?.retryAfter?.getTime()).toBeGreaterThan(Date.now() + ROUTE_RETRY_AFTER_MS - 60_000);
+    clearGoogleMapsCache(); // only the stored day route can hold Google back now
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ routes: [{ distanceMeters: 1234 }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect((await route(asha, asha)).body.data.estimated).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // …then Google is asked again, and the measured route replaces the estimate.
+    await FieldDayRoute.updateOne({}, { $set: { retryAfter: new Date(Date.now() - 1000) } });
+    const again = await route(asha, asha);
+    expect(again.body.data.estimated).toBe(false);
+    expect(again.body.data.legs.every((l: { distanceM: number }) => l.distanceM === 1234)).toBe(true);
+    expect(fetchMock).toHaveBeenCalled();
+    expect((await FieldDayRoute.findOne().lean())?.retryAfter ?? null).toBeNull();
   });
 
   it('caches the computed route until a new point arrives', async () => {

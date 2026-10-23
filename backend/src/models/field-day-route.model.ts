@@ -24,6 +24,11 @@ export interface IFieldDayRoute extends Document {
   totalKm: number;
   estimated: boolean;
   computedAt: Date;
+  /**
+   * Set when the route fell back to the estimate while Google is configured
+   * (a failure): it is reused until then, and measured again after.
+   */
+  retryAfter?: Date | null;
 }
 
 const legSchema = new Schema<IFieldDayRouteLeg>(
@@ -45,6 +50,7 @@ const fieldDayRouteSchema = new Schema<IFieldDayRoute>(
     totalKm: { type: Number, default: 0 },
     estimated: { type: Boolean, default: false },
     computedAt: { type: Date, default: Date.now },
+    retryAfter: { type: Date, default: null },
   },
   { collection: 'fielddayroutes' },
 );

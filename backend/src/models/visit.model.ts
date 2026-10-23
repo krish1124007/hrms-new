@@ -232,6 +232,12 @@ visitSchema.index(
   { followUpOf: 1 },
   { unique: true, name: 'followUpOf_unique', partialFilterExpression: { followUpOf: { $type: 'objectId' } } },
 );
+// A selfie proves one check-in: the visit write that stores it is what marks
+// it used (a refused check-in leaves it unused). Migration 20261023000006.
+visitSchema.index(
+  { 'checkIn.photo': 1 },
+  { unique: true, name: 'selfie_single_use', partialFilterExpression: { 'checkIn.photo': { $type: 'string' } } },
+);
 
 export const Visit = model<IVisit, PaginateModel<IVisit> & Model<IVisit>>(
   'Visit',
