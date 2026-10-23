@@ -99,11 +99,23 @@ export async function getConfig(_req: Request, res: Response): Promise<void> {
   if (!cfg) {
     cfg = await AttendanceConfig.create({ enabledMethods: ['manual'], settings: {} });
   }
-  res.json({ success: true, data: cfg });
+  res.json({ success: true, data: trackingOff(cfg) });
+}
+
+/**
+ * Continuous tracking is removed (locations only at check-in/check-out), but
+ * app builds already on phones still start periodic GPS uploads whenever the
+ * config says `liveTracking.enabled`. Always answering `false` switches them
+ * off on their next config fetch, whatever an older save stored.
+ */
+function trackingOff(cfg: InstanceType<typeof AttendanceConfig>): Record<string, unknown> {
+  const json = cfg.toJSON() as Record<string, unknown> & { liveTracking?: Record<string, unknown> };
+  return { ...json, liveTracking: { ...(json.liveTracking ?? {}), enabled: false } };
 }
 
 export async function updateConfig(req: Request, res: Response): Promise<void> {
-  const body = req.body as z.infer<typeof updateConfigSchema>;
+  // `liveTracking` is retired: an old admin screen sending it changes nothing.
+  const { liveTracking: _retired, ...body } = req.body as z.infer<typeof updateConfigSchema>;
   const cfg = await AttendanceConfig.findOneAndUpdate({}, body, {
     new: true,
     upsert: true,
@@ -112,7 +124,7 @@ export async function updateConfig(req: Request, res: Response): Promise<void> {
   // The rule is cached per-process — drop it so the save takes effect now.
   invalidateWeekOffRule();
   void audit({ action: 'update', entity: 'AttendanceConfig', entityId: String(cfg._id), after: body });
-  res.json({ success: true, data: cfg });
+  res.json({ success: true, data: trackingOff(cfg) });
 }
 
 // ============================================================================
