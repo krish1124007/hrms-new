@@ -69,7 +69,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         }[] | undefined;
     }>>;
 }, "strip", z.ZodTypeAny, {
-    enabledMethods: ("manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site")[];
+    enabledMethods: ("manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr")[];
     settings?: {
         requireLocation?: boolean | undefined;
         autoCheckoutTime?: string | undefined;
@@ -93,7 +93,7 @@ export declare const updateConfigSchema: z.ZodObject<{
         }[] | undefined;
     } | undefined;
 }, {
-    enabledMethods: ("manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site")[];
+    enabledMethods: ("manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr")[];
     settings?: {
         requireLocation?: boolean | undefined;
         autoCheckoutTime?: string | undefined;
@@ -159,17 +159,17 @@ export declare const checkInSchema: z.ZodObject<{
     liveness: z.ZodOptional<z.ZodBoolean>;
     note: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    method: "manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr";
     siteId?: string | undefined;
-    geofenceId?: string | undefined;
-    deviceId?: string | undefined;
-    faceConfidence?: number | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
         accuracy?: number | undefined;
     } | undefined;
+    geofenceId?: string | undefined;
+    deviceId?: string | undefined;
+    faceConfidence?: number | undefined;
     photo?: string | undefined;
     deviceInfo?: {
         model?: string | undefined;
@@ -180,17 +180,17 @@ export declare const checkInSchema: z.ZodObject<{
     qrCode?: string | undefined;
     liveness?: boolean | undefined;
 }, {
-    method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    method: "manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr";
     siteId?: string | undefined;
-    geofenceId?: string | undefined;
-    deviceId?: string | undefined;
-    faceConfidence?: number | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
         accuracy?: number | undefined;
     } | undefined;
+    geofenceId?: string | undefined;
+    deviceId?: string | undefined;
+    faceConfidence?: number | undefined;
     photo?: string | undefined;
     deviceInfo?: {
         model?: string | undefined;
@@ -242,17 +242,17 @@ export declare const checkOutSchema: z.ZodObject<{
 } & {
     method: z.ZodDefault<z.ZodEnum<["face", "qr", "dynamic_qr", "ip", "site", "geofence", "device", "manual"]>>;
 }, "strip", z.ZodTypeAny, {
-    method: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site";
+    method: "manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr";
     siteId?: string | undefined;
-    geofenceId?: string | undefined;
-    deviceId?: string | undefined;
-    faceConfidence?: number | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
         accuracy?: number | undefined;
     } | undefined;
+    geofenceId?: string | undefined;
+    deviceId?: string | undefined;
+    faceConfidence?: number | undefined;
     photo?: string | undefined;
     deviceInfo?: {
         model?: string | undefined;
@@ -264,16 +264,16 @@ export declare const checkOutSchema: z.ZodObject<{
     liveness?: boolean | undefined;
 }, {
     siteId?: string | undefined;
-    method?: "manual" | "geofence" | "qr" | "face" | "ip" | "device" | "dynamic_qr" | "site" | undefined;
-    geofenceId?: string | undefined;
-    deviceId?: string | undefined;
-    faceConfidence?: number | undefined;
     location?: {
         address?: string | undefined;
         lat?: number | undefined;
         lng?: number | undefined;
         accuracy?: number | undefined;
     } | undefined;
+    method?: "manual" | "geofence" | "qr" | "face" | "ip" | "site" | "device" | "dynamic_qr" | undefined;
+    geofenceId?: string | undefined;
+    deviceId?: string | undefined;
+    faceConfidence?: number | undefined;
     photo?: string | undefined;
     deviceInfo?: {
         model?: string | undefined;
@@ -482,5 +482,4 @@ export declare const reportQuerySchema: z.ZodObject<{
 }>;
 export declare function dashboardStats(req: Request, res: Response): Promise<void>;
 export declare function attendanceReport(req: Request, res: Response): Promise<void>;
-export declare function getLiveTracking(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=attendance.controller.d.ts.map

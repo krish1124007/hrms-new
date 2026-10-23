@@ -18,13 +18,9 @@ import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveBalance } from '../models/leave-balance.model.js';
 import { HrPolicy } from '../models/hr-policy.model.js';
 import { OvertimeRequest } from '../models/overtime-request.model.js';
-import { Client } from '../models/client.model.js';
+import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
 import { FieldTask } from '../models/field-task.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
-import { ProductOrder } from '../models/product-order.model.js';
-import { PaymentCollection } from '../models/payment-collection.model.js';
-import { Product } from '../models/product.model.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -33,10 +29,10 @@ interface Actor {
   employee: IEmployee;
 }
 
-/** An `employee`-role user with an Employee record and field-sales access. */
+/** An `employee`-role user with an Employee record and field access. */
 async function employeeActor(): Promise<Actor> {
   const { user, token } = await createUser({ roleSlug: 'employee' });
-  await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field-sales.view'] } });
+  await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field.view'] } });
   const employee = await createEmployeeFor(user);
   return { token, employee };
 }
@@ -710,12 +706,14 @@ describe('leave calendar', () => {
 
 describe('field module', () => {
   async function visitFor(employee: IEmployee) {
-    const client = await Client.create({ name: 'Acme' });
+    const site = await FieldSite.create({ name: 'Acme', type: 'Branch', assignedTo: [employee._id] });
     return Visit.create({
       employeeId: employee._id,
-      clientId: client._id,
-      status: 'in_progress',
-      checkIn: { time: new Date() },
+      siteId: site._id,
+      purpose: 'Meeting',
+      status: 'completed',
+      checkIn: { time: new Date(Date.now() - 3_600_000) },
+      checkOut: { time: new Date() },
     });
   }
 
@@ -726,7 +724,7 @@ describe('field module', () => {
       403,
     );
     const patch = await request(app)
-      .patch(`/api/v1/field/visits/${id}`)
+      .patch(`/api/v1/field/visits/${id}/report`)
       .set(auth(A.token))
       .send({ notes: 'x' });
     expect(patch.status).toBe(403);
@@ -745,17 +743,17 @@ describe('field module', () => {
     ).toBe(200);
   });
 
-  it('updateVisit ignores a body employeeId from a rep (cannot hand a visit to someone else)', async () => {
+  it('a report edit ignores a body employeeId from a rep (cannot hand a visit to someone else)', async () => {
     const mine = await visitFor(A.employee);
     const res = await request(app)
-      .patch(`/api/v1/field/visits/${mine._id}`)
+      .patch(`/api/v1/field/visits/${mine._id}/report`)
       .set(auth(A.token))
       .send({ employeeId: String(B.employee._id), notes: 'moved?' });
     expect(res.status).toBe(200);
     expect(String(res.body.data.employeeId)).toBe(String(A.employee._id));
     const stored = await Visit.findById(mine._id).lean();
     expect(String(stored?.employeeId)).toBe(String(A.employee._id));
-    expect(stored?.notes).toBe('moved?');
+    expect(stored?.report?.notes).toBe('moved?');
   });
 
   it('lists only the caller’s own visits and ignores ?employeeId=', async () => {
@@ -769,51 +767,25 @@ describe('field module', () => {
     expect((res.body.data as Array<{ _id: string }>).map((v) => v._id)).toEqual([String(mine._id)]);
   });
 
-  it('createVisit / createOrder / createPayment ignore a body employeeId', async () => {
-    const client = await Client.create({ name: 'Acme' });
-    const visit = await request(app)
-      .post('/api/v1/field/visits')
+  it('a rep cannot plan a visit for someone who is not their direct report', async () => {
+    const site = await FieldSite.create({ name: 'Acme', type: 'Branch', assignedTo: [A.employee._id, B.employee._id] });
+    const tomorrow = new Date(Date.now() + 86_400_000 + 19_800_000).toISOString().slice(0, 10);
+    const forB = await request(app)
+      .post('/api/v1/field/visits/plan')
       .set(auth(A.token))
-      .send({ employeeId: String(B.employee._id), clientId: String(client._id) });
+      .send({ employeeId: String(B.employee._id), siteId: String(site._id), plannedDate: tomorrow, purpose: 'Meeting' });
+    expect(forB.status).toBe(403);
+    const visit = await request(app)
+      .post('/api/v1/field/visits/plan')
+      .set(auth(A.token))
+      .send({ siteId: String(site._id), plannedDate: tomorrow, purpose: 'Meeting' });
     expect(visit.status).toBe(201);
     expect(String(visit.body.data.employeeId)).toBe(String(A.employee._id));
-
-    const product = await Product.create({ name: 'Widget', sku: 'WIDGET', category: 'General', price: 10, gstRate: 0 });
-    const order = await request(app)
-      .post('/api/v1/field/orders')
-      .set(auth(A.token))
-      .send({
-        employeeId: String(B.employee._id),
-        clientId: String(client._id),
-        items: [{ productId: String(product._id), quantity: 1 }],
-      });
-    expect(order.status).toBe(201);
-    expect(String(order.body.data.employeeId)).toBe(String(A.employee._id));
-
-    const payment = await request(app)
-      .post('/api/v1/field/payments')
-      .set(auth(A.token))
-      .send({
-        employeeId: String(B.employee._id),
-        clientId: String(client._id),
-        amount: 10,
-        method: 'cash',
-      });
-    expect(payment.status).toBe(201);
-    expect(String(payment.body.data.employeeId)).toBe(String(A.employee._id));
-
-    // ...and B cannot read A's order or payment.
-    expect(
-      (await request(app).get(`/api/v1/field/orders/${order.body.data._id}`).set(auth(B.token)))
-        .status,
-    ).toBe(403);
-    expect(
-      (await request(app).get(`/api/v1/field/payments/${payment.body.data._id}`).set(auth(B.token)))
-        .status,
-    ).toBe(403);
+    // ...and B cannot read it.
+    expect((await request(app).get(`/api/v1/field/visits/${visit.body.data._id}`).set(auth(B.token))).status).toBe(403);
   });
 
-  it("403 on another employee's task, timeline and tracking history", async () => {
+  it("403 on another employee's task and day route", async () => {
     const task = await FieldTask.create({ title: 'Deliver', assignedTo: B.employee._id });
     const id = String(task._id);
     expect((await request(app).get(`/api/v1/field/tasks/${id}`).set(auth(A.token))).status).toBe(
@@ -832,84 +804,14 @@ describe('field module', () => {
     expect(team.status).toBe(200);
     expect(team.body.data).toEqual([]);
 
-    await LocationTrack.create({
-      employeeId: B.employee._id,
-      location: { type: 'Point', coordinates: [72.8, 19.0] },
-    });
-    const history = await request(app)
-      .get(`/api/v1/field/tracking/history/${B.employee._id}`)
-      .set(auth(A.token));
-    expect(history.status).toBe(403);
-    const timeline = await request(app)
-      .get(`/api/v1/field/visits/timeline/${B.employee._id}`)
-      .set(auth(A.token));
-    expect(timeline.status).toBe(403);
-    const live = await request(app).get('/api/v1/field/tracking/live').set(auth(A.token));
-    expect(live.status).toBe(200);
-    expect(live.body.data).toEqual([]);
+    const route = await request(app).get(`/api/v1/field/route/${B.employee._id}`).set(auth(A.token));
+    expect(route.status).toBe(403);
 
-    const own = await request(app)
-      .get(`/api/v1/field/tracking/history/${A.employee._id}`)
-      .set(auth(A.token));
+    const own = await request(app).get(`/api/v1/field/route/${A.employee._id}`).set(auth(A.token));
     expect(own.status).toBe(200);
   });
 
-  async function orderFor(employee: IEmployee, clientId: unknown) {
-    return ProductOrder.create({
-      orderNumber: `ORD-${String(employee._id).slice(-6)}`,
-      employeeId: employee._id,
-      clientId,
-      items: [{ name: 'Widget', quantity: 1, unitPrice: 100, total: 100 }],
-      subtotal: 100,
-      totalAmount: 100,
-    });
-  }
-
-  it("403 recording a payment against another rep's order; nothing is written", async () => {
-    const client = await Client.create({ name: 'Acme' });
-    const theirs = await orderFor(B.employee, client._id);
-    const res = await request(app)
-      .post('/api/v1/field/payments')
-      .set(auth(A.token))
-      .send({
-        clientId: String(client._id),
-        orderId: String(theirs._id),
-        amount: 100,
-        method: 'cash',
-      });
-    expect(res.status).toBe(403);
-    const order = await ProductOrder.findById(theirs._id).lean();
-    expect(order?.paidAmount ?? 0).toBe(0);
-    expect(await PaymentCollection.countDocuments({})).toBe(0);
-  });
-
-  it('400 ORDER_CLIENT_MISMATCH when the order belongs to a different client', async () => {
-    const acme = await Client.create({ name: 'Acme' });
-    const globex = await Client.create({ name: 'Globex' });
-    const mine = await orderFor(A.employee, acme._id);
-    const res = await request(app)
-      .post('/api/v1/field/payments')
-      .set(auth(A.token))
-      .send({
-        clientId: String(globex._id),
-        orderId: String(mine._id),
-        amount: 100,
-        method: 'cash',
-      });
-    expect(res.status).toBe(400);
-    expect(res.body.error?.code).toBe('ORDER_CLIENT_MISMATCH');
-    expect(await PaymentCollection.countDocuments({})).toBe(0);
-
-    // The matching client goes through and marks the rep's own order paid.
-    const ok = await request(app)
-      .post('/api/v1/field/payments')
-      .set(auth(A.token))
-      .send({ clientId: String(acme._id), orderId: String(mine._id), amount: 100, method: 'cash' });
-    expect(ok.status).toBe(201);
-    expect((await ProductOrder.findById(mine._id).lean())?.paymentStatus).toBe('paid');
-  });
-
-  it('a field-sales.manage holder keeps cross-employee access', async () => {
+  it('a field.manage holder keeps cross-employee access', async () => {
     const admin = await actorWithRole('admin');
     const theirs = await visitFor(B.employee);
     expect(

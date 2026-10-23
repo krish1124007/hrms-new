@@ -28,6 +28,7 @@ import {
 } from '@/hooks/use-expense-claims';
 import { documentsApi } from '@/lib/documents.api';
 import type { ExpenseClaim, ExpenseClaimStatus } from '@/lib/expense-claims.api';
+import { travelSummary } from '@/lib/field-route';
 import { formatDate, todayIST } from '@/lib/format';
 import { isNoEmployeeProfileError } from '@/lib/api-error';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
@@ -151,7 +152,12 @@ export default function MyExpensesPage(): ReactElement {
     {
       key: 'category',
       header: 'Category',
-      cell: (c) => (typeof c.category === 'object' ? c.category.name : '—'),
+      cell: (c) => (
+        <div className="flex flex-col">
+          <span>{typeof c.category === 'object' ? c.category.name : '—'}</span>
+          {c.travel && <span className="text-xs text-muted-foreground">{travelSummary(c.travel)}</span>}
+        </div>
+      ),
     },
     {
       key: 'amount',

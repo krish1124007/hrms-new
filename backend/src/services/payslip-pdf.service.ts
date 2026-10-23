@@ -76,7 +76,7 @@ export function payslipLines(record: PayslipLineSource): {
  * so dropping the file in (or replacing it) takes effect immediately — no
  * restart required.
  */
-function resolveLogoPath(): string | null {
+export function resolveLogoPath(): string | null {
   const root = path.resolve(process.cwd(), 'branding');
   for (const name of ['company-logo.png', 'company-logo.jpg', 'company-logo.jpeg']) {
     const p = path.join(root, name);
@@ -129,7 +129,7 @@ export interface YtdTotals {
 }
 
 // Brand palette — derived from index.css (--primary: 220 57.3% 17.45%)
-const COLOR = {
+export const COLOR = {
   brand: '#132446',
   brandSoft: '#e8edf6',
   text: '#0f172a',

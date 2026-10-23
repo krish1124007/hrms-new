@@ -21,6 +21,37 @@ export interface IExpenseReceipt {
   uploadedAt: Date;
 }
 
+export type TravelVehicleType = 'bike' | 'car' | 'other';
+
+/** A point of the travelled day, as the route showed it when the claim was made. */
+export interface IExpenseTravelPoint {
+  lat: number;
+  lng: number;
+  at: Date;
+  kind: 'day_in' | 'visit_in' | 'visit_out' | 'day_out';
+  siteName?: string;
+}
+
+/**
+ * How a travel allowance claim (`POST /field/travel/claims`) was worked out:
+ * the km measured between the day's check-in/out points (`computedKm`, with
+ * the route's points and legs kept for the approver), the km claimed and why
+ * they differ, and the vehicle's rate. `amount = round(claimedKm × ratePerKm)`.
+ */
+export interface IExpenseTravel {
+  /** IST calendar day travelled, `YYYY-MM-DD`. */
+  date: string;
+  vehicleType: TravelVehicleType;
+  ratePerKm: number;
+  computedKm: number;
+  claimedKm: number;
+  /** Some leg used the straight-line × 1.3 estimate (no road distance). */
+  estimated: boolean;
+  reason?: string;
+  points: IExpenseTravelPoint[];
+  legs: { fromIndex: number; toIndex: number; distanceM: number; estimated: boolean }[];
+}
+
 export interface IExpenseClaim extends Document {
   employeeId: Types.ObjectId;
   category: Types.ObjectId;
@@ -39,6 +70,15 @@ export interface IExpenseClaim extends Document {
   reimbursementRef?: string;
   /** The payroll cycle that paid this claim out, when payroll reimbursed it. */
   payrollCycleId?: Types.ObjectId;
+  /** Set on travel allowance claims. */
+  travel?: IExpenseTravel;
+  /**
+   * `<employeeId>:<YYYY-MM-DD>` while a travel claim is live (not rejected,
+   * not deleted) — unique, so one employee has one travel claim per day.
+   */
+  travelKey?: string;
+  /** The field visit this expense was incurred at. */
+  visitId?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -50,6 +90,36 @@ const receiptSchema = new Schema<IExpenseReceipt>(
     uploadedAt: { type: Date, default: Date.now },
   },
   { _id: true },
+);
+
+const travelSchema = new Schema<IExpenseTravel>(
+  {
+    date: { type: String, required: true },
+    vehicleType: { type: String, enum: ['bike', 'car', 'other'], required: true },
+    ratePerKm: { type: Number, required: true, min: 0 },
+    computedKm: { type: Number, required: true, min: 0 },
+    claimedKm: { type: Number, required: true, min: 0 },
+    estimated: { type: Boolean, default: false },
+    reason: String,
+    points: {
+      type: [
+        {
+          lat: Number,
+          lng: Number,
+          at: Date,
+          kind: { type: String, enum: ['day_in', 'visit_in', 'visit_out', 'day_out'] },
+          siteName: String,
+          _id: false,
+        },
+      ],
+      default: [],
+    },
+    legs: {
+      type: [{ fromIndex: Number, toIndex: Number, distanceM: Number, estimated: Boolean, _id: false }],
+      default: [],
+    },
+  },
+  { _id: false },
 );
 
 const expenseClaimSchema = new Schema<IExpenseClaim>({
@@ -76,6 +146,9 @@ const expenseClaimSchema = new Schema<IExpenseClaim>({
   reimbursedAt: { type: Date },
   reimbursementRef: { type: String },
   payrollCycleId: { type: Schema.Types.ObjectId, ref: 'PayrollCycle' },
+  travel: { type: travelSchema, default: undefined },
+  travelKey: { type: String, select: false },
+  visitId: { type: Schema.Types.ObjectId, ref: 'Visit' },
 });
 expenseClaimSchema.plugin(timestampPlugin);
 expenseClaimSchema.plugin(softDeletePlugin);
@@ -83,6 +156,11 @@ expenseClaimSchema.plugin(paginatePlugin);
 
 expenseClaimSchema.index({ employeeId: 1, status: 1 });
 expenseClaimSchema.index({ date: -1 });
+// One live travel claim per employee per day (production: migration 20261023000005).
+expenseClaimSchema.index(
+  { travelKey: 1 },
+  { unique: true, name: 'travelKey_1', partialFilterExpression: { travelKey: { $exists: true } } },
+);
 
 export const ExpenseClaim = model<IExpenseClaim, PaginateModel<IExpenseClaim> & Model<IExpenseClaim>>(
   'ExpenseClaim',

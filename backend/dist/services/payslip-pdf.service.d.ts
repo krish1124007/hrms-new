@@ -18,6 +18,12 @@ export declare function payslipLines(record: PayslipLineSource): {
     earnings: IPayrollLine[];
     deductions: IPayrollLine[];
 };
+/**
+ * Look for a company logo in `apps/api/branding/`. Resolved on every render
+ * so dropping the file in (or replacing it) takes effect immediately — no
+ * restart required.
+ */
+export declare function resolveLogoPath(): string | null;
 interface CompanyInfo {
     name: string;
     slug?: string;
@@ -34,6 +40,17 @@ export interface YtdTotals {
     deductions: number;
     net: number;
 }
+export declare const COLOR: {
+    brand: string;
+    brandSoft: string;
+    text: string;
+    muted: string;
+    divider: string;
+    positive: string;
+    negative: string;
+    cardBg: string;
+    white: string;
+};
 export declare function inr(amount: number): string;
 /** Convert a number to Indian-style English words (whole rupees). */
 export declare function numberToIndianWords(n: number): string;

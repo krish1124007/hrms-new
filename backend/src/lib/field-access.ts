@@ -1,35 +1,25 @@
 /**
- * Who may see and change which field-sales record.
+ * Who may see and change which field record (visits, tasks).
  *
- *   • `field-sales.manage` — field managers / HR: every rep's records, and the
- *     manager-only actions (confirm/deliver orders, edit/verify payments, …).
- *   • `field-sales.view` holders with direct reports (team leads) — read their
- *     own records and their direct reports' (`reportingManager` = them), but
+ *   • `field.manage` — field managers / HR: every employee's records, and the
+ *     manager-only actions.
+ *   • `field.view` holders with direct reports (team leads) — read their own
+ *     records and their direct reports' (`reportingManager` = them), but
  *     change only their own.
- *   • every other `field-sales.view` holder (a rep) — their own records only.
+ *   • every other `field.view` holder — their own records only.
  *
  * Ownership is the record's Employee (`employeeId`, or `assignedTo` for tasks),
  * always taken from the session on create — never from the request body.
+ * The scope itself lives in lib/field-scope.ts.
  */
 import type { Request } from 'express';
 import { Types } from 'mongoose';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission, idOf } from './access.js';
-import { directReportIds } from './approvals.js';
-import { AppError, ForbiddenError, ValidationAppError } from './errors.js';
+import { assertOwnOrPermission, currentEmployeeId, idOf } from './access.js';
+import { ForbiddenError, ValidationAppError } from './errors.js';
 import { Employee } from '../models/employee.model.js';
+import { FIELD_MANAGE, canManageField, fieldScope, noEmployeeProfile } from './field-scope.js';
 
-export const FIELD_VIEW = 'field-sales.view';
-export const FIELD_MANAGE = 'field-sales.manage';
-
-/** True when the caller holds `field-sales.manage` (or `*`). */
-export function canManageField(req: Request): boolean {
-  return hasPermission(req.user, FIELD_MANAGE);
-}
-
-/** 404 `NO_EMPLOYEE_PROFILE` — a self-service field action needs an employee record. */
-export function noEmployeeProfile(): AppError {
-  return new AppError('No employee profile is linked to your account', 404, 'NO_EMPLOYEE_PROFILE');
-}
+export { FIELD_MANAGE, FIELD_VIEW, canManageField, noEmployeeProfile } from './field-scope.js';
 
 /** The caller's Employee `_id`, or 404 `NO_EMPLOYEE_PROFILE`. */
 export async function requireOwnEmployeeId(req: Request): Promise<Types.ObjectId> {
@@ -44,9 +34,8 @@ export async function requireOwnEmployeeId(req: Request): Promise<Types.ObjectId
  * non-manager without an employee record gets 404 `NO_EMPLOYEE_PROFILE`.
  */
 export async function visibleEmployeeIds(req: Request): Promise<Types.ObjectId[] | null> {
-  if (canManageField(req)) return null;
-  const self = await requireOwnEmployeeId(req);
-  return [self, ...(await directReportIds(req))];
+  const scope = await fieldScope(req);
+  return scope.employeeIds === 'all' ? null : scope.employeeIds;
 }
 
 /**
@@ -54,7 +43,7 @@ export async function visibleEmployeeIds(req: Request): Promise<Types.ObjectId[]
  * any `requested` employee; anyone else to one of the employees they can see —
  * a request outside that scope is ignored (they keep getting their own scope).
  */
-export async function fieldScope(
+export async function listScopeFilter(
   req: Request,
   requested?: string,
   field = 'employeeId',
@@ -69,9 +58,9 @@ export async function fieldScope(
 /** 403 unless the caller may read a record owned by `owner` (manager, owner, or owner's manager). */
 export async function assertFieldRead(req: Request, owner: unknown): Promise<void> {
   if (canManageField(req)) return;
-  const target = idOf(owner);
+  const ownerId = idOf(owner);
   const ids = await visibleEmployeeIds(req);
-  if (target && ids?.some((id) => id.toHexString() === target)) return;
+  if (ownerId && ids?.some((id) => id.toHexString() === ownerId)) return;
   throw new ForbiddenError('You can only access your own records');
 }
 

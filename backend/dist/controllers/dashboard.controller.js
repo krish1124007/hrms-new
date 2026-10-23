@@ -4,13 +4,8 @@ import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType } from '../models/leave-type.model.js';
 import { AuditLog } from '../models/audit-log.model.js';
 import { Department } from '../models/department.model.js';
-import { Visit } from '../models/visit.model.js';
-import { ProductOrder } from '../models/product-order.model.js';
-import { PaymentCollection } from '../models/payment-collection.model.js';
-import { SalesTarget } from '../models/sales-target.model.js';
 import { Task } from '../models/task.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
-import { getDashboardData } from '../services/dashboard.service.js';
+import { fieldTodayFigures, getDashboardData } from '../services/dashboard.service.js';
 import { UnauthorizedError } from '../lib/errors.js';
 import { startOfBusinessDay, endOfBusinessDay } from '../lib/business-day.js';
 /**
@@ -39,7 +34,7 @@ export async function overview(req, res) {
         throw new UnauthorizedError();
     const modules = [
         'employees', 'attendance', 'leaves', 'payroll',
-        'crm', 'projects', 'tasks', 'fieldSales',
+        'crm', 'projects', 'tasks', 'field',
     ];
     const data = await getDashboardData(modules, String(req.user._id));
     res.json({ success: true, data });
@@ -217,22 +212,12 @@ export async function recentActivity(_req, res) {
     res.json({ success: true, data: activities });
 }
 /* ─────────── Analytics overview (deep insights) ─────────── */
-const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/**
- * Field collections that are money received: every status but `bounced`
- * (`collected`, `deposited` and `verified` alike), never a deleted payment —
- * aggregations skip the soft-delete query hook, so it is excluded here.
- */
-const RECEIVED = { status: { $ne: 'bounced' }, isDeleted: { $ne: true } };
 export async function analytics(_req, res) {
     const now = new Date();
-    const todayStart = startOfDay(now);
     const todayEnd = endOfDay(now);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
     /* ── KPIs ── */
-    const [activeEmployees, prevActiveEmployees, presentThisMonth, workingDaysThisMonth, paidThisMonth, paidPrevMonth, completedTasksThisMonth, totalTasksThisMonth,] = await Promise.all([
+    const [activeEmployees, prevActiveEmployees, presentThisMonth, workingDaysThisMonth, completedTasksThisMonth, totalTasksThisMonth,] = await Promise.all([
         Employee.countDocuments({ status: 'active', isDeleted: { $ne: true } }),
         Employee.countDocuments({
             status: 'active',
@@ -244,14 +229,6 @@ export async function analytics(_req, res) {
             status: { $in: ['present', 'late', 'half_day'] },
         }),
         Attendance.countDocuments({ date: { $gte: monthStart, $lte: todayEnd } }),
-        PaymentCollection.aggregate([
-            { $match: { ...RECEIVED, collectedAt: { $gte: monthStart, $lte: todayEnd } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
-        PaymentCollection.aggregate([
-            { $match: { ...RECEIVED, collectedAt: { $gte: prevMonthStart, $lte: prevMonthEnd } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
         Task.countDocuments({
             status: 'done',
             updatedAt: { $gte: monthStart },
@@ -262,33 +239,11 @@ export async function analytics(_req, res) {
             isDeleted: { $ne: true },
         }),
     ]);
-    const totalRevenue = paidThisMonth[0]?.total ?? 0;
-    const prevRevenue = paidPrevMonth[0]?.total ?? 0;
-    const revenueChange = prevRevenue > 0 ? ((totalRevenue - prevRevenue) / prevRevenue) * 100 : 0;
     const employeeChange = prevActiveEmployees > 0
         ? ((activeEmployees - prevActiveEmployees) / prevActiveEmployees) * 100
         : 0;
     const attendanceRate = workingDaysThisMonth > 0 ? (presentThisMonth / workingDaysThisMonth) * 100 : 0;
     const taskCompletion = totalTasksThisMonth > 0 ? (completedTasksThisMonth / totalTasksThisMonth) * 100 : 0;
-    /* ── Revenue trend (last 6 months) ── */
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-    const revenueByMonth = await PaymentCollection.aggregate([
-        { $match: { ...RECEIVED, collectedAt: { $gte: sixMonthsAgo } } },
-        {
-            $group: {
-                _id: { y: { $year: '$collectedAt' }, m: { $month: '$collectedAt' } },
-                revenue: { $sum: '$amount' },
-            },
-        },
-    ]);
-    const revenueTrend = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
-        const row = revenueByMonth.find((r) => r._id.y === d.getFullYear() && r._id.m === d.getMonth() + 1);
-        return {
-            month: MONTH_LABELS[d.getMonth()],
-            revenue: row?.revenue ?? 0,
-        };
-    });
     /* ── Headcount by department ── */
     const headcountAgg = await Employee.aggregate([
         { $match: { isDeleted: { $ne: true }, status: 'active', department: { $ne: null } } },
@@ -348,51 +303,8 @@ export async function analytics(_req, res) {
         type: ltName.get(String(l._id)) ?? 'Other',
         count: l.count,
     }));
-    /* ── Top performers (this month) ── */
-    const topTargets = await SalesTarget.find({
-        'period.year': now.getFullYear(),
-        'period.month': now.getMonth() + 1,
-        isDeleted: { $ne: true },
-    })
-        .sort({ achievedValue: -1 })
-        .limit(5)
-        .populate('employeeId', 'firstName lastName designation')
-        .lean();
-    const topPerformers = topTargets
-        .filter((t) => t.employeeId && typeof t.employeeId === 'object')
-        .map((t) => {
-        const emp = t.employeeId;
-        return {
-            name: `${emp.firstName ?? ''} ${emp.lastName ?? ''}`.trim() || 'Unknown',
-            role: emp.designation ?? '—',
-            achieved: t.achievedValue ?? 0,
-            target: t.targetValue ?? 0,
-        };
-    });
-    /* ── Field stats today ── */
-    const [activeAgents, visitsToday, ordersToday, collectionToday] = await Promise.all([
-        LocationTrack.distinct('employeeId', {
-            timestamp: { $gte: todayStart, $lte: todayEnd },
-        }).then((ids) => ids.length),
-        Visit.countDocuments({
-            createdAt: { $gte: todayStart, $lte: todayEnd },
-            status: { $ne: 'cancelled' },
-        }),
-        ProductOrder.countDocuments({
-            createdAt: { $gte: todayStart, $lte: todayEnd },
-            status: { $ne: 'cancelled' },
-        }),
-        PaymentCollection.aggregate([
-            { $match: { ...RECEIVED, collectedAt: { $gte: todayStart, $lte: todayEnd } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
-    ]);
-    const fieldStats = {
-        activeAgents,
-        visitsToday,
-        ordersToday,
-        collectionToday: collectionToday[0]?.total ?? 0,
-    };
+    /* ── Field stats today: visits checked in and the people who made them ── */
+    const fieldStats = await fieldTodayFigures();
     /* ── Health indicators ── */
     const pendingLeaves = await LeaveRequest.countDocuments({ status: 'pending' });
     // Average leave approval lag (days) over last 30 days
@@ -416,18 +328,14 @@ export async function analytics(_req, res) {
         success: true,
         data: {
             kpis: {
-                totalRevenue,
-                revenueChange,
                 activeEmployees,
                 employeeChange,
                 attendanceRate,
                 taskCompletion,
             },
-            revenueTrend,
             headcountByDepartment,
             attendanceTrend: attendanceTrendData,
             leaveDistribution,
-            topPerformers,
             fieldStats,
             healthIndicators: {
                 taskCompletion,

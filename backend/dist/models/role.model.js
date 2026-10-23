@@ -84,6 +84,9 @@ const HR_EXECUTIVE_PERMISSIONS = [
     'notices.manage',
     'policies.manage',
     'events.manage',
+    // Field Visits: every employee's visits, sites, routes and reports, and the settings.
+    'field.view',
+    'field.manage',
 ];
 /**
  * Runs HR end to end. Deliberately has no users.* / roles.* / settings.manage /
@@ -113,14 +116,24 @@ const HR_MANAGER_PERMISSIONS = [
     'disciplinary.manage',
     'locations.manage',
     'audit.view',
-    'field-sales.view',
-    'field-sales.manage',
     'projects.view',
     'projects.create',
     'projects.update',
     'projects.delete',
     'backups.view',
 ];
+/**
+ * Field Visits roles. A field employee is an employee who also checks in at
+ * sites, pins sites and files visit reports (`field.view`: their own records,
+ * plus their direct reports' if they have any). A field manager runs their
+ * field team: a manager (approves their reports' leave, expenses — travel
+ * claims included — and attendance) who also sees their team's visits,
+ * sites, routes and reports, plans their visits and goes to sites themselves
+ * — `field.view`, scoped to themselves and their direct reports. Seeing
+ * everybody and the field settings (`field.manage`) stay with HR and admin.
+ */
+const FIELD_EMPLOYEE_PERMISSIONS = [...EMPLOYEE_PERMISSIONS, 'field.view'];
+const FIELD_MANAGER_PERMISSIONS = [...MANAGER_PERMISSIONS, 'field.view'];
 export const DEFAULT_ROLES = [
     {
         name: 'Admin',
@@ -155,6 +168,20 @@ export const DEFAULT_ROLES = [
         slug: 'employee',
         description: 'Standard employee — self-service only',
         permissions: EMPLOYEE_PERMISSIONS,
+        isSystem: true,
+    },
+    {
+        name: 'Field Employee',
+        slug: 'field_employee',
+        description: 'Employee working at sites — check in and out, pin sites, file visit reports, claim travel',
+        permissions: FIELD_EMPLOYEE_PERMISSIONS,
+        isSystem: true,
+    },
+    {
+        name: 'Field Manager',
+        slug: 'field_manager',
+        description: 'Manager of a field team — plans their team’s visits, sees their visits, routes and reports, approves their claims',
+        permissions: FIELD_MANAGER_PERMISSIONS,
         isSystem: true,
     },
 ];

@@ -94,10 +94,15 @@ const envSchema = z.object({
   ESI_EMPLOYER_PERCENT: z.coerce.number().min(0).max(100).default(3.25),
 
   /**
-   * Field visits: a check-in farther than this many metres from the client's
-   * pin is flagged `locationMismatch` (never refused).
+   * Google Maps server key (Routes API + Geocoding API enabled). Set: road
+   * distances for travel allowance and addresses for pinned sites come from
+   * Google. Unset or blank: no Google call is made — km use the straight-line
+   * estimate and addresses stay as entered.
    */
-  FIELD_VISIT_RADIUS_M: z.coerce.number().positive().default(300),
+  GOOGLE_MAPS_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().optional(),
+  ),
 
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 

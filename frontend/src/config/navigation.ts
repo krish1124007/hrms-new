@@ -6,6 +6,9 @@ import {
   Banknote,
   Briefcase,
   Building2,
+  Car,
+  CalendarCheck,
+  CalendarClock,
   CalendarDays,
   CalendarOff,
   ClipboardList,
@@ -27,7 +30,6 @@ import {
   Megaphone,
   PartyPopper,
   Package,
-  Radar,
   Receipt,
   Route,
   ScrollText,
@@ -35,11 +37,10 @@ import {
   Shield,
   ShieldAlert,
   ShoppingBag,
-  ShoppingCart,
-  Target,
   Users,
   Wallet,
 } from 'lucide-react';
+import { FIELD_PATHS } from '@/lib/field-links';
 
 /**
  * Navigation schema.
@@ -100,15 +101,18 @@ export const NAV_ACCESS = {
   roles: ['roles.view'],
   audit: ['audit.view'],
   backups: ['backups.view'],
-  /** Field sales: reps, team leads and managers. */
-  fieldView: ['field-sales.view'],
-  /** Field sales management: the product catalogue and the live team map. */
-  fieldManage: ['field-sales.manage'],
+  /** Field Visits: own records and direct reports' (`field.view`), everyone's (`field.manage`). */
+  fieldView: ['field.view', 'field.manage'],
+  /** Field Visits administration: the settings, site import and deletes. */
+  fieldManage: ['field.manage'],
   /** The Settings home page and the sidebar group around it. */
   settings: ['roles.view', 'audit.view', 'backups.view', 'settings.manage'],
 } satisfies Record<string, string[]>;
 
 const P = NAV_ACCESS;
+
+/** Role slugs of people who do field work but run no team: they get the self-service field pages only. */
+const FIELD_EMPLOYEE_ROLES = ['employee', 'field_employee'];
 
 // ─── Groups ───────────────────────────────────────────────────────
 // Each group renders as a sidebar section. Parent items with `children`
@@ -147,7 +151,6 @@ export const NAV_GROUPS: NavGroup[] = [
         module: 'attendance',
         children: [
           { label: 'Dashboard', to: '/attendance', icon: LayoutDashboard, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
-          { label: 'Live Tracking', to: '/attendance/live-tracking', icon: Radar, module: 'attendance', permissions: P.attendanceView, excludeRoles: ['employee'] },
           { label: 'My Attendance', to: '/attendance/my', icon: CalendarDays, module: 'attendance', excludeRoles: ['admin'] },
           // Self-service for everyone; the page adds the team view for `overtime.view`.
           { label: 'Overtime', to: '/overtime', icon: Clock3, module: 'attendance' },
@@ -208,43 +211,19 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 
   {
-    title: 'Field Sales',
+    title: 'Field Visits',
     items: [
-      { label: 'Field Dashboard', to: '/field', icon: LayoutDashboard, module: 'field', permissions: P.fieldView },
-      {
-        label: 'Sales',
-        icon: ShoppingCart,
-        module: 'field',
-        permissions: P.fieldView,
-        children: [
-          { label: 'Clients', to: '/field/clients', icon: Building2, module: 'field', permissions: P.fieldView },
-          { label: 'Visits', to: '/field/visits', icon: MapPin, module: 'field', permissions: P.fieldView },
-          { label: 'Orders', to: '/field/orders', icon: ShoppingCart, module: 'field', permissions: P.fieldView },
-          { label: 'Collections', to: '/field/collections', icon: Receipt, module: 'field', permissions: P.fieldView },
-          { label: 'Products', to: '/field/products', icon: Package, module: 'field', permissions: P.fieldManage },
-        ],
-      },
-      {
-        label: 'Field Team',
-        icon: Users,
-        module: 'field',
-        permissions: P.fieldView,
-        children: [
-          { label: 'Tasks', to: '/field/tasks', icon: ClipboardList, module: 'field', permissions: P.fieldView },
-          { label: 'Targets', to: '/field/targets', icon: Target, module: 'field', permissions: P.fieldView },
-        ],
-      },
-      {
-        label: 'Maps',
-        icon: MapIcon,
-        module: 'field',
-        permissions: P.fieldView,
-        children: [
-          { label: 'Live Map', to: '/field/tracking', icon: Radar, module: 'field', permissions: P.fieldManage },
-          { label: 'Trails', to: '/field/trail', icon: Route, module: 'field', permissions: P.fieldView },
-          { label: 'Client Map', to: '/field/clients/map', icon: MapIcon, module: 'field', permissions: P.fieldView },
-        ],
-      },
+      // Self-service: the signed-in employee's own day (admins have no employee record).
+      { label: 'My day', to: '/field/my-day', icon: CalendarCheck, module: 'field', permissions: P.fieldView, excludeRoles: ['admin'] },
+      { label: 'Sites', to: '/field/sites', icon: Building2, module: 'field', permissions: P.fieldView },
+      { label: 'Visits', to: FIELD_PATHS.visits, icon: MapPin, module: 'field', permissions: P.fieldView },
+      // Team pages: managers (and field.manage holders), not the field employees themselves.
+      { label: 'Planning', to: '/field/planning', icon: CalendarClock, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Team map', to: FIELD_PATHS.teamMap, icon: MapIcon, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Routes', to: FIELD_PATHS.routes, icon: Route, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Reports', to: FIELD_PATHS.reports, icon: FileBarChart, module: 'field', permissions: P.fieldView, excludeRoles: FIELD_EMPLOYEE_ROLES },
+      { label: 'Travel allowance', to: FIELD_PATHS.travel, icon: Car, module: 'field', permissions: P.fieldView, excludeRoles: ['admin'] },
+      { label: 'Settings', to: '/field/settings', icon: Settings, module: 'field', permissions: P.fieldManage },
     ],
   },
 

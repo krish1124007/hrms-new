@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Check, X, Wallet, Download, FileText } from 'lucide-react';
+import { Check, X, Wallet, Download, FileText, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RejectionReason } from '@/components/common/RejectionReason';
+import { LinkedVisit, TravelBreakdown } from '@/components/expense-claims/TravelBreakdown';
+import { travelSites } from '@/lib/field-route';
 import {
   useExpenseClaims,
   useApproveExpenseClaim,
@@ -28,7 +30,8 @@ import {
   type ExpenseClaim,
   type ExpenseClaimStatus,
 } from '@/lib/expense-claims.api';
-import { formatDate, todayIST } from '@/lib/format';
+import { travelSummary } from '@/lib/field-route';
+import { formatDate, formatDateTime, todayIST } from '@/lib/format';
 
 const PAGE_SIZE = 25;
 
@@ -114,6 +117,9 @@ export default function ExpenseListPage(): ReactElement {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  // The claim being approved — its travel breakdown is shown in the dialog.
+  const [approvingClaim, setApprovingClaim] = useState<ExpenseClaim | null>(null);
+  const [detail, setDetail] = useState<ExpenseClaim | null>(null);
   const [acceptedAmount, setAcceptedAmount] = useState<number | ''>('');
   // What the employee claimed — the accepted amount may not exceed it.
   const [claimedAmount, setClaimedAmount] = useState(0);
@@ -208,7 +214,12 @@ export default function ExpenseListPage(): ReactElement {
     {
       key: 'category',
       header: 'Category',
-      cell: (c) => (typeof c.category === 'object' ? c.category.name : '—'),
+      cell: (c) => (
+        <div className="flex flex-col">
+          <span>{typeof c.category === 'object' ? c.category.name : '—'}</span>
+          {c.travel && <span className="text-xs text-muted-foreground">{travelSummary(c.travel)}</span>}
+        </div>
+      ),
     },
     {
       key: 'date',
@@ -268,14 +279,23 @@ export default function ExpenseListPage(): ReactElement {
     {
       key: 'actions',
       header: '',
-      width: '140px',
+      width: '170px',
       cell: (c) => (
         <div className="flex gap-1">
+          <button
+            onClick={() => setDetail(c)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+            title="Details"
+            aria-label="Details"
+          >
+            <Eye className="size-4" />
+          </button>
           {c.status === 'pending' && (
             <>
               <button
                 onClick={() => {
                   setApprovingId(c._id);
+                  setApprovingClaim(c);
                   setAcceptedAmount(c.amount);
                   setClaimedAmount(c.amount);
                 }}
@@ -384,11 +404,21 @@ export default function ExpenseListPage(): ReactElement {
         </DialogFooter>
       </Dialog>
 
-      <Dialog open={!!approvingId} onClose={() => setApprovingId(null)} size="sm">
+      <Dialog open={!!approvingId} onClose={() => setApprovingId(null)} size={approvingClaim?.travel ? 'md' : 'sm'}>
         <DialogHeader>
           <DialogTitle>Approve expense claim</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-4">
+          {approvingClaim?._id === approvingId && approvingClaim.travel && (
+            <TravelBreakdown travel={approvingClaim.travel} />
+          )}
+          {approvingClaim?._id === approvingId && approvingClaim.visitId && (
+            <LinkedVisit
+              visitId={approvingClaim.visitId}
+              date={approvingClaim.date}
+              sites={travelSites(approvingClaim.travel?.points)}
+            />
+          )}
           <div>
             <Label htmlFor="ec-accept">Accepted amount (₹)</Label>
             <Input
@@ -432,6 +462,18 @@ export default function ExpenseListPage(): ReactElement {
         </DialogFooter>
       </Dialog>
 
+      <Dialog open={!!detail} onClose={() => setDetail(null)} size="md">
+        <DialogHeader>
+          <DialogTitle>Expense claim</DialogTitle>
+        </DialogHeader>
+        {detail && <ClaimDetails claim={detail} />}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setDetail(null)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
       <Dialog open={!!reimbursingId} onClose={() => setReimbursingId(null)} size="sm">
         <DialogHeader>
           <DialogTitle>Mark as reimbursed</DialogTitle>
@@ -455,5 +497,55 @@ export default function ExpenseListPage(): ReactElement {
         </DialogFooter>
       </Dialog>
     </div>
+  );
+}
+
+/** Everything about one claim — with the travel breakdown and linked visit when it has them. */
+function ClaimDetails({ claim }: { claim: ExpenseClaim }): ReactElement {
+  const emp = typeof claim.employeeId === 'object' ? claim.employeeId : null;
+  const cat = typeof claim.category === 'object' ? claim.category : null;
+  return (
+    <DialogBody className="space-y-4 text-sm">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+        <dt className="text-muted-foreground">Employee</dt>
+        <dd>
+          {emp ? `${emp.firstName} ${emp.lastName}` : '—'}
+          {emp?.employeeId ? <span className="ml-1 text-xs text-muted-foreground">({emp.employeeId})</span> : null}
+        </dd>
+        <dt className="text-muted-foreground">Category</dt>
+        <dd>{cat?.name ?? '—'}</dd>
+        <dt className="text-muted-foreground">Date</dt>
+        <dd>{formatDate(claim.date)}</dd>
+        <dt className="text-muted-foreground">Claimed</dt>
+        <dd className="font-medium">
+          {claim.currency} {claim.amount.toLocaleString('en-IN')}
+          {claim.acceptedAmount !== undefined && claim.acceptedAmount !== claim.amount && (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              Accepted: {claim.currency} {claim.acceptedAmount.toLocaleString('en-IN')}
+            </span>
+          )}
+        </dd>
+        <dt className="text-muted-foreground">Status</dt>
+        <dd>
+          <Badge variant={STATUS_VARIANT[claim.status]}>{claim.status}</Badge>
+        </dd>
+        {claim.description ? (
+          <>
+            <dt className="text-muted-foreground">Description</dt>
+            <dd className="whitespace-pre-line">{claim.description}</dd>
+          </>
+        ) : null}
+        <dt className="text-muted-foreground">Submitted</dt>
+        <dd>{formatDateTime(claim.createdAt)}</dd>
+      </dl>
+      {claim.travel && (
+        <div className="space-y-2">
+          <h4 className="font-semibold">Travel allowance</h4>
+          <TravelBreakdown travel={claim.travel} />
+        </div>
+      )}
+      {claim.visitId && <LinkedVisit visitId={claim.visitId} date={claim.date} sites={travelSites(claim.travel?.points)} />}
+      {claim.status === 'rejected' && <RejectionReason reason={claim.rejectedReason} title="Claim rejection reason" />}
+    </DialogBody>
   );
 }

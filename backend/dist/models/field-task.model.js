@@ -9,7 +9,7 @@ const fieldTaskSchema = new Schema({
     title: { type: String, required: true, trim: true },
     description: String,
     assignedTo: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
-    clientId: { type: Schema.Types.ObjectId, ref: 'Client' },
+    siteId: { type: Schema.Types.ObjectId, ref: 'FieldSite' },
     location: locationSchema,
     priority: {
         type: String,
@@ -25,6 +25,9 @@ const fieldTaskSchema = new Schema({
     completedAt: Date,
     completionPhotos: { type: [String], default: [] },
     completionNotes: String,
+    completionClientRef: String,
+    completionReceivedAt: Date,
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     verifiedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     verifiedAt: Date,
 });

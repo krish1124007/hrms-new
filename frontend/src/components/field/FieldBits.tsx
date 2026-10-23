@@ -1,79 +1,73 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import { Camera, ImageOff, Loader2, LocateOff, MapPinOff, X } from 'lucide-react';
+import { AlertTriangle, Camera, ImageOff, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useUploadFieldPhoto } from '@/hooks/use-field';
-import type { OrderStatus, PaymentCollectionStatus, VisitStatus } from '@/lib/field.api';
+import type { VisitFlags, VisitStatus } from '@/lib/field.api';
+import { activeFlags, VISIT_STATUS_LABEL } from '@/lib/field-visits';
+import { cn } from '@/lib/utils';
 
-/* ── Status badges ── */
+/* ── Status and flags ── */
 
-const ORDER_STATUS: Record<OrderStatus, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
-  pending: { label: 'Pending', variant: 'secondary' },
-  draft: { label: 'Pending', variant: 'secondary' },
-  confirmed: { label: 'Confirmed', variant: 'default' },
-  processing: { label: 'Confirmed', variant: 'default' },
-  shipped: { label: 'Confirmed', variant: 'default' },
-  delivered: { label: 'Delivered', variant: 'success' },
-  cancelled: { label: 'Cancelled', variant: 'destructive' },
-};
-
-export function OrderStatusBadge({ status }: { status: OrderStatus }): ReactElement {
-  const s = ORDER_STATUS[status] ?? { label: status, variant: 'secondary' as const };
-  return <Badge variant={s.variant}>{s.label}</Badge>;
-}
-
-const VISIT_STATUS: Record<VisitStatus, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' }> = {
-  scheduled: { label: 'Planned', variant: 'secondary' },
-  in_progress: { label: 'In progress', variant: 'warning' },
-  completed: { label: 'Completed', variant: 'success' },
-  cancelled: { label: 'Cancelled', variant: 'destructive' },
+const VISIT_STATUS_VARIANT: Record<VisitStatus, 'success' | 'warning' | 'secondary' | 'destructive'> = {
+  planned: 'secondary',
+  in_progress: 'warning',
+  completed: 'success',
+  cancelled: 'secondary',
+  missed: 'destructive',
 };
 
 export function VisitStatusBadge({ status }: { status: VisitStatus }): ReactElement {
-  const s = VISIT_STATUS[status] ?? { label: status, variant: 'secondary' as const };
-  return <Badge variant={s.variant}>{s.label}</Badge>;
-}
-
-/** Along `collected → verified → deposited`; `bounced` from any of them. */
-const PAYMENT_STATUS: Record<PaymentCollectionStatus, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
-  collected: { label: 'Collected', variant: 'secondary' },
-  verified: { label: 'Verified', variant: 'default' },
-  deposited: { label: 'Deposited', variant: 'success' },
-  bounced: { label: 'Bounced', variant: 'destructive' },
-};
-
-export function PaymentStatusBadge({ status }: { status: PaymentCollectionStatus }): ReactElement {
-  const s = PAYMENT_STATUS[status] ?? { label: status, variant: 'secondary' as const };
-  return <Badge variant={s.variant}>{s.label}</Badge>;
-}
-
-/** "Away from client" — the check-in was farther than the allowed radius from the client's pin. */
-export function LocationMismatchBadge({ distanceM }: { distanceM?: number }): ReactElement {
-  const d =
-    distanceM == null ? null : distanceM >= 1000 ? `${(distanceM / 1000).toFixed(1)} km` : `${Math.round(distanceM)} m`;
   return (
-    <Badge variant="destructive" title="The check-in location was far from the client's saved location">
-      <MapPinOff className="mr-1 size-3" />
-      {d ? `${d} from client` : 'Away from client'}
-    </Badge>
+    <Badge variant={VISIT_STATUS_VARIANT[status] ?? 'secondary'}>{VISIT_STATUS_LABEL[status] ?? status}</Badge>
   );
 }
 
-/** "No GPS" — the rep checked in without a location at a client that has a pin. */
-export function LocationMissingBadge(): ReactElement {
+/**
+ * A visit's exception flags as badges (`list` of the raised ones). Renders
+ * nothing — or `emptyText` — when no flag is raised.
+ */
+export function VisitFlagBadges({
+  flags,
+  emptyText,
+  className,
+}: {
+  flags: Partial<VisitFlags> | undefined;
+  emptyText?: string;
+  className?: string;
+}): ReactElement | null {
+  const raised = activeFlags(flags);
+  if (raised.length === 0) {
+    return emptyText ? <span className="text-xs text-muted-foreground">{emptyText}</span> : null;
+  }
   return (
-    <Badge variant="destructive" title="The check-in had no GPS fix, so it could not be compared with the client's location">
-      <LocateOff className="mr-1 size-3" />
-      No GPS
-    </Badge>
+    <ul aria-label="Flags" className={cn('flex flex-wrap gap-1', className)}>
+      {raised.map((f) => (
+        <li key={f.key}>
+          <Badge variant={f.serious ? 'destructive' : 'warning'} title={f.hint}>
+            {f.serious && <AlertTriangle className="mr-1 size-3" aria-hidden />}
+            {f.label}
+          </Badge>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 /* ── Photos ── */
 
 /** Thumbnails of signed photo URLs; each opens full size in a new tab. Expired links show a placeholder. */
-export function PhotoStrip({ urls, size = 40 }: { urls: string[]; size?: number }): ReactElement | null {
+export function PhotoStrip({
+  urls,
+  size = 40,
+  alt = 'Photo',
+}: {
+  urls: string[];
+  size?: number;
+  /** Each image is named "{alt} {n}". */
+  alt?: string;
+}): ReactElement | null {
   const [broken, setBroken] = useState<Record<string, true>>({});
   if (urls.length === 0) return null;
   return (
@@ -92,7 +86,7 @@ export function PhotoStrip({ urls, size = 40 }: { urls: string[]; size?: number 
           <a key={`${u}-${i}`} href={u} target="_blank" rel="noreferrer noopener" title="Open photo">
             <img
               src={u}
-              alt={`Visit photo ${i + 1}`}
+              alt={`${alt} ${i + 1}`}
               loading="lazy"
               className="rounded border border-border object-cover"
               style={{ width: size, height: size }}
@@ -107,8 +101,8 @@ export function PhotoStrip({ urls, size = 40 }: { urls: string[]; size?: number 
 
 /**
  * Take or pick one photo and upload it to `POST /field/uploads/photo`.
- * `onChange` receives the returned signed URL (attach it within its TTL) or
- * '' when removed.
+ * `onChange` receives the upload's storage key (what request bodies carry)
+ * or '' when removed.
  */
 export function PhotoInput({
   value,
@@ -116,7 +110,7 @@ export function PhotoInput({
   label = 'Photo',
 }: {
   value: string;
-  onChange: (url: string) => void;
+  onChange: (key: string) => void;
   label?: string;
 }): ReactElement {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -144,7 +138,7 @@ export function PhotoInput({
     }
     upload.mutate(file, {
       onSuccess: (res) => {
-        onChange(res.data.url);
+        onChange(res.data.key);
         setPreview(URL.createObjectURL(file));
       },
     });

@@ -1,18 +1,9 @@
 import { Types } from 'mongoose';
-import { assertOwnOrPermission, currentEmployeeId, hasPermission, idOf } from './access.js';
-import { directReportIds } from './approvals.js';
-import { AppError, ForbiddenError, ValidationAppError } from './errors.js';
+import { assertOwnOrPermission, currentEmployeeId, idOf } from './access.js';
+import { ForbiddenError, ValidationAppError } from './errors.js';
 import { Employee } from '../models/employee.model.js';
-export const FIELD_VIEW = 'field-sales.view';
-export const FIELD_MANAGE = 'field-sales.manage';
-/** True when the caller holds `field-sales.manage` (or `*`). */
-export function canManageField(req) {
-    return hasPermission(req.user, FIELD_MANAGE);
-}
-/** 404 `NO_EMPLOYEE_PROFILE` — a self-service field action needs an employee record. */
-export function noEmployeeProfile() {
-    return new AppError('No employee profile is linked to your account', 404, 'NO_EMPLOYEE_PROFILE');
-}
+import { FIELD_MANAGE, canManageField, fieldScope, noEmployeeProfile } from './field-scope.js';
+export { FIELD_MANAGE, FIELD_VIEW, canManageField, noEmployeeProfile } from './field-scope.js';
 /** The caller's Employee `_id`, or 404 `NO_EMPLOYEE_PROFILE`. */
 export async function requireOwnEmployeeId(req) {
     const id = await currentEmployeeId(req);
@@ -26,17 +17,15 @@ export async function requireOwnEmployeeId(req) {
  * non-manager without an employee record gets 404 `NO_EMPLOYEE_PROFILE`.
  */
 export async function visibleEmployeeIds(req) {
-    if (canManageField(req))
-        return null;
-    const self = await requireOwnEmployeeId(req);
-    return [self, ...(await directReportIds(req))];
+    const scope = await fieldScope(req);
+    return scope.employeeIds === 'all' ? null : scope.employeeIds;
 }
 /**
  * List filter on `field` (the owning employee). A field manager may narrow to
  * any `requested` employee; anyone else to one of the employees they can see —
  * a request outside that scope is ignored (they keep getting their own scope).
  */
-export async function fieldScope(req, requested, field = 'employeeId') {
+export async function listScopeFilter(req, requested, field = 'employeeId') {
     const ids = await visibleEmployeeIds(req);
     const wanted = requested && Types.ObjectId.isValid(requested) ? new Types.ObjectId(requested) : null;
     if (ids === null)
@@ -49,9 +38,9 @@ export async function fieldScope(req, requested, field = 'employeeId') {
 export async function assertFieldRead(req, owner) {
     if (canManageField(req))
         return;
-    const target = idOf(owner);
+    const ownerId = idOf(owner);
     const ids = await visibleEmployeeIds(req);
-    if (target && ids?.some((id) => id.toHexString() === target))
+    if (ownerId && ids?.some((id) => id.toHexString() === ownerId))
         return;
     throw new ForbiddenError('You can only access your own records');
 }

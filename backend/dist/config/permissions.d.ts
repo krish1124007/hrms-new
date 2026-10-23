@@ -19,7 +19,7 @@
  * hold `*.approve_all`. `permissions.test.ts` knows about and checks them.
  *
  * Keys group the Roles UI by module. They normally equal the prefix of the
- * names beneath them; `field` groups the `field-sales.*` permissions.
+ * names beneath them.
  */
 export declare const PERMISSIONS_BY_MODULE: Record<string, string[]>;
 /** Every grantable permission name — the allow-list role and user editors validate against. */

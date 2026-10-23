@@ -26,8 +26,6 @@ import { assertCanDecide, canSeeAll, directReportIds, scopeFilter, scopeFilterFo
 import { isDuplicateKey } from '../lib/leave-allocation.js';
 import { logger } from '../config/logger.js';
 import { formatBusinessDate, notifyRegularization, notifyRegularizationDecision, reportingManagerUserId, } from '../services/notification.service.js';
-import { LocationTrack } from '../models/location-track.model.js';
-import { fieldStaffAmong } from '../services/location-track.service.js';
 // ============================================================================
 // CONFIG
 // ============================================================================
@@ -77,10 +75,21 @@ export async function getConfig(_req, res) {
     if (!cfg) {
         cfg = await AttendanceConfig.create({ enabledMethods: ['manual'], settings: {} });
     }
-    res.json({ success: true, data: cfg });
+    res.json({ success: true, data: trackingOff(cfg) });
+}
+/**
+ * Continuous tracking is removed (locations only at check-in/check-out), but
+ * app builds already on phones still start periodic GPS uploads whenever the
+ * config says `liveTracking.enabled`. Always answering `false` switches them
+ * off on their next config fetch, whatever an older save stored.
+ */
+function trackingOff(cfg) {
+    const json = cfg.toJSON();
+    return { ...json, liveTracking: { ...(json.liveTracking ?? {}), enabled: false } };
 }
 export async function updateConfig(req, res) {
-    const body = req.body;
+    // `liveTracking` is retired: an old admin screen sending it changes nothing.
+    const { liveTracking: _retired, ...body } = req.body;
     const cfg = await AttendanceConfig.findOneAndUpdate({}, body, {
         new: true,
         upsert: true,
@@ -89,7 +98,7 @@ export async function updateConfig(req, res) {
     // The rule is cached per-process — drop it so the save takes effect now.
     invalidateWeekOffRule();
     void audit({ action: 'update', entity: 'AttendanceConfig', entityId: String(cfg._id), after: body });
-    res.json({ success: true, data: cfg });
+    res.json({ success: true, data: trackingOff(cfg) });
 }
 // ============================================================================
 // CHECK-IN / CHECK-OUT
@@ -1451,61 +1460,5 @@ export async function attendanceReport(req, res) {
         .exec();
     void audit({ action: 'export', entity: 'Attendance' });
     res.json({ success: true, data: records });
-}
-// ============================================================================
-// LIVE TRACKING
-// ============================================================================
-// The location upload (`POST /attendance/tracking/batch`) is the field ingest:
-// `controllers/field-tracking.controller.ts` → `services/location-track.service.ts`
-// (one schema, one consented + clocked-in gate, one store and broadcast).
-export async function getLiveTracking(req, res) {
-    // Same day label as every other attendance query — with the old
-    // server-local version this looked up *yesterday* between 00:00 and 05:30
-    // IST and showed a stale set of "currently working" people.
-    const start = startOfBusinessDay(new Date());
-    // HR sees everybody on the map; a manager their direct reports and themselves.
-    const todayRecords = await Attendance.find({
-        ...(await scopeFilter(req, 'attendance')),
-        date: start,
-        'checkIn.time': { $exists: true },
-        'checkOut.time': { $exists: false }
-    }).distinct('employeeId');
-    if (todayRecords.length === 0) {
-        res.json({ success: true, data: [] });
-        return;
-    }
-    const docs = await LocationTrack.aggregate([
-        { $match: { timestamp: { $gte: start }, employeeId: { $in: todayRecords } } },
-        { $sort: { timestamp: -1 } },
-        {
-            $group: {
-                _id: '$employeeId',
-                timestamp: { $first: '$timestamp' },
-                location: { $first: '$location' },
-                battery: { $first: '$battery' },
-                activity: { $first: '$activity' },
-                speed: { $first: '$speed' },
-            },
-        },
-    ]);
-    // Only field staff are tracked; fixes stored for anyone else before the
-    // ingest checked it stay hidden.
-    const staff = await fieldStaffAmong(docs.map((d) => d._id));
-    const empIds = docs.map((d) => d._id).filter((id) => staff.has(String(id)));
-    const employees = await Employee.find({ _id: { $in: empIds } })
-        .select('firstName lastName employeeId avatar department')
-        .exec();
-    const empMap = new Map(employees.map((e) => [String(e._id), e]));
-    const enriched = docs.filter((d) => staff.has(String(d._id))).map((d) => ({
-        employeeId: d._id,
-        employee: empMap.get(String(d._id)),
-        timestamp: d.timestamp,
-        lng: d.location.coordinates[0],
-        lat: d.location.coordinates[1],
-        battery: d.battery,
-        activity: d.activity,
-        speed: d.speed,
-    }));
-    res.json({ success: true, data: enriched });
 }
 //# sourceMappingURL=attendance.controller.js.map

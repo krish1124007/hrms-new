@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { ExpenseCategory, ExpenseClaim, Employee } from '../models/index.js';
+import { ExpenseCategory, ExpenseClaim, Employee, Visit } from '../models/index.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { cycleHoldingClaim } from '../services/payroll-compute.service.js';
@@ -20,9 +20,10 @@ const SELF_APPROVAL_MESSAGE = 'You cannot approve or reject your own claim';
 const DECIDED_MEANWHILE_MESSAGE = 'This claim was decided meanwhile — reload and try again';
 /**
  * Tell the claimant's reporting manager about a claim waiting for them — not
- * when the manager is the one who filed it. Never throws.
+ * when the manager is the one who filed it. Never throws. (Also used by the
+ * field travel allowance claim.)
  */
-async function notifyManagerOfClaim(claim) {
+export async function notifyManagerOfClaim(claim) {
     try {
         const emp = await Employee.findById(claim.employeeId).select('firstName lastName userId reportingManager').lean().exec();
         if (!emp)
@@ -131,6 +132,8 @@ export const createClaimSchema = z
         .default([]),
     paymentMethod: z.enum(['cash', 'bank', 'card', 'upi', 'cheque', 'other']).optional(),
     status: z.enum(['draft', 'pending']).default('pending'),
+    /** The field visit the expense was incurred at (one of the claimant's own visits). */
+    visitId: objectId.optional(),
 })
     // A claim without a bill can't be verified, so it must not reach an
     // approver. Two exemptions: drafts are the employee's own scratch space,
@@ -159,6 +162,18 @@ export const claimQuerySchema = z.object({
     to: z.coerce.date().optional(),
     sort: z.string().optional(),
 });
+/** 400 `INVALID_VISIT` unless `visitId` is one of `employeeId`'s visits. */
+async function assertOwnVisit(visitId, employeeId) {
+    if (!(await Visit.exists({ _id: visitId, employeeId }).exec())) {
+        throw new AppError("visitId must be one of the claimant's own field visits", 400, 'INVALID_VISIT');
+    }
+}
+/**
+ * What a travel allowance claim lets the expense form change: its km and
+ * amount come from the day's route (POST /field/travel/claims), so only the
+ * description may be edited; anything else is withdrawn and claimed again.
+ */
+const TRAVEL_CLAIM_EDITABLE = new Set(['description']);
 export const rejectClaimSchema = z.object({
     reason: z.string().min(1),
 });
@@ -265,6 +280,8 @@ export async function createClaim(req, res) {
     if (cat.requiresReceipt && body.amount > 0 && body.receiptUrls.length === 0) {
         throw new ValidationAppError('Receipt is required for this category');
     }
+    if (body.visitId)
+        await assertOwnVisit(body.visitId, employeeId);
     const status = body.amount === 0 ? 'approved' : body.status;
     const doc = await ExpenseClaim.create({
         employeeId,
@@ -276,6 +293,7 @@ export async function createClaim(req, res) {
         receiptUrls: body.receiptUrls.map((r) => ({ ...r, uploadedAt: new Date() })),
         paymentMethod: body.paymentMethod,
         status,
+        ...(body.visitId ? { visitId: new Types.ObjectId(body.visitId) } : {}),
         ...(body.amount === 0 ? { approvedAt: new Date() } : {}),
     });
     void audit({ action: 'create', entity: 'ExpenseClaim', entityId: String(doc._id) });
@@ -303,12 +321,21 @@ export async function updateClaim(req, res) {
     if (doc.status !== 'draft' && doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot edit a ${doc.status} claim`);
     }
+    // A form that sends every field back unchanged is not changing them.
+    const changes = Object.entries(req.body).filter(([key, value]) => value !== undefined && JSON.stringify(value) !== JSON.stringify(doc.get(key) ?? null));
+    if (doc.travel && changes.some(([key]) => !TRAVEL_CLAIM_EDITABLE.has(key))) {
+        throw new AppError("A travel allowance claim's km and amount come from the day's route — withdraw it and claim the day again", 400, 'TRAVEL_CLAIM_LOCKED');
+    }
+    const visitId = req.body.visitId;
+    if (visitId)
+        await assertOwnVisit(visitId, doc.employeeId);
     const submitting = doc.status === 'draft';
     Object.assign(doc, req.body);
     // Same rule as create: a claim for an amount can only leave draft with a
     // bill attached, so editing can't be used to strip the receipt off a
     // pending claim — or to raise a zero-amount entry into a billed one.
-    if (doc.status !== 'draft' && doc.amount > 0 && doc.receiptUrls.length === 0) {
+    // (A travel claim has no bill: its km are the evidence.)
+    if (!doc.travel && doc.status !== 'draft' && doc.amount > 0 && doc.receiptUrls.length === 0) {
         throw new ValidationAppError('A receipt or bill photo is required to claim an amount');
     }
     await doc.save();
@@ -328,6 +355,9 @@ export async function deleteClaim(req, res) {
     if (doc.status !== 'draft' && doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot delete a ${doc.status} claim`);
     }
+    // A withdrawn travel claim frees its day for a new one.
+    if (doc.travel)
+        await ExpenseClaim.updateOne({ _id: doc._id }, { $unset: { travelKey: '' } }).exec();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await doc.softDelete();
     void audit({ action: 'delete', entity: 'ExpenseClaim', entityId: String(doc._id) });
@@ -344,9 +374,12 @@ export const approveClaimSchema = z
  * two deciders racing only one lands; the other gets 409 `DECIDED_MEANWHILE`
  * and nobody is notified twice.
  */
-async function decidePendingClaim(id, set) {
+async function decidePendingClaim(id, set, unset = {}) {
     const userId = getUserId();
-    const decided = await ExpenseClaim.findOneAndUpdate({ _id: id, status: 'pending' }, { $set: { ...set, approvedAt: new Date(), ...(userId ? { approvedBy: new Types.ObjectId(userId) } : {}) } }, { new: true, runValidators: true }).exec();
+    const decided = await ExpenseClaim.findOneAndUpdate({ _id: id, status: 'pending' }, {
+        $set: { ...set, approvedAt: new Date(), ...(userId ? { approvedBy: new Types.ObjectId(userId) } : {}) },
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
+    }, { new: true, runValidators: true }).exec();
     if (!decided)
         throw new AppError(DECIDED_MEANWHILE_MESSAGE, 409, 'DECIDED_MEANWHILE');
     return decided;
@@ -385,7 +418,8 @@ export async function rejectClaim(req, res) {
     if (doc.status !== 'pending') {
         throw new ValidationAppError(`Cannot reject a ${doc.status} claim`);
     }
-    const decided = await decidePendingClaim(doc._id, { status: 'rejected', rejectedReason: body.reason });
+    // A rejected travel claim frees its day: the employee may claim it again.
+    const decided = await decidePendingClaim(doc._id, { status: 'rejected', rejectedReason: body.reason }, doc.travel ? { travelKey: '' } : {});
     void audit({ action: 'update', entity: 'ExpenseClaim', entityId: String(decided._id), after: { status: 'rejected' } });
     await notifyClaimant(decided, 'rejected', `was rejected. Reason: ${body.reason}`);
     res.json({ success: true, data: decided });

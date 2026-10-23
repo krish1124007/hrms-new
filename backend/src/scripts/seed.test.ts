@@ -9,14 +9,14 @@ import { User } from '../models/user.model.js';
 import { createUser } from '../test/factories.js';
 
 describe('ensureSystemRoles', () => {
-  it('is idempotent: five roles after one run, five after two, admin keeps the wildcard', async () => {
+  it('is idempotent: seven roles after one run, seven after two, admin keeps the wildcard', async () => {
     const first = await ensureSystemRoles();
-    expect(first).toEqual({ created: 5, refreshed: 0, strippedRoles: 0, strippedUsers: 0 });
-    expect(await Role.countDocuments()).toBe(5);
+    expect(first).toEqual({ created: 7, refreshed: 0, strippedRoles: 0, strippedUsers: 0 });
+    expect(await Role.countDocuments()).toBe(7);
 
     const second = await ensureSystemRoles();
     expect(second).toEqual({ created: 0, refreshed: 0, strippedRoles: 0, strippedUsers: 0 });
-    expect(await Role.countDocuments()).toBe(5);
+    expect(await Role.countDocuments()).toBe(7);
 
     const admin = await Role.findOne({ slug: 'admin' }).orFail().lean().exec();
     expect(admin.permissions).toEqual(['*']);
@@ -138,6 +138,31 @@ describe('ensureSystemRoles', () => {
         strippedRoles: 0,
         strippedUsers: 0,
       });
+    });
+
+    it('renamed field permissions are replaced by their new names, never just stripped', async () => {
+      await ensureSystemRoles();
+      const custom = await Role.create({
+        name: 'HR (custom)',
+        slug: 'hr-manager',
+        permissions: ['employees.view', 'field-sales.view', 'field-sales.manage'],
+      });
+      const both = await Role.create({ name: 'Both', slug: 'both', permissions: ['field.view', 'field-sales.view'] });
+      const holder = await createUser({ roleSlug: 'employee' });
+      await User.updateOne({ _id: holder.user._id }, { $set: { customPermissions: ['field-sales.view', 'payroll.view'] } });
+
+      const result = await ensureSystemRoles();
+      expect(result).toMatchObject({ strippedRoles: 2, strippedUsers: 1 });
+      expect((await Role.findById(custom._id).orFail().lean().exec()).permissions).toEqual([
+        'employees.view',
+        'field.view',
+        'field.manage',
+      ]);
+      expect((await Role.findById(both._id).orFail().lean().exec()).permissions).toEqual(['field.view']);
+      expect((await User.findById(holder.user._id).orFail().lean().exec()).customPermissions).toEqual([
+        'field.view',
+        'payroll.view',
+      ]);
     });
 
     it('never touches a system role, even one holding an unknown name', async () => {

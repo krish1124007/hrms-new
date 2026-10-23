@@ -1,4 +1,6 @@
 import { api } from './axios';
+import type { VehicleType } from './field.api';
+import type { RouteLeg, RoutePoint } from './field-route';
 import type { ListResponse, ItemResponse } from './systemcore.api';
 
 export type ExpenseClaimStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'reimbursed';
@@ -49,11 +51,29 @@ export interface ExpenseReceipt {
   uploadedAt: string;
 }
 
+/** How a travel allowance claim was worked out (claims made from `POST /field/travel/claims`). */
+export interface ExpenseTravel {
+  /** The IST day travelled, `YYYY-MM-DD`. */
+  date: string;
+  vehicleType: VehicleType;
+  ratePerKm: number;
+  /** Km measured between the day's check-in/out points. */
+  computedKm: number;
+  /** Km the employee claimed (equal to `computedKm` unless corrected). */
+  claimedKm: number;
+  /** Road distance was unavailable for part of the day — straight line × 1.3. */
+  estimated: boolean;
+  /** Why the claimed km differs from the calculation (required above 5 %). */
+  reason?: string;
+  /** The day's check-in/out points as measured when the claim was made. */
+  points: RoutePoint[];
+  /** The legs measured between those points (indices into `points`). */
+  legs: RouteLeg[];
+}
+
 export interface ExpenseClaim {
   _id: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   employeeId: string | { _id: string; firstName: string; lastName: string; employeeId?: string };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   category: string | { _id: string; name: string; code: string };
   amount: number;
   acceptedAmount?: number;
@@ -63,12 +83,15 @@ export interface ExpenseClaim {
   receiptUrls: ExpenseReceipt[];
   paymentMethod?: ExpensePaymentMethod;
   status: ExpenseClaimStatus;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   approvedBy?: string | { _id: string; firstName: string; lastName: string; email: string };
   approvedAt?: string;
   rejectedReason?: string;
   reimbursedAt?: string;
   reimbursementRef?: string;
+  /** Set on travel allowance claims. */
+  travel?: ExpenseTravel;
+  /** The id of the field visit this expense was incurred at, if linked (never populated). */
+  visitId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +106,8 @@ export interface ExpenseClaimInput {
   receiptUrls?: { name: string; fileUrl: string }[];
   paymentMethod?: ExpensePaymentMethod;
   status?: 'draft' | 'pending';
+  /** Link the expense to the field visit it belongs to. */
+  visitId?: string;
 }
 
 export interface ExpenseReports {

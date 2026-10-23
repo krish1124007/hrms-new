@@ -24,14 +24,21 @@ export interface IFieldTask extends Document {
   title: string;
   description?: string;
   assignedTo: Types.ObjectId;
-  clientId?: Types.ObjectId;
+  siteId?: Types.ObjectId;
   location?: IFieldTaskLocation;
   priority: FieldTaskPriority;
   status: FieldTaskStatus;
   dueDate?: Date;
   completedAt?: Date;
+  /** Proof photos (`/uploads/<key>`), signed into links on the way out. */
   completionPhotos: string[];
   completionNotes?: string;
+  /** Idempotency key of the completion (offline replays are no-ops). */
+  completionClientRef?: string;
+  /** When the server received the completion (`completedAt` is the captured time). */
+  completionReceivedAt?: Date;
+  /** User who created the task. */
+  createdBy?: Types.ObjectId;
   verifiedBy?: Types.ObjectId;
   verifiedAt?: Date;
   createdAt: Date;
@@ -51,7 +58,7 @@ const fieldTaskSchema = new Schema<IFieldTask>({
   title: { type: String, required: true, trim: true },
   description: String,
   assignedTo: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
-  clientId: { type: Schema.Types.ObjectId, ref: 'Client' },
+  siteId: { type: Schema.Types.ObjectId, ref: 'FieldSite' },
   location: locationSchema,
   priority: {
     type: String,
@@ -67,6 +74,9 @@ const fieldTaskSchema = new Schema<IFieldTask>({
   completedAt: Date,
   completionPhotos: { type: [String], default: [] },
   completionNotes: String,
+  completionClientRef: String,
+  completionReceivedAt: Date,
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
   verifiedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   verifiedAt: Date,
 });

@@ -91,8 +91,13 @@ describe('request timeouts', () => {
     expect(isTransfer({ url: '/attendance/close-days', data: undefined, responseType: undefined })).toBe(true);
     expect(isTransfer({ url: '/leaves/balances/open-year', data: undefined, responseType: undefined })).toBe(true);
     expect(isTransfer({ url: '/employees/export?format=csv', data: undefined, responseType: undefined })).toBe(true);
-    expect(isTransfer({ url: '/field/payments/p1/receipt', data: undefined, responseType: 'blob' })).toBe(true);
+    expect(isTransfer({ url: '/field/reports/daily', data: undefined, responseType: 'blob' })).toBe(true);
     expect(isTransfer({ url: '/employees', data: undefined, responseType: undefined })).toBe(false);
     expect(isTransfer({ url: '/payroll/cycles/abc123', data: undefined, responseType: undefined })).toBe(false);
+  });
+
+  it('gives the site import the long timeout and no longer names the old client import', () => {
+    expect(isTransfer({ url: '/field/sites/import', data: undefined, responseType: undefined })).toBe(true);
+    expect(isTransfer({ url: '/field/clients/import', data: undefined, responseType: undefined })).toBe(false);
   });
 });

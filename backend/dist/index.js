@@ -11,7 +11,6 @@ import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { redis, disconnectRedis } from './config/redis.js';
 import { createApp, docsEnabledByDefault } from './app.js';
 import { mailBootProblem } from './lib/mail-boot-check.js';
-import { registerFieldTrackingNamespace } from './sockets/field-tracking.socket.js';
 const REDIS_BOOT_TIMEOUT_MS = 5_000;
 /** Resolves true once Redis answers a PING, false if it errors or takes too long. */
 async function redisReachable(timeoutMs) {
@@ -58,7 +57,6 @@ async function bootstrap() {
         logger.debug({ id: socket.id }, 'Socket connected');
         socket.on('disconnect', () => logger.debug({ id: socket.id }, 'Socket disconnected'));
     });
-    registerFieldTrackingNamespace(io);
     // Expose io to services that push events (notification.service etc.)
     const { setIO } = await import('./sockets/io-registry.js');
     setIO(io);
@@ -127,6 +125,12 @@ async function bootstrap() {
     startAttendanceWorker();
     logger.info('Attendance worker started');
     void ensureAttendanceSchedules().catch((err) => logger.warn({ err }, 'Could not register the attendance day-close schedule'));
+    // Nightly field run at 00:15 business time: auto-close forgotten visits,
+    // mark missed plans, plan recurring visits a week ahead. Never awaited.
+    const { startFieldWorker, ensureFieldSchedules } = await import('./jobs/field.jobs.js');
+    startFieldWorker();
+    logger.info('Field worker started');
+    void ensureFieldSchedules().catch((err) => logger.warn({ err }, 'Could not register the field-nightly schedule'));
     // Re-apply the operator's monthly auto-backup choice, persisted by
     // PUT /api/v1/backups/schedule { enabled } (enabled on a fresh install).
     // Idempotent — re-registering overwrites the repeatable job in Redis.

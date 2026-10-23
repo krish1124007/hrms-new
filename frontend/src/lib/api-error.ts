@@ -28,9 +28,38 @@ export function apiErrorCode(err: unknown): string | undefined {
   return envelope(err)?.error?.code;
 }
 
+/**
+ * Plain-English sentences for API error codes whose own message is terse or
+ * technical. Any other error shows the server's message as it is.
+ */
+export const API_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  // Travel allowance — POST /field/travel/claims
+  UNKNOWN_VEHICLE: 'That vehicle is no longer in the field settings. Reload the page and pick another vehicle.',
+  VEHICLE_RATE_NOT_SET:
+    'No rate per km is set for this vehicle yet, so the claim would come to ₹0. Ask HR to set the vehicle rate in Field settings, then claim again.',
+  NOTHING_TO_CLAIM: 'Nothing to claim: the kilometres for this day come to ₹0.',
+  TA_ALREADY_CLAIMED: 'Travel allowance has already been claimed for this day. Only one travel claim is allowed per day.',
+  REASON_REQUIRED:
+    'The kilometres differ from the calculated distance by more than 5 %. Add a reason for your approver.',
+  NO_FIELD_WORK: 'There is no completed site visit on this day, so there is no travel to claim.',
+  // Expense claims
+  TRAVEL_CLAIM_LOCKED:
+    'A travel allowance claim cannot be edited (only its description can). Withdraw it and claim the day again from Travel allowance.',
+  INVALID_VISIT: "The linked visit isn't one of the claimant's own field visits.",
+  // Field reports
+  RANGE_TOO_LONG: 'A field report can cover at most 92 days. Choose a shorter date range.',
+};
+
+/** The plain-English sentence for an API error code, if it has one. */
+export function apiErrorCodeMessage(code: string | undefined): string | undefined {
+  return code && Object.hasOwn(API_ERROR_MESSAGES, code) ? API_ERROR_MESSAGES[code] : undefined;
+}
+
 /** A user-facing sentence for any error a request can throw. */
 export function apiErrorMessage(err: unknown, fallback = 'Something went wrong'): string {
   const body = envelope(err);
+  const known = apiErrorCodeMessage(body?.error?.code);
+  if (known) return known;
   if (body?.error?.message) return body.error.message;
   if (err instanceof AxiosError) {
     if (err.code === 'ERR_NETWORK') return 'Network error — check your connection';

@@ -10,8 +10,10 @@
  * Custom roles and users may still hold names that left the catalogue (they
  * were never checked by any route, so removing them changes no access). Those
  * are stripped, each removal logged; `*` and every catalogued name are kept.
- * Users are only ever written through that `customPermissions` strip — their
- * credentials, role and every other field are never touched.
+ * A name that was *renamed* (`RENAMED_PERMISSIONS`, e.g. `field-sales.view` →
+ * `field.view`) is replaced by its new name instead — the access it gave is
+ * kept. Users are only ever written through that `customPermissions` clean-up
+ * — their credentials, role and every other field are never touched.
  */
 import { logger } from '../config/logger.js';
 import { ALL_PERMISSIONS } from '../config/permissions.js';
@@ -20,6 +22,31 @@ import { User } from '../models/user.model.js';
 /** Everything a stored permission list may legitimately contain. */
 const KEEPABLE = [...ALL_PERMISSIONS, '*'];
 const isKeepable = (permission) => permission === '*' || ALL_PERMISSIONS.has(permission);
+/**
+ * Old name → new name. Migration 20261023000001 renames them in the database;
+ * this keeps a seed run that comes first (or a restored backup) from
+ * stripping them instead.
+ */
+export const RENAMED_PERMISSIONS = {
+    'field-sales.view': 'field.view',
+    'field-sales.manage': 'field.manage',
+};
+/** `permissions` with renamed names replaced, retired ones dropped, duplicates removed. */
+function cleanPermissions(permissions) {
+    const kept = [];
+    const removed = [];
+    const renamed = [];
+    for (const permission of permissions) {
+        const next = RENAMED_PERMISSIONS[permission] ?? permission;
+        if (next !== permission)
+            renamed.push(`${permission} → ${next}`);
+        if (!isKeepable(next))
+            removed.push(permission);
+        else if (!kept.includes(next))
+            kept.push(next);
+    }
+    return { kept, removed, renamed };
+}
 async function upsertSystemRoles(result) {
     for (const definition of DEFAULT_ROLES) {
         const existing = await Role.findOne({ slug: definition.slug }).exec();
@@ -53,11 +80,10 @@ async function stripRetiredFromCustomRoles(result) {
         .lean()
         .exec();
     for (const role of stale) {
-        const removed = role.permissions.filter((permission) => !isKeepable(permission));
-        const kept = role.permissions.filter(isKeepable);
+        const { kept, removed, renamed } = cleanPermissions(role.permissions);
         await Role.updateOne({ _id: role._id }, { $set: { permissions: kept } }).exec();
         result.strippedRoles += 1;
-        logger.warn({ roleId: String(role._id), slug: role.slug, removed }, 'Removed retired permissions from custom role');
+        logger.warn({ roleId: String(role._id), slug: role.slug, removed, renamed }, 'Removed retired / renamed permissions on custom role');
     }
 }
 async function stripRetiredFromUsers(result) {
@@ -68,13 +94,12 @@ async function stripRetiredFromUsers(result) {
         .lean()
         .exec();
     for (const user of stale) {
-        const removed = user.customPermissions.filter((permission) => !isKeepable(permission));
-        const kept = user.customPermissions.filter(isKeepable);
+        const { kept, removed, renamed } = cleanPermissions(user.customPermissions);
         await User.updateOne({ _id: user._id }, { $set: { customPermissions: kept } })
             .setOptions({ withDeleted: true })
             .exec();
         result.strippedUsers += 1;
-        logger.warn({ userId: String(user._id), removed }, 'Removed retired permissions from user customPermissions');
+        logger.warn({ userId: String(user._id), removed, renamed }, 'Removed retired / renamed permissions on user customPermissions');
     }
 }
 export async function ensureSystemRoles() {

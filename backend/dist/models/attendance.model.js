@@ -28,12 +28,14 @@ const metadataSchema = new Schema({
     faceConfidence: Number,
     autoCheckout: { type: Boolean },
     regularized: { type: Boolean },
+    fieldVisitId: String,
+    fieldProvisional: { type: Boolean },
 }, { _id: false });
 const checkinSchema = new Schema({
     time: Date,
     method: {
         type: String,
-        enum: ['face', 'qr', 'dynamic_qr', 'ip', 'site', 'geofence', 'device', 'manual'],
+        enum: ['face', 'qr', 'dynamic_qr', 'ip', 'site', 'geofence', 'device', 'manual', 'field_visit'],
     },
     location: locationSchema,
     photo: String,

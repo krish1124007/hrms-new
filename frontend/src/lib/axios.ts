@@ -34,7 +34,7 @@ const LONG_RUNNING: readonly RegExp[] = [
   /\/attendance\/close-days?$/,
   /\/leaves\/balances\/(open-year|reset|allocate)/,
   /\/backups/,
-  /\/(employees|assets|field\/clients)\/import$/,
+  /\/(employees|assets|field\/sites)\/import$/,
   /\/holidays\/(import-calendar|rollover)$/,
   /\/export\b/,
   /\/reports?\b/,

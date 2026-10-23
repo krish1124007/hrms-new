@@ -12,7 +12,6 @@
     "seed:admin": "tsx src/scripts/seed-admin.ts",
     "backups:relocate": "tsx src/scripts/relocate-backups.ts",
     "salary:fix-stash": "tsx src/scripts/fix-salary-stash.ts",
-    "field:recompute-ledgers": "tsx src/scripts/recompute-field-ledgers.ts",
     "migrate:create": "migrate-mongo create -f migrate-mongo-config.cjs",
     "migrate:up": "migrate-mongo up -f migrate-mongo-config.cjs",
     "migrate:down": "migrate-mongo down -f migrate-mongo-config.cjs",

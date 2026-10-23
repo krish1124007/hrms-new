@@ -19,11 +19,11 @@ export declare const createSiteSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     name: string;
     radius: number;
-    isActive: boolean;
     location: {
         lat: number;
         lng: number;
     };
+    isActive: boolean;
     assignedEmployees: string[];
     address?: string | undefined;
 }, {
@@ -56,22 +56,22 @@ export declare const updateSiteSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     name?: string | undefined;
     radius?: number | undefined;
-    address?: string | undefined;
-    isActive?: boolean | undefined;
     location?: {
         lat: number;
         lng: number;
     } | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     assignedEmployees?: string[] | undefined;
 }, {
     name?: string | undefined;
     radius?: number | undefined;
-    address?: string | undefined;
-    isActive?: boolean | undefined;
     location?: {
         lat: number;
         lng: number;
     } | undefined;
+    address?: string | undefined;
+    isActive?: boolean | undefined;
     assignedEmployees?: string[] | undefined;
 }>;
 export declare const listSchema: z.ZodObject<{

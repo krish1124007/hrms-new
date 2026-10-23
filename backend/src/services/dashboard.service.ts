@@ -11,8 +11,6 @@ import { PayrollCycle } from '../models/payroll-cycle.model.js';
 import { Project } from '../models/project.model.js';
 import { Task } from '../models/task.model.js';
 import { Visit } from '../models/visit.model.js';
-import { ProductOrder } from '../models/product-order.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
 import { logger } from '../config/logger.js';
 import {
   businessDayLabels,
@@ -24,6 +22,7 @@ import {
 import { classifyDay, listHolidaysBetween } from '../lib/day-classifier.js';
 import { DEFAULT_WORK_DAYS } from '../lib/week-off.js';
 import { getWeekOffRule } from './week-off.service.js';
+import { fieldDay } from './field-route.service.js';
 
 /* ─────────────── Types ─────────────── */
 
@@ -43,10 +42,25 @@ export interface DashboardData {
   payroll?: { lastProcessedMonth: string; totalPayroll: number };
   projects?: { active: number; overdue: number; completedThisMonth: number };
   tasks?: { myPending: number; myOverdue: number; completedThisWeek: number };
-  fieldSales?: { activeAgents: number; visitsToday: number; ordersToday: number };
+  field?: { activeAgents: number; visitsToday: number };
 }
 
 /* ─────────────── Helpers ─────────────── */
+
+/**
+ * Today's field figures (IST day): visits checked in (cancelled ones aside)
+ * and how many people made them. Locations are only recorded at check-in /
+ * check-out now, so "active in the field" means "checked in at a site today".
+ */
+export async function fieldTodayFigures(): Promise<{ activeAgents: number; visitsToday: number }> {
+  const { from, to } = fieldDay();
+  const checkedInToday = { 'checkIn.time': { $gte: from, $lt: to }, status: { $ne: 'cancelled' } };
+  const [people, visitsToday] = await Promise.all([
+    Visit.distinct('employeeId', checkedInToday).exec(),
+    Visit.countDocuments(checkedInToday).exec(),
+  ]);
+  return { activeAgents: people.length, visitsToday };
+}
 
 /** Business-timezone day bounds — the attendance controller uses the same
  *  helpers, so "present today" here means the same day it does there. */
@@ -325,28 +339,14 @@ export async function getDashboardData(
     );
   }
 
-  /* ── Field Sales ── */
-  if (enabledModules.includes('fieldSales')) {
+  /* ── Field Visits ── */
+  if (enabledModules.includes('field')) {
     tasks.push(
       (async () => {
         try {
-          const [activeAgents, visitsToday, ordersToday] = await Promise.all([
-            // Agents that have sent a location ping today
-            LocationTrack.distinct('employeeId', {
-              timestamp: { $gte: todayStart, $lte: todayEnd },
-            }).then((ids) => ids.length),
-            Visit.countDocuments({
-              createdAt: { $gte: todayStart, $lte: todayEnd },
-              status: { $ne: 'cancelled' },
-            }),
-            ProductOrder.countDocuments({
-              createdAt: { $gte: todayStart, $lte: todayEnd },
-              status: { $ne: 'cancelled' },
-            }),
-          ]);
-          data.fieldSales = { activeAgents, visitsToday, ordersToday };
+          data.field = await fieldTodayFigures();
         } catch (err) {
-          logger.warn({ err }, 'Dashboard: fieldSales query failed');
+          logger.warn({ err }, 'Dashboard: field query failed');
         }
       })(),
     );
