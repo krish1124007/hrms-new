@@ -16,7 +16,9 @@ export type NotificationType =
   | 'regularization_request'
   | 'regularization_decision'
   | 'decision'
-  | 'payslip_ready';
+  | 'payslip_ready'
+  /** Field Visits: a report filed, a task done, a visit planned for you. */
+  | 'field_update';
 
 export interface INotification extends Document {
   userId: Types.ObjectId;
@@ -47,6 +49,7 @@ const notificationSchema = new Schema<INotification>({
       'regularization_decision',
       'decision',
       'payslip_ready',
+      'field_update',
     ],
     required: true,
   },

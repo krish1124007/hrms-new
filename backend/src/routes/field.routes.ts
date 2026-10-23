@@ -9,6 +9,7 @@ import { asyncHandler } from '../lib/async-handler.js';
 import * as settings from '../controllers/field-settings.controller.js';
 import * as sites from '../controllers/field-sites.controller.js';
 import * as visits from '../controllers/field-visits.controller.js';
+import * as schedules from '../controllers/field-schedules.controller.js';
 import * as tasks from '../controllers/field-tasks.controller.js';
 import * as tracking from '../controllers/field-tracking.controller.js';
 import * as team from '../controllers/field-team.controller.js';
@@ -108,16 +109,8 @@ router.patch(
 router.delete('/sites/:id', requirePermission('field.manage'), asyncHandler(sites.deleteSite));
 
 /* ── Visits ── */
-router.get(
-  '/visits/today',
-  requirePermission('field.view'),
-  asyncHandler(visits.todayVisits),
-);
-router.get(
-  '/visits/timeline/:employeeId',
-  requirePermission('field.view'),
-  asyncHandler(visits.visitTimeline),
-);
+// Offline-safe writes (clientRef + capturedAt); the record-level rules
+// (own visit, direct reports, 48 h report window) live in the controller.
 router.post(
   '/visits/check-in',
   requirePermission('field.view'),
@@ -125,10 +118,28 @@ router.post(
   asyncHandler(visits.checkIn),
 );
 router.post(
+  '/visits/plan',
+  requirePermission('field.view'), // self and direct reports; field.manage anyone
+  validate(visits.planSchema),
+  asyncHandler(visits.planVisit),
+);
+router.post(
   '/visits/:id/check-out',
   requirePermission('field.view'),
   validate(visits.checkOutSchema),
   asyncHandler(visits.checkOut),
+);
+router.patch(
+  '/visits/:id/report',
+  requirePermission('field.view'),
+  validate(visits.reportPatchSchema),
+  asyncHandler(visits.updateReport),
+);
+router.post(
+  '/visits/:id/cancel',
+  requirePermission('field.view'),
+  validate(visits.cancelSchema),
+  asyncHandler(visits.cancelVisit),
 );
 router.get(
   '/visits',
@@ -136,28 +147,38 @@ router.get(
   validate(visits.listQuerySchema, 'query'),
   asyncHandler(visits.listVisits),
 );
-router.post(
-  '/visits',
-  requirePermission('field.view'),
-  validate(visits.createVisitSchema),
-  asyncHandler(visits.createVisit),
-);
+router.get('/visits/:id', requirePermission('field.view'), asyncHandler(visits.getVisit));
+router.delete('/visits/:id', requirePermission('field.manage'), asyncHandler(visits.deleteVisit));
+
+/* ── My day ── */
 router.get(
-  '/visits/:id',
+  '/my-day',
   requirePermission('field.view'),
-  asyncHandler(visits.getVisit),
+  validate(visits.myDayQuerySchema, 'query'),
+  asyncHandler(visits.myDay),
 );
+
+/* ── Recurring visits ── */
+router.get(
+  '/visit-schedules',
+  requirePermission('field.view'),
+  validate(schedules.listQuerySchema, 'query'),
+  asyncHandler(schedules.listSchedules),
+);
+router.post(
+  '/visit-schedules',
+  requirePermission('field.view'), // self and direct reports; field.manage anyone
+  validate(schedules.createScheduleSchema),
+  asyncHandler(schedules.createSchedule),
+);
+router.get('/visit-schedules/:id', requirePermission('field.view'), asyncHandler(schedules.getSchedule));
 router.patch(
-  '/visits/:id',
+  '/visit-schedules/:id',
   requirePermission('field.view'),
-  validate(visits.updateVisitSchema),
-  asyncHandler(visits.updateVisit),
+  validate(schedules.updateScheduleSchema),
+  asyncHandler(schedules.updateSchedule),
 );
-router.delete(
-  '/visits/:id',
-  requirePermission('field.manage'),
-  asyncHandler(visits.deleteVisit),
-);
+router.delete('/visit-schedules/:id', requirePermission('field.view'), asyncHandler(schedules.deleteSchedule));
 
 /* ── Tasks ── */
 router.get(
@@ -180,7 +201,7 @@ router.get(
 );
 router.post(
   '/tasks',
-  requirePermission('field.manage'),
+  requirePermission('field.view'), // to self and direct reports; field.manage anyone
   validate(tasks.createTaskSchema),
   asyncHandler(tasks.createTask),
 );
@@ -197,7 +218,7 @@ router.patch(
 );
 router.delete(
   '/tasks/:id',
-  requirePermission('field.manage'),
+  requirePermission('field.view'), // field.manage, the creator or the assignee's manager
   asyncHandler(tasks.deleteTask),
 );
 router.patch(
