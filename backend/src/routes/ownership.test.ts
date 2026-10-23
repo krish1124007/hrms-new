@@ -21,7 +21,6 @@ import { OvertimeRequest } from '../models/overtime-request.model.js';
 import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
 import { FieldTask } from '../models/field-task.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -778,7 +777,7 @@ describe('field module', () => {
     expect((await request(app).get(`/api/v1/field/visits/${visit.body.data._id}`).set(auth(B.token))).status).toBe(403);
   });
 
-  it("403 on another employee's task, timeline and tracking history", async () => {
+  it("403 on another employee's task, timeline and day route", async () => {
     const task = await FieldTask.create({ title: 'Deliver', assignedTo: B.employee._id });
     const id = String(task._id);
     expect((await request(app).get(`/api/v1/field/tasks/${id}`).set(auth(A.token))).status).toBe(
@@ -797,25 +796,14 @@ describe('field module', () => {
     expect(team.status).toBe(200);
     expect(team.body.data).toEqual([]);
 
-    await LocationTrack.create({
-      employeeId: B.employee._id,
-      location: { type: 'Point', coordinates: [72.8, 19.0] },
-    });
-    const history = await request(app)
-      .get(`/api/v1/field/tracking/history/${B.employee._id}`)
-      .set(auth(A.token));
-    expect(history.status).toBe(403);
+    const route = await request(app).get(`/api/v1/field/route/${B.employee._id}`).set(auth(A.token));
+    expect(route.status).toBe(403);
     const timeline = await request(app)
       .get(`/api/v1/field/visits/timeline/${B.employee._id}`)
       .set(auth(A.token));
     expect(timeline.status).toBe(403);
-    const live = await request(app).get('/api/v1/field/tracking/live').set(auth(A.token));
-    expect(live.status).toBe(200);
-    expect(live.body.data).toEqual([]);
 
-    const own = await request(app)
-      .get(`/api/v1/field/tracking/history/${A.employee._id}`)
-      .set(auth(A.token));
+    const own = await request(app).get(`/api/v1/field/route/${A.employee._id}`).set(auth(A.token));
     expect(own.status).toBe(200);
   });
 

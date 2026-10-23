@@ -190,11 +190,12 @@ describe('DEFAULT_ROLES', () => {
     expect(has('employee')).toBe(false);
   });
 
-  it('field roles: field_employee = employee + field.view; field_manager = manager + field.view + field.manage; HR manage the field', () => {
+  it('field roles: field_employee = employee + field.view; field_manager = manager + field.view (team-scoped, no field.manage); HR manage the field', () => {
     const perms = (slug: string): string[] => DEFAULT_ROLES.find((role) => role.slug === slug)!.permissions;
     expect(PERMISSIONS_BY_MODULE.field).toEqual(['field.view', 'field.manage']);
     expect(perms('field_employee').sort()).toEqual([...perms('employee'), 'field.view'].sort());
-    expect(perms('field_manager').sort()).toEqual([...perms('manager'), 'field.view', 'field.manage'].sort());
+    expect(perms('field_manager').sort()).toEqual([...perms('manager'), 'field.view'].sort());
+    expect(perms('field_manager')).not.toContain('field.manage');
     for (const slug of ['hr_executive', 'hr_manager']) {
       expect({ slug, has: ['field.view', 'field.manage'].every((p) => perms(slug).includes(p)) }).toEqual({ slug, has: true });
     }
