@@ -2,9 +2,10 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { expenseClaimsApi, type ExpenseClaim } from '@/lib/expense-claims.api';
 import { createAppQueryClient } from '@/lib/query-client';
+import { useAuthStore } from '@/stores/auth.store';
 import ExpenseListPage from './ExpenseListPage';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() }) }));
@@ -64,12 +65,23 @@ function renderPage(): void {
   );
 }
 
+function signIn(permissions: string[]): void {
+  useAuthStore.getState().setSession({
+    user: { _id: 'u1', email: 'approver@example.com', role: { slug: 'x', name: 'X', permissions } },
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(() => {
+  useAuthStore.getState().clear();
+});
+
 describe('ExpenseListPage — travel allowance', () => {
   it('shows the travel breakdown in the claim details', async () => {
+    signIn(['expenses.view', 'expenses.approve', 'field.view']);
     list.mockResolvedValue({
       success: true,
       data: [{ ...travelClaim, visitId: 'v7' }],
@@ -96,6 +108,24 @@ describe('ExpenseListPage — travel allowance', () => {
 
     const visit = screen.getByRole('link', { name: 'View visit' });
     expect(visit).toHaveAttribute('href', '/field/visits/v7');
+  });
+
+  it('describes the linked visit without a link for an approver without field access', async () => {
+    signIn(['expenses.view', 'expenses.approve']);
+    list.mockResolvedValue({
+      success: true,
+      data: [{ ...travelClaim, visitId: 'v7' }],
+      pagination: { page: 1, limit: 25, total: 1, pages: 1 },
+    } as never);
+    renderPage();
+    await screen.findByText(/50 km · Two-wheeler/);
+    await userEvent.click(screen.getByRole('button', { name: /details/i }));
+    const linked = await screen.findByTestId('linked-visit');
+    // The visit page would refuse them: no link, but the day and the sites the claim names.
+    expect(within(linked).queryByRole('link')).not.toBeInTheDocument();
+    expect(linked).toHaveTextContent('Field visit');
+    expect(linked).toHaveTextContent('22 Oct 2026');
+    expect(linked).toHaveTextContent('Acme Plant → Depot 4');
   });
 
   it('shows the breakdown when approving a travel claim', async () => {

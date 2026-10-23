@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RejectionReason } from '@/components/common/RejectionReason';
 import { LinkedVisit, TravelBreakdown } from '@/components/expense-claims/TravelBreakdown';
+import { travelSites } from '@/lib/field-route';
 import {
   useExpenseClaims,
   useApproveExpenseClaim,
@@ -412,7 +413,11 @@ export default function ExpenseListPage(): ReactElement {
             <TravelBreakdown travel={approvingClaim.travel} />
           )}
           {approvingClaim?._id === approvingId && approvingClaim.visitId && (
-            <LinkedVisit visitId={approvingClaim.visitId} />
+            <LinkedVisit
+              visitId={approvingClaim.visitId}
+              date={approvingClaim.date}
+              sites={travelSites(approvingClaim.travel?.points)}
+            />
           )}
           <div>
             <Label htmlFor="ec-accept">Accepted amount (₹)</Label>
@@ -539,7 +544,7 @@ function ClaimDetails({ claim }: { claim: ExpenseClaim }): ReactElement {
           <TravelBreakdown travel={claim.travel} />
         </div>
       )}
-      {claim.visitId && <LinkedVisit visitId={claim.visitId} />}
+      {claim.visitId && <LinkedVisit visitId={claim.visitId} date={claim.date} sites={travelSites(claim.travel?.points)} />}
       {claim.status === 'rejected' && <RejectionReason reason={claim.rejectedReason} title="Claim rejection reason" />}
     </DialogBody>
   );

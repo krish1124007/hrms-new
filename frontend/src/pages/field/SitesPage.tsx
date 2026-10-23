@@ -20,7 +20,7 @@ import {
   useDeleteSite,
   useFieldReps,
   useFieldSettings,
-  useMyEmployeeId,
+  useMyUserId,
   useSites,
 } from '@/hooks/use-field';
 import { personName, type Site } from '@/lib/field.api';
@@ -46,7 +46,7 @@ export default function SitesPage(): ReactElement {
   };
 
   const canManage = useCanManageField();
-  const myEmployeeId = useMyEmployeeId();
+  const myUserId = useMyUserId();
   const canPick = useCanPickEmployees();
   const { data: people = [] } = useFieldReps(canPick);
   const { settings } = useFieldSettings();
@@ -161,7 +161,7 @@ export default function SitesPage(): ReactElement {
       width: '56px',
       cell: (s) => {
         const actions: RowAction[] = [];
-        if (canEditSite(s, { canManage, myEmployeeId })) {
+        if (canEditSite(s, { canManage, myUserId })) {
           actions.push({
             label: 'Edit',
             icon: Pencil,

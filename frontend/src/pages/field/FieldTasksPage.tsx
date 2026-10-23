@@ -12,6 +12,7 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from '@/c
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { RowActionsMenu, type RowAction } from '@/components/common/RowActionsMenu';
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
+import { EmployeeSelect } from '@/components/field/EmployeeSelect';
 import { SitePicker } from '@/components/field/SitePicker';
 import { PhotoInput, PhotoStrip } from '@/components/field/FieldBits';
 import {
@@ -24,6 +25,7 @@ import {
   useFieldReps,
   useFieldTasks,
   useMyEmployeeId,
+  useMyUserId,
   useUpdateFieldTask,
 } from '@/hooks/use-field';
 import { isNoEmployeeProfileError } from '@/lib/api-error';
@@ -37,6 +39,7 @@ import {
   type FieldTaskPriority,
   type FieldTaskStatus,
 } from '@/lib/field.api';
+import { canManageTask } from '@/lib/field-visits';
 import { formatDate, toISTDateKey, todayIST } from '@/lib/format';
 
 const PRIORITY_VARIANT: Record<FieldTaskPriority, 'destructive' | 'warning' | 'secondary' | 'outline'> = {
@@ -86,14 +89,18 @@ const blank: FormState = {
 const dueInstant = (key: string): string => businessInstant(key, '23:59').toISOString();
 
 /**
- * Tasks at sites: `field.manage` assigns them (and follows them up), the
- * assignee accepts and completes them — usually on the mobile app, here too.
- * Used as its own page and as the Tasks tab of Planning.
+ * Tasks at sites. Anyone with field access assigns them to themselves or
+ * their direct reports (`field.manage`: to anyone) and edits, cancels or
+ * deletes the ones they created or that belong to their team; the assignee
+ * accepts and completes them — usually on the mobile app, here too. The
+ * server has the last word (a refusal comes back as a toast). Used as its
+ * own page and as the Tasks tab of Planning.
  */
 export function FieldTasksPanel(): ReactElement {
   const canManage = useCanManageField();
   const canPick = useCanPickEmployees();
   const myEmployeeId = useMyEmployeeId();
+  const myUserId = useMyUserId();
   const { data: reps = [] } = useFieldReps(canPick);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
@@ -141,12 +148,16 @@ export function FieldTasksPanel(): ReactElement {
     setOpen(true);
   };
 
+  // '' in the picker is the signed-in employee ("Myself"); the API needs the id spelled out.
+  const assignedTo = form.assignedTo || myEmployeeId || '';
+  const formValid = !!form.title.trim() && !!assignedTo;
+
   const submit = (): void => {
-    if (!form.title.trim() || !form.assignedTo) return;
+    if (!formValid) return;
     const input: FieldTaskInput = {
       title: form.title.trim(),
       description: form.description.trim() || undefined,
-      assignedTo: form.assignedTo,
+      assignedTo,
       siteId: form.siteId || undefined,
       priority: form.priority,
       status: form.status,
@@ -220,12 +231,13 @@ export function FieldTasksPanel(): ReactElement {
       cell: (r) => {
         const closed = CLOSED.includes(r.status);
         const mine = isMine(r);
+        const manages = canManageTask(r, { canManage, myUserId, myEmployeeId });
         const menu: RowAction[] = [];
-        if (canManage && !closed) {
+        if (manages && !closed) {
           menu.push({ label: 'Edit', icon: Pencil, onSelect: () => startEdit(r) });
           menu.push({ label: 'Cancel task', icon: XCircle, onSelect: () => setConfirm({ kind: 'cancel', t: r }), destructive: true });
         }
-        if (canManage) menu.push({ label: 'Delete', icon: Trash2, onSelect: () => setConfirm({ kind: 'delete', t: r }), destructive: true });
+        if (manages) menu.push({ label: 'Delete', icon: Trash2, onSelect: () => setConfirm({ kind: 'delete', t: r }), destructive: true });
         return (
           <div className="flex items-center justify-end gap-1">
             {mine && r.status === 'new' && (
@@ -262,7 +274,7 @@ export function FieldTasksPanel(): ReactElement {
                 <CheckCircle2 className="size-4" />
               </button>
             )}
-            {menu.length > 0 && <RowActionsMenu actions={menu} />}
+            {menu.length > 0 && <RowActionsMenu actions={menu} label={`Actions for ${r.title}`} />}
           </div>
         );
       },
@@ -297,12 +309,10 @@ export function FieldTasksPanel(): ReactElement {
             ))}
           </Select>
         )}
-        {canManage && (
-          <Button onClick={startCreate} className="ml-auto">
-            <Plus className="size-4" />
-            New task
-          </Button>
-        )}
+        <Button onClick={startCreate} className="ml-auto">
+          <Plus className="size-4" />
+          New task
+        </Button>
       </div>
 
       {isNoEmployeeProfileError(error) ? (
@@ -335,21 +345,13 @@ export function FieldTasksPanel(): ReactElement {
             <Label htmlFor="task-desc">Description</Label>
             <Textarea id="task-desc" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="task-assignee">Assign to *</Label>
-            <Select id="task-assignee" value={form.assignedTo} onChange={(e) => setForm({ ...form, assignedTo: e.target.value })}>
-              <option value="">— Select an employee —</option>
-              {form.assignedTo && !reps.some((r) => r._id === form.assignedTo) && editing && (
-                <option value={form.assignedTo}>{personName(editing.assignedTo)}</option>
-              )}
-              {reps.map((e) => (
-                <option key={e._id} value={e._id}>
-                  {e.firstName} {e.lastName}
-                  {e.employeeId ? ` (${e.employeeId})` : ''}
-                </option>
-              ))}
-            </Select>
-          </div>
+          <EmployeeSelect
+            id="task-assignee"
+            label="Assign to"
+            value={form.assignedTo}
+            current={editing && typeof editing.assignedTo === 'object' ? editing.assignedTo : null}
+            onChange={(id) => setForm({ ...form, assignedTo: id })}
+          />
           <SitePicker
             id="task-site"
             label="Site (optional)"
@@ -391,7 +393,7 @@ export function FieldTasksPanel(): ReactElement {
           <Button
             onClick={submit}
             loading={create.isPending || update.isPending}
-            disabled={!form.title.trim() || !form.assignedTo}
+            disabled={!formValid}
           >
             {editing ? 'Save' : 'Assign task'}
           </Button>
@@ -466,7 +468,11 @@ export default function FieldTasksPage(): ReactElement {
     <div className="space-y-6">
       <PageHeader
         title="Tasks at sites"
-        description={canManage ? 'Assign work at sites and follow it to completion' : 'Work assigned to you'}
+        description={
+          canManage
+            ? 'Assign work at sites and follow it to completion'
+            : 'Your tasks and your team’s — assign work at sites to yourself or the people who report to you'
+        }
         icon={ClipboardList}
         breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Field Visits' }, { label: 'Tasks' }]}
       />

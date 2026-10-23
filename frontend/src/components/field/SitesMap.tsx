@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import { Loader2 } from 'lucide-react';
 import { useSitesMap } from '@/hooks/use-field';
-import { SITE_MAP_LIMIT } from '@/lib/field.api';
+import { SITE_MAP_LIMIT, type LatLng, type SitePin } from '@/lib/field.api';
 import { clampBBox } from '@/lib/map-config';
 import { formatDate } from '@/lib/format';
 import { FitBounds, MapCanvas } from './MapCanvas';
@@ -43,9 +43,13 @@ function BBoxWatcher({ onChange }: { onChange: (bbox: string) => void }): null {
 export function SitesMap({ type, height = 560 }: { type?: string; height?: number | string }): ReactElement {
   const [bbox, setBbox] = useState<string | null>(null);
   const { data, isFetching, error } = useSitesMap(bbox);
-  const all = useMemo(() => data?.data ?? [], [data]);
+  // Only sites with a pin can be drawn (the server sends located ones; a pin-less one is skipped).
+  const all = useMemo(
+    () => (data?.data ?? []).filter((p): p is SitePin & { location: LatLng } => p.location !== null),
+    [data],
+  );
   const pins = useMemo(() => (type ? all.filter((p) => p.type === type) : all), [all, type]);
-  const full = all.length >= SITE_MAP_LIMIT;
+  const full = (data?.data?.length ?? 0) >= SITE_MAP_LIMIT;
   const now = Date.now();
 
   // The opening view is all of India; zoom once to the first sites found.

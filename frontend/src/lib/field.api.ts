@@ -4,8 +4,8 @@ import type { ListResponse, ItemResponse } from './systemcore.api';
 /*
  * Field Visits API (`/api/v1/field/*`). Every read is scoped by the server:
  * `field.manage` sees everyone; `field.view` sees the signed-in employee's
- * own records and their direct reports'. Writes that can be retried carry a
- * `clientRef` (UUID v4) so a double submit creates one record.
+ * own records and their direct reports'. The web never sends a `clientRef`:
+ * the server reads a site created with one as pinned from the mobile app.
  */
 
 /* ──────────────────────────────────────────────────────────── */
@@ -41,17 +41,6 @@ export function refId(ref: string | { _id: string } | null | undefined): string 
 export function personName(ref: string | FieldEmployeeRef | null | undefined): string {
   if (!ref || typeof ref === 'string') return '—';
   return `${ref.firstName} ${ref.lastName}`.trim();
-}
-
-/** A fresh idempotency reference (UUID v4) for one create. */
-export function newClientRef(): string {
-  const c = globalThis.crypto as Crypto | undefined;
-  if (c?.randomUUID) return c.randomUUID();
-  // RFC 4122 v4 from Math.random — only for very old browsers.
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const r = Math.floor(Math.random() * 16);
-    return (ch === 'x' ? r : (r % 4) + 8).toString(16);
-  });
 }
 
 /* ──────────────────────────────────────────────────────────── */
@@ -129,13 +118,15 @@ export interface Site {
   name: string;
   type: string;
   address: Address;
-  location: LatLng;
+  /** `null` for a site without a pin yet (e.g. a migrated client that had no coordinates). */
+  location: LatLng | null;
   radiusM: number;
   contactName?: string;
   contactPhone?: string;
   notes?: string;
   photoUrl?: string;
   assignedTo: FieldEmployeeRef[];
+  /** The login (User) that added the site — `_id` is a user id, not an employee id. */
   createdBy?: Pick<FieldEmployeeRef, '_id' | 'firstName' | 'lastName'> | null;
   createdVia: SiteCreatedVia;
   lastVisitAt?: string | null;
@@ -145,10 +136,8 @@ export interface Site {
   createdAt?: string;
 }
 
-/** `POST /field/sites`. */
+/** `POST /field/sites` — without a `clientRef`, so the server records it as added on the website. */
 export interface SiteInput {
-  clientRef: string;
-  capturedAt?: string;
   name: string;
   type: string;
   location: LatLng & { accuracy?: number };
@@ -163,14 +152,14 @@ export interface SiteInput {
 }
 
 /** `PATCH /field/sites/:id` — any subset; an emptied text field goes as ''. */
-export type SiteUpdate = Partial<Omit<SiteInput, 'clientRef' | 'capturedAt'>>;
+export type SiteUpdate = Partial<SiteInput>;
 
 /** One site on the map (`GET /field/sites/map`, ≤ 500 per view). */
 export interface SitePin {
   _id: string;
   name: string;
   type: string;
-  location: LatLng;
+  location: LatLng | null;
   radiusM: number;
   lastVisitAt?: string | null;
 }
@@ -228,7 +217,7 @@ export interface VisitSite {
   _id: string;
   name: string;
   type: string;
-  location: LatLng;
+  location: LatLng | null;
   radiusM: number;
 }
 
@@ -241,11 +230,12 @@ export interface Report {
   photos: string[];
   documents: Array<{ url: string; name: string }>;
   peopleMet: Array<{ name: string; designation?: string; phone?: string }>;
-  outcome: VisitOutcome;
+  /** `null` when the report was filed without one. */
+  outcome: VisitOutcome | null;
   nextAction?: string;
   followUpDate?: string;
   checklist?: { checklistId: string; answers: Array<{ itemId: string; value: ChecklistAnswerValue }> };
-  submittedAt: string;
+  submittedAt: string | null;
 }
 
 export interface Visit {
@@ -350,6 +340,8 @@ export interface FieldTask {
   /** Signed URLs. */
   completionPhotos: string[];
   completionNotes?: string;
+  /** The login (User id) that created the task. */
+  createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }

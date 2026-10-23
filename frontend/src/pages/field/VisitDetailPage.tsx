@@ -116,7 +116,7 @@ function WorkReport({ visit, checklists }: { visit: Visit; checklists: Checklist
             </Section>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Fact label="Outcome">{OUTCOME_LABEL[r.outcome] ?? r.outcome}</Fact>
+              <Fact label="Outcome">{r.outcome ? (OUTCOME_LABEL[r.outcome] ?? r.outcome) : '—'}</Fact>
               {r.followUpDate && <Fact label="Follow-up on">{formatDate(r.followUpDate)}</Fact>}
               {r.nextAction && (
                 <div className="sm:col-span-2">

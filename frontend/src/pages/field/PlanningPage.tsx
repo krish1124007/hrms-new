@@ -28,7 +28,14 @@ import {
   useVisitSchedules,
 } from '@/hooks/use-field';
 import { addDaysToKey } from '@/lib/business-day';
-import { personName, refId, type FieldEmployeeRef, type Visit, type VisitSchedule } from '@/lib/field.api';
+import {
+  personName,
+  refId,
+  type FieldEmployeeRef,
+  type Visit,
+  type VisitSchedule,
+  type VisitScheduleInput,
+} from '@/lib/field.api';
 import {
   buildRule,
   describeRule,
@@ -225,9 +232,23 @@ function ScheduleDialog({ schedule, open, onClose }: { schedule: VisitSchedule |
 
   const submit = (): void => {
     if (!valid) return;
-    const input = { siteId: form.siteId, employeeId, purpose: form.purpose, rule: buildRule(form.rule) };
-    if (schedule) update.mutate({ id: schedule._id, input }, { onSuccess: onClose });
-    else create.mutate(input, { onSuccess: onClose });
+    const rule = buildRule(form.rule);
+    if (!schedule) {
+      create.mutate({ siteId: form.siteId, employeeId, purpose: form.purpose, rule }, { onSuccess: onClose });
+      return;
+    }
+    // Only what changed: an untouched purpose HR has since renamed or removed
+    // would be refused, and so would the whole edit.
+    const input: Partial<VisitScheduleInput> = {};
+    if (form.siteId !== refId(schedule.siteId)) input.siteId = form.siteId;
+    if (employeeId !== refId(schedule.employeeId)) input.employeeId = employeeId;
+    if (form.purpose !== schedule.purpose) input.purpose = form.purpose;
+    if (JSON.stringify(rule) !== JSON.stringify(buildRule(draftFromRule(schedule.rule)))) input.rule = rule;
+    if (Object.keys(input).length === 0) {
+      onClose();
+      return;
+    }
+    update.mutate({ id: schedule._id, input }, { onSuccess: onClose });
   };
 
   return (
@@ -272,7 +293,8 @@ function ScheduleDialog({ schedule, open, onClose }: { schedule: VisitSchedule |
         </div>
         <ScheduleRuleEditor value={form.rule} onChange={(rule) => setForm((f) => ({ ...f, rule }))} />
         <p className="text-xs text-muted-foreground">
-          Each night the next 7 days of visits are planned from this rule; changing it affects visits not yet planned.
+          Each night the next 7 days of visits are planned from this rule. After a change, visits from tomorrow on follow
+          the new rule; today’s visit stays as it is.
         </p>
       </DialogBody>
       <DialogFooter>
@@ -368,7 +390,7 @@ function RecurringVisits(): ReactElement {
         onConfirm={() => deleting && remove.mutate(deleting._id, { onSuccess: () => setDeleting(null) })}
         loading={remove.isPending}
         title="Delete this recurring visit?"
-        description="No more visits are planned from it. Visits it already planned stay as they are."
+        description="No more visits are planned from it. Its planned visits from tomorrow on are removed; today’s stays."
         confirmLabel="Delete"
       />
     </div>

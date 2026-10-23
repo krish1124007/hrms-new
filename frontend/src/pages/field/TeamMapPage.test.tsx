@@ -144,6 +144,31 @@ describe('TeamMapPage', () => {
     expect(teamStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('moves on to the new day when left open past midnight IST, and keeps refreshing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-23T18:29:30.000Z')); // 23:59:30 IST
+    renderPage();
+    await screen.findAllByTestId('marker');
+    expect(teamStatus.mock.calls[0][0]).toBe('2026-10-23');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TEAM_POLL_MS + 50); // 00:00:30 IST, the next day
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(teamStatus.mock.calls.some(([date]) => date === '2026-10-24')).toBe(true);
+    expect(screen.getByLabelText('Day')).toHaveValue('2026-10-24');
+    expect(screen.getByText(/refreshes every minute/i)).toBeInTheDocument();
+
+    const before = teamStatus.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TEAM_POLL_MS + 50);
+    });
+    expect(teamStatus.mock.calls.length).toBeGreaterThan(before);
+    expect(teamStatus.mock.calls.at(-1)?.[0]).toBe('2026-10-24');
+  });
+
   it('says so when nobody is in scope instead of an empty map', async () => {
     teamStatus.mockResolvedValue({ success: true, data: [] });
     renderPage();
