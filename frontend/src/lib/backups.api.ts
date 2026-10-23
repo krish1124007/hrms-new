@@ -86,7 +86,7 @@ interface ErrorEnvelope {
  * toast would only say "Request failed with status code 404". Read the JSON
  * envelope out of it and rethrow with the server's message (or the status text).
  */
-async function withReadableBlobError(err: unknown): Promise<never> {
+export async function withReadableBlobError(err: unknown): Promise<never> {
   if (!isAxiosError(err) || !(err.response?.data instanceof Blob)) throw err;
   const fallback = err.response.statusText || err.message;
   let message = fallback;
@@ -102,7 +102,7 @@ async function withReadableBlobError(err: unknown): Promise<never> {
 }
 
 /** `attachment; filename="x.tar.gz"` → `x.tar.gz` (null if absent or unreadable). */
-function filenameFromDisposition(header: unknown): string | null {
+export function filenameFromDisposition(header: unknown): string | null {
   if (typeof header !== 'string') return null;
   const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
   if (!match) return null;
