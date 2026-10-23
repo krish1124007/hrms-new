@@ -1,35 +1,50 @@
 import type { ReactNode } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toast } from 'sonner';
-import {
-  fieldApi,
-  type FieldVisit,
-  type PaymentCollection,
-  type ProductOrder,
-} from '@/lib/field.api';
+import { fieldApi, type FieldSettings, type Site, type Visit } from '@/lib/field.api';
 import { createAppQueryClient } from '@/lib/query-client';
 import { selfApi } from '@/lib/self.api';
 import { useAuthStore } from '@/stores/auth.store';
-import CollectionsPage from './CollectionsPage';
-import OrdersPage from './OrdersPage';
-import VisitsPage from './VisitsPage';
+import FieldSettingsPage from './FieldSettingsPage';
+import SitesPage from './SitesPage';
+import VisitDetailPage from './VisitDetailPage';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), warning: vi.fn() }) }));
 
-// Leaflet needs a real layout engine; none of these tests looks at a map.
-vi.mock('react-leaflet', () => ({
-  MapContainer: ({ children }: { children?: ReactNode }) => <div data-testid="map">{children}</div>,
-  TileLayer: () => null,
-  Marker: () => null,
-  Popup: () => null,
-  Polyline: () => null,
-  useMap: () => ({ fitBounds: vi.fn(), setView: vi.fn(), getContainer: () => document.createElement('div'), invalidateSize: vi.fn() }),
+/** The pin picker's map-click handler, captured from `useMapEvents`. */
+const leaflet = vi.hoisted(() => ({
+  click: undefined as undefined | ((e: { latlng: { lat: number; lng: number } }) => void),
 }));
+
+// Leaflet needs a real layout engine; the tests drive the map through its event handlers.
+vi.mock('react-leaflet', () => {
+  const map = {
+    fitBounds: vi.fn(),
+    setView: vi.fn(),
+    getContainer: () => document.createElement('div'),
+    invalidateSize: vi.fn(),
+    getZoom: () => 5,
+    getBounds: () => ({ getWest: () => 68, getSouth: () => 8, getEast: () => 97, getNorth: () => 37 }),
+  };
+  return {
+    MapContainer: ({ children }: { children?: ReactNode }) => <div data-testid="map">{children}</div>,
+    TileLayer: () => null,
+    Marker: () => null,
+    Popup: () => null,
+    Tooltip: () => null,
+    Circle: () => null,
+    CircleMarker: () => null,
+    Polyline: () => null,
+    useMap: () => map,
+    useMapEvents: (handlers: { click?: (e: { latlng: { lat: number; lng: number } }) => void }) => {
+      if (handlers.click) leaflet.click = handlers.click;
+      return map;
+    },
+  };
+});
 
 vi.mock('@/lib/field.api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/field.api')>();
@@ -37,22 +52,34 @@ vi.mock('@/lib/field.api', async (importOriginal) => {
     ...actual,
     fieldApi: {
       ...actual.fieldApi,
-      listVisits: vi.fn(),
-      todayVisits: vi.fn(),
-      listPayments: vi.fn(),
-      paymentsDaily: vi.fn(),
-      paymentsOutstanding: vi.fn(),
-      takeBackBounce: vi.fn(),
-      listOrders: vi.fn(),
-      getOrder: vi.fn(),
-      orderReports: vi.fn(),
+      getSettings: vi.fn(),
+      updateSettings: vi.fn(),
+      listSites: vi.fn(),
+      sitesMap: vi.fn(),
+      createSite: vi.fn(),
+      getVisit: vi.fn(),
     },
   };
 });
 vi.mock('@/lib/self.api', () => ({ selfApi: { profile: vi.fn() } }));
 
 const api = vi.mocked(fieldApi);
-const PAGE = { page: 1, limit: 20, total: 1, pages: 1 };
+
+const settings: FieldSettings = {
+  selfieRequired: true,
+  defaultSiteRadiusM: 200,
+  siteTypes: ['Client office', 'Project site', 'Other'],
+  visitPurposes: ['Meeting', 'Inspection', 'Other'],
+  shortVisitMinutes: 5,
+  autoCloseTime: '23:30',
+  offlineMaxAgeDays: 7,
+  visitCountsAsAttendance: true,
+  vehicles: [
+    { type: 'bike', label: 'Two-wheeler', ratePerKm: 0 },
+    { type: 'car', label: 'Car', ratePerKm: 0 },
+  ],
+  checklists: [],
+};
 
 function signIn(permissions: string[], employeeId: string): void {
   useAuthStore.getState().setSession({
@@ -61,190 +88,219 @@ function signIn(permissions: string[], employeeId: string): void {
   vi.mocked(selfApi.profile).mockResolvedValue({ success: true, data: { _id: employeeId } } as never);
 }
 
-function renderWithApp(ui: ReactNode): void {
+function renderWithApp(ui: ReactNode, path = '/'): void {
   render(
     <QueryClientProvider client={createAppQueryClient()}>
-      <MemoryRouter>{ui}</MemoryRouter>
+      <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  leaflet.click = undefined;
+  api.getSettings.mockResolvedValue({ success: true, data: settings });
 });
 
 afterEach(() => {
   useAuthStore.getState().clear();
 });
 
-/* ── Visits ── */
+/* ── Sites ── */
 
-const visit: FieldVisit = {
-  _id: 'v1',
-  employeeId: { _id: 'e1', firstName: 'Ravi', lastName: 'Kumar' },
-  clientId: { _id: 'c1', name: 'Acme Traders' },
-  purpose: 'sales',
-  checkIn: { time: '2026-10-21T04:30:00.000Z' },
-  checkOut: { time: '2026-10-21T05:15:00.000Z', notes: 'Asked for a quote on 40 units' },
-  locationMissing: true,
-  duration: 45,
-  notes: 'Met the purchase manager',
-  outcome: 'positive',
-  photos: [],
-  productsDiscussed: [],
-  isPlanned: false,
-  status: 'completed',
-  createdAt: '2026-10-21T04:30:00.000Z',
-  updatedAt: '2026-10-21T05:15:00.000Z',
+const createdSite: Site = {
+  _id: 's1',
+  name: 'Acme Plant',
+  type: 'Project site',
+  address: {},
+  location: { lat: 19.076, lng: 72.8777 },
+  radiusM: 150,
+  contactName: '',
+  contactPhone: '',
+  notes: '',
+  assignedTo: [],
+  createdBy: { _id: 'm1', firstName: 'Meera', lastName: 'Shah' },
+  createdVia: 'web',
+  visitCount: 0,
 };
 
-describe('VisitsPage', () => {
-  beforeEach(() => {
-    signIn(['field-sales.view'], 'e1');
-    api.listVisits.mockResolvedValue({ success: true, data: [visit], pagination: PAGE });
-    api.todayVisits.mockResolvedValue({ success: true, data: [] });
-  });
-
-  it('shows the check-in and the check-out notes, and flags a check-in without GPS', async () => {
-    renderWithApp(<VisitsPage />);
-    const row = (await screen.findByText('Acme Traders')).closest('tr') as HTMLElement;
-    expect(within(row).getByText('No GPS')).toBeInTheDocument();
-    expect(within(row).getByText('Met the purchase manager')).toBeInTheDocument();
-    expect(within(row).getByText('Asked for a quote on 40 units')).toBeInTheDocument();
-    expect(within(row).getByText('In:')).toBeInTheDocument();
-    expect(within(row).getByText('Out:')).toBeInTheDocument();
-  });
-
-  it('keeps Check in disabled while the browser is still finding the location', async () => {
-    // A geolocation request that never answers: still locating.
-    const getCurrentPosition = vi.fn();
-    Object.defineProperty(navigator, 'geolocation', { value: { getCurrentPosition }, configurable: true });
+describe('SitesPage — site form', () => {
+  it('sends the name, type, the pin placed on the map and the radius', async () => {
+    signIn(['field.view', 'field.manage'], 'm1');
+    api.listSites.mockResolvedValue({ success: true, data: [], pagination: { page: 1, limit: 20, total: 0, pages: 1 } });
+    api.createSite.mockResolvedValue({ success: true, data: createdSite });
     const user = userEvent.setup();
-    renderWithApp(<VisitsPage />);
-    await screen.findByText('Acme Traders');
+    renderWithApp(<SitesPage />);
 
-    await user.click(screen.getByRole('button', { name: 'Check in' }));
-    const dialog = await screen.findByRole('dialog', { name: /check in at a client/i });
-    expect(getCurrentPosition).toHaveBeenCalled();
-    expect(within(dialog).getByRole('button', { name: /locating/i })).toBeDisabled();
+    await user.click(await screen.findByRole('button', { name: /new site/i }));
+    const dialog = await screen.findByRole('dialog', { name: /new site/i });
+    await user.type(within(dialog).getByLabelText(/^name/i), 'Acme Plant');
+    await within(dialog).findByRole('option', { name: 'Project site' });
+    await user.selectOptions(within(dialog).getByLabelText(/^type/i), 'Project site');
+
+    // No pin yet: nothing to save.
+    expect(within(dialog).getByRole('button', { name: /add site/i })).toBeDisabled();
+    expect(within(dialog).getByLabelText(/radius/i)).toHaveValue(200);
+
+    act(() => leaflet.click?.({ latlng: { lat: 19.076, lng: 72.8777 } }));
+    expect(within(dialog).getByLabelText('Latitude')).toHaveValue('19.076000');
+    expect(within(dialog).getByLabelText('Longitude')).toHaveValue('72.877700');
+
+    const radius = within(dialog).getByLabelText(/radius/i);
+    await user.clear(radius);
+    await user.type(radius, '150');
+    await user.click(within(dialog).getByRole('button', { name: /add site/i }));
+
+    await waitFor(() => expect(api.createSite).toHaveBeenCalledTimes(1));
+    expect(api.createSite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientRef: expect.any(String),
+        name: 'Acme Plant',
+        type: 'Project site',
+        location: { lat: 19.076, lng: 72.8777 },
+        radiusM: 150,
+      }),
+    );
   });
 });
 
-/* ── Collections ── */
+/* ── Visit detail ── */
 
-const payment = (over: Partial<PaymentCollection>): PaymentCollection => ({
-  _id: 'p1',
-  receiptNumber: 'RCPT-2026-00001',
-  employeeId: { _id: 'e1', firstName: 'Ravi', lastName: 'Kumar' },
-  clientId: { _id: 'c1', name: 'Acme Traders' },
-  amount: 5000,
-  method: 'cheque',
-  collectedAt: '2026-10-21T05:00:00.000Z',
-  status: 'collected',
-  createdAt: '2026-10-21T05:00:00.000Z',
-  ...over,
-});
-
-function conflict(message: string): AxiosError {
-  return new AxiosError('Request failed with status code 400', AxiosError.ERR_BAD_REQUEST, undefined, null, {
-    status: 400,
-    statusText: 'Bad Request',
-    data: { success: false, error: { code: 'OVERPAYMENT', message } },
-    headers: {},
-    config: {} as InternalAxiosRequestConfig,
-  } as AxiosResponse);
-}
-
-describe('CollectionsPage', () => {
-  beforeEach(() => {
-    api.paymentsDaily.mockResolvedValue({ success: true, data: { date: '2026-10-21', byMethod: [], totals: { count: 0, total: 0 } } });
-    api.paymentsOutstanding.mockResolvedValue({ success: true, data: { total: 0, clients: [] } });
-  });
-
-  it('lets a field manager take a bounce back, and shows the refusal once when the order has no room', async () => {
-    signIn(['field-sales.view', 'field-sales.manage'], 'm1');
-    api.listPayments.mockResolvedValue({ success: true, data: [payment({ status: 'bounced' })], pagination: PAGE });
-    api.takeBackBounce.mockRejectedValue(conflict('This change would take the order past its total'));
-    const user = userEvent.setup();
-    renderWithApp(<CollectionsPage />);
-
-    const row = (await screen.findByText('RCPT-2026-00001')).closest('tr') as HTMLElement;
-    await user.click(within(row).getByRole('button', { name: 'More actions' }));
-    const menu = screen.getByRole('menu');
-    expect(within(menu).queryByRole('menuitem', { name: 'Verify' })).toBeNull();
-    await user.click(within(menu).getByRole('menuitem', { name: 'Take back bounce' }));
-    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Take back bounce' }));
-
-    await waitFor(() => expect(api.takeBackBounce).toHaveBeenCalledWith('p1'));
-    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
-    expect(toast.error).toHaveBeenCalledWith('This change would take the order past its total');
-  });
-
-  it('offers a rep "Mark deposited" only once a manager has verified the payment', async () => {
-    signIn(['field-sales.view'], 'e1');
-    api.listPayments.mockResolvedValue({
-      success: true,
-      data: [
-        payment({ _id: 'p1', receiptNumber: 'RCPT-1', status: 'collected' }),
-        payment({ _id: 'p2', receiptNumber: 'RCPT-2', status: 'verified' }),
+const visit: Visit = {
+  _id: 'v1',
+  clientRef: 'c-1',
+  employee: { _id: 'e1', firstName: 'Ravi', lastName: 'Kumar', employeeId: 'EMP-7' },
+  site: {
+    _id: 's1',
+    name: 'Andheri Metro Site',
+    type: 'Project site',
+    location: { lat: 19.1197, lng: 72.8464 },
+    radiusM: 200,
+  },
+  purpose: 'Inspection',
+  status: 'completed',
+  checkIn: { at: '2026-10-22T04:30:00.000Z', location: { lat: 19.1237, lng: 72.8464 }, accuracy: 12, distanceM: 450 },
+  checkOut: { at: '2026-10-22T05:15:00.000Z', location: { lat: 19.1197, lng: 72.8465 }, distanceM: 15 },
+  durationMinutes: 45,
+  flags: {
+    awayFromSite: true,
+    noGps: false,
+    noSelfie: true,
+    shortVisit: false,
+    autoClosed: false,
+    syncedLate: true,
+    capturedOffline: true,
+  },
+  report: {
+    notes: 'Scaffolding on level 3 needs bracing.',
+    photos: ['https://files.example/p1.jpg', 'https://files.example/p2.jpg'],
+    documents: [{ url: 'https://files.example/d1.pdf', name: 'Inspection.pdf' }],
+    peopleMet: [{ name: 'Anita Rao', designation: 'Site engineer', phone: '9800000000' }],
+    outcome: 'follow_up',
+    nextAction: 'Re-inspect after bracing',
+    followUpDate: '2026-10-29',
+    checklist: {
+      checklistId: 'cl1',
+      answers: [
+        { itemId: 'i1', value: true },
+        { itemId: 'i2', value: 'Fair' },
       ],
-      pagination: PAGE,
-    });
-    const user = userEvent.setup();
-    renderWithApp(<CollectionsPage />);
+    },
+    submittedAt: '2026-10-22T05:20:00.000Z',
+  },
+  createdAt: '2026-10-22T04:30:00.000Z',
+};
 
-    const collected = (await screen.findByText('RCPT-1')).closest('tr') as HTMLElement;
-    expect(within(collected).queryByRole('button', { name: 'More actions' })).toBeNull();
-    const verified = screen.getByText('RCPT-2').closest('tr') as HTMLElement;
-    await user.click(within(verified).getByRole('button', { name: 'More actions' }));
-    expect(within(screen.getByRole('menu')).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Mark deposited']);
-  });
-
-  it('shows "Couldn\'t load" instead of ₹0 when today\'s totals fail', async () => {
-    signIn(['field-sales.view'], 'e1');
-    api.listPayments.mockResolvedValue({ success: true, data: [], pagination: { ...PAGE, total: 0 } });
-    api.paymentsDaily.mockRejectedValue(conflict('Not allowed')); // a 4xx: no retries
-    renderWithApp(<CollectionsPage />);
-    expect(await screen.findAllByText("Couldn't load")).toHaveLength(2);
-  });
-});
-
-/* ── Orders ── */
-
-const order = (over: Partial<ProductOrder>): ProductOrder => ({
-  _id: 'o1',
-  orderNumber: 'ORD-2026-00001',
-  employeeId: { _id: 'm1', firstName: 'Meera', lastName: 'Shah' },
-  clientId: { _id: 'c1', name: 'Acme Traders' },
-  items: [],
-  subtotal: 1000,
-  taxAmount: 180,
-  totalAmount: 1180,
-  status: 'pending',
-  paymentStatus: 'pending',
-  paidAmount: 0,
-  createdAt: '2026-10-21T05:00:00.000Z',
-  ...over,
-});
-
-describe('OrdersPage', () => {
-  it("never offers a manager Confirm on their own order, nor Delete once it has payments", async () => {
-    signIn(['field-sales.view', 'field-sales.manage'], 'm1');
-    const own = order({ paymentStatus: 'partial', paidAmount: 500 });
-    api.listOrders.mockResolvedValue({ success: true, data: [own], pagination: PAGE });
-    api.getOrder.mockResolvedValue({ success: true, data: own });
-    api.orderReports.mockResolvedValue({
+describe('VisitDetailPage', () => {
+  it('shows the work report sections and the visit flags', async () => {
+    signIn(['field.view'], 'e9');
+    api.getSettings.mockResolvedValue({
       success: true,
-      data: { from: '', to: '', byStatus: [], totals: { count: 1, total: 1180, paid: 500 } },
+      data: {
+        ...settings,
+        checklists: [
+          {
+            _id: 'cl1',
+            name: 'Site inspection',
+            purpose: 'Inspection',
+            items: [
+              { _id: 'i1', label: 'Fire exits clear', kind: 'yes_no', required: true },
+              { _id: 'i2', label: 'Housekeeping', kind: 'select', options: ['Good', 'Fair', 'Poor'], required: false },
+            ],
+          },
+        ],
+      },
     });
-    const user = userEvent.setup();
-    renderWithApp(<OrdersPage />);
+    api.getVisit.mockResolvedValue({ success: true, data: visit });
+    renderWithApp(
+      <Routes>
+        <Route path="/field/visits/:id" element={<VisitDetailPage />} />
+      </Routes>,
+      '/field/visits/v1',
+    );
 
-    await user.click(await screen.findByRole('button', { name: 'View order ORD-2026-00001' }));
-    const dialog = await screen.findByRole('dialog', { name: /order ORD-2026-00001/i });
-    await within(dialog).findByText('Acme Traders');
-    expect(within(dialog).queryByRole('button', { name: /confirm/i })).toBeNull();
-    expect(within(dialog).queryByRole('button', { name: /delete/i })).toBeNull();
-    expect(within(dialog).getByRole('button', { name: /cancel order/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /work report/i })).toBeInTheDocument();
+    expect(screen.getByText('Scaffolding on level 3 needs bracing.')).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: /report photo/i })).toHaveLength(2);
+    expect(screen.getByRole('link', { name: /inspection\.pdf/i })).toHaveAttribute('href', 'https://files.example/d1.pdf');
+    expect(screen.getByText('Anita Rao')).toBeInTheDocument();
+    expect(screen.getByText(/site engineer/i)).toBeInTheDocument();
+    expect(screen.getByText('Follow-up needed')).toBeInTheDocument();
+    expect(screen.getByText('Re-inspect after bracing')).toBeInTheDocument();
+
+    const checklist = screen.getByRole('table', { name: /site inspection/i });
+    expect(within(within(checklist).getByText('Fire exits clear').closest('tr') as HTMLElement).getByText('Yes')).toBeInTheDocument();
+    expect(within(within(checklist).getByText('Housekeeping').closest('tr') as HTMLElement).getByText('Fair')).toBeInTheDocument();
+
+    const flags = screen.getByRole('list', { name: /flags/i });
+    for (const label of ['Away from site', 'No selfie', 'Synced late', 'Captured offline']) {
+      expect(within(flags).getByText(label)).toBeInTheDocument();
+    }
+    expect(within(flags).queryByText('Short visit')).toBeNull();
+    expect(within(flags).queryByText('No GPS')).toBeNull();
+    expect(screen.getByText(/450 m from the pin/i)).toBeInTheDocument();
+  });
+});
+
+/* ── Settings ── */
+
+describe('FieldSettingsPage — checklist builder', () => {
+  it('adds a checklist with an item of each kind and saves it with the settings', async () => {
+    signIn(['field.view', 'field.manage'], 'm1');
+    api.updateSettings.mockImplementation(async (input) => ({ success: true, data: input }));
+    const user = userEvent.setup();
+    renderWithApp(<FieldSettingsPage />);
+
+    await user.click(await screen.findByRole('button', { name: /add checklist/i }));
+    const card = screen.getByRole('group', { name: /checklist 1/i });
+    await user.type(within(card).getByLabelText('Checklist name'), 'Site inspection');
+    await user.selectOptions(within(card).getByLabelText('Used for'), 'Inspection');
+
+    const items: Array<[string, string]> = [
+      ['yes_no', 'Fire exits clear'],
+      ['text', 'Remarks'],
+      ['number', 'Workers on site'],
+      ['select', 'Housekeeping'],
+      ['photo', 'Notice board'],
+    ];
+    for (const [i, [kind, label]] of items.entries()) {
+      await user.click(within(card).getByRole('button', { name: /add item/i }));
+      await user.type(within(card).getByLabelText(`Item ${i + 1} label`), label);
+      await user.selectOptions(within(card).getByLabelText(`Item ${i + 1} type`), kind);
+    }
+    await user.type(within(card).getByLabelText('Item 4 options'), 'Good, Fair, Poor');
+    await user.click(within(card).getByLabelText('Item 1 required'));
+
+    await user.click(screen.getByRole('button', { name: /save settings/i }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+    const saved = api.updateSettings.mock.calls[0][0];
+    expect(saved).toMatchObject({ selfieRequired: true, defaultSiteRadiusM: 200, vehicles: settings.vehicles });
+    expect(saved.checklists).toHaveLength(1);
+    expect(saved.checklists[0]).toMatchObject({ name: 'Site inspection', purpose: 'Inspection' });
+    expect(saved.checklists[0].items.map((i) => i.kind)).toEqual(['yes_no', 'text', 'number', 'select', 'photo']);
+    expect(saved.checklists[0].items.map((i) => i.label)).toEqual(items.map(([, label]) => label));
+    expect(saved.checklists[0].items[3].options).toEqual(['Good', 'Fair', 'Poor']);
+    expect(saved.checklists[0].items[0].required).toBe(true);
+    expect(saved.checklists[0].items[1].options).toBeUndefined();
   });
 });

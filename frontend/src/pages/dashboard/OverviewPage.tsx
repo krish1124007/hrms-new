@@ -9,7 +9,6 @@ import {
   Loader2,
   MapPin,
   Target,
-  Trophy,
   UserCheck,
   Users,
 } from 'lucide-react';
@@ -29,7 +28,6 @@ import {
 } from 'recharts';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -39,15 +37,6 @@ import { getAnalytics, type AnalyticsData } from '@/lib/analytics.api';
 
 const DEPT_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
 const LEAVE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
-
-function formatINR(amount: number, compact = false): string {
-  if (compact) {
-    if (amount >= 1_00_00_000) return `₹${(amount / 1_00_00_000).toFixed(2)}Cr`;
-    if (amount >= 1_00_000) return `₹${(amount / 1_00_000).toFixed(2)}L`;
-    if (amount >= 1_000) return `₹${(amount / 1_000).toFixed(1)}K`;
-  }
-  return `₹${amount.toLocaleString('en-IN')}`;
-}
 
 export default function OverviewPage(): ReactElement {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
@@ -98,10 +87,10 @@ export default function OverviewPage(): ReactElement {
 }
 
 function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
-  // Field figures (agents, visits, orders, targets) only mean something to
-  // people who run field sales; for everyone else they are always empty.
-  const { has } = usePermissions();
-  const showField = has('field-sales.view');
+  // Field figures only mean something to people who run field visits; for
+  // everyone else they are always empty.
+  const { hasAny } = usePermissions();
+  const showField = hasAny(['field.view', 'field.manage']);
   const headcountWithColor = data.headcountByDepartment.map((d, i) => ({
     ...d,
     color: DEPT_COLORS[i % DEPT_COLORS.length],
@@ -305,83 +294,12 @@ function OverviewContent({ data }: { data: AnalyticsData }): ReactElement {
               <MapPin className="size-5 text-primary" />
             </CardHeader>
             <CardContent className="space-y-4">
-              <FieldStat label="Active Agents" value={data.fieldStats.activeAgents} color="text-emerald-500" />
-              <FieldStat label="Visits Today" value={data.fieldStats.visitsToday} color="text-blue-500" />
-              <FieldStat label="Orders Today" value={data.fieldStats.ordersToday} color="text-purple-500" />
-              <FieldStat
-                label="Collection Today"
-                value={formatINR(data.fieldStats.collectionToday, true)}
-                color="text-amber-500"
-              />
+              <FieldStat label="Field staff active" value={data.fieldStats?.activeAgents ?? 0} color="text-emerald-500" />
+              <FieldStat label="Visits today" value={data.fieldStats?.visitsToday ?? 0} color="text-blue-500" />
             </CardContent>
           </Card>
         )}
       </div>
-
-      {showField && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Top Performers</CardTitle>
-              <p className="text-xs text-muted-foreground">% of monthly target achieved</p>
-            </div>
-            <Trophy className="size-5 text-amber-500" />
-          </CardHeader>
-          <CardContent>
-            {data.topPerformers.length === 0 ? (
-              <EmptyState message="No sales targets recorded for this month yet." />
-            ) : (
-              <ul className="space-y-3">
-                {data.topPerformers.map((p, i) => {
-                  const pct = p.target > 0 ? Math.round((p.achieved / p.target) * 100) : 0;
-                  return (
-                    <li key={`${p.name}-${i}`} className="flex items-center gap-3">
-                      <div
-                        className={cn(
-                          'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                          i === 0
-                            ? 'bg-amber-500/20 text-amber-500'
-                            : i === 1
-                              ? 'bg-slate-400/20 text-slate-400'
-                              : i === 2
-                                ? 'bg-orange-700/20 text-orange-700'
-                                : 'bg-muted text-muted-foreground',
-                        )}
-                      >
-                        {i + 1}
-                      </div>
-                      <Avatar name={p.name} size="sm" />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{p.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{p.role}</p>
-                      </div>
-                      <div className="w-32">
-                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                          <div
-                            className={cn(
-                              'h-full rounded-full',
-                              pct >= 120 ? 'bg-emerald-500' : pct >= 100 ? 'bg-blue-500' : 'bg-amber-500',
-                            )}
-                            style={{ width: `${Math.min(pct, 150) / 1.5}%` }}
-                          />
-                        </div>
-                      </div>
-                      <span
-                        className={cn(
-                          'min-w-[52px] text-right text-sm font-semibold',
-                          pct >= 120 ? 'text-emerald-500' : pct >= 100 ? 'text-blue-500' : 'text-amber-500',
-                        )}
-                      >
-                        {pct}%
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>

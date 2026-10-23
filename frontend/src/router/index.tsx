@@ -48,18 +48,17 @@ const SalaryComponentsPage = lazy(() => import('@/pages/payroll/SalaryComponents
 const SalaryStructuresPage = lazy(() => import('@/pages/payroll/SalaryStructuresPage'));
 const MyPayslipsPage = lazy(() => import('@/pages/payroll/MyPayslipsPage'));
 
-// Field Sales
-const FieldDashboardPage = lazy(() => import('@/pages/field/FieldDashboardPage'));
-const ClientListPage = lazy(() => import('@/pages/field/ClientListPage'));
+// Field Visits
+const MyDayPage = lazy(() => import('@/pages/field/MyDayPage'));
+const SitesPage = lazy(() => import('@/pages/field/SitesPage'));
+const SiteDetailPage = lazy(() => import('@/pages/field/SiteDetailPage'));
 const VisitsPage = lazy(() => import('@/pages/field/VisitsPage'));
+const VisitDetailPage = lazy(() => import('@/pages/field/VisitDetailPage'));
+const PlanningPage = lazy(() => import('@/pages/field/PlanningPage'));
 const FieldTasksPage = lazy(() => import('@/pages/field/FieldTasksPage'));
-const SalesTargetsPage = lazy(() => import('@/pages/field/SalesTargetsPage'));
-const OrdersPage = lazy(() => import('@/pages/field/OrdersPage'));
-const CollectionsPage = lazy(() => import('@/pages/field/CollectionsPage'));
-const LiveTrackingPage = lazy(() => import('@/pages/field/LiveTrackingPage'));
-const ProductsPage = lazy(() => import('@/pages/field/ProductsPage'));
-const TrailPage = lazy(() => import('@/pages/field/TrailPage'));
-const ClientMapPage = lazy(() => import('@/pages/field/ClientMapPage'));
+const FieldSettingsPage = lazy(() => import('@/pages/field/FieldSettingsPage'));
+const TeamMapPage = lazy(() => import('@/pages/field/LiveTrackingPage'));
+const RoutePage = lazy(() => import('@/pages/field/TrailPage'));
 
 // Tools
 const DocumentsPage = lazy(() => import('@/pages/documents/DocumentsPage'));
@@ -199,20 +198,25 @@ export function AppRouter(): ReactElement {
             <Route path="/attendance/allowed-ips" element={guard(NAV_ACCESS.attendanceConfig, <AllowedIPsPage />)} />
             <Route path="/attendance/live-tracking" element={guard(NAV_ACCESS.attendanceView, <AttendanceLiveTrackingPage />)} />
 
-            {/* Field Sales — field-sales.view; the catalogue and the team map need field-sales.manage */}
-            <Route path="/field" element={guard(NAV_ACCESS.fieldView, <FieldDashboardPage />)} />
-            <Route path="/field/clients" element={guard(NAV_ACCESS.fieldView, <ClientListPage />)} />
-            <Route path="/field/clients/map" element={guard(NAV_ACCESS.fieldView, <ClientMapPage />)} />
+            {/* Field Visits — field.view (own + direct reports) or field.manage (everyone); settings need field.manage */}
+            <Route path="/field" element={<Navigate to="/field/visits" replace />} />
+            <Route path="/field/my-day" element={guard(NAV_ACCESS.fieldView, <MyDayPage />)} />
+            <Route path="/field/sites" element={guard(NAV_ACCESS.fieldView, <SitesPage />)} />
+            <Route path="/field/sites/:id" element={guard(NAV_ACCESS.fieldView, <SiteDetailPage />)} />
             <Route path="/field/visits" element={guard(NAV_ACCESS.fieldView, <VisitsPage />)} />
+            <Route path="/field/visits/:id" element={guard(NAV_ACCESS.fieldView, <VisitDetailPage />)} />
+            <Route path="/field/planning" element={guard(NAV_ACCESS.fieldView, <PlanningPage />)} />
             <Route path="/field/tasks" element={guard(NAV_ACCESS.fieldView, <FieldTasksPage />)} />
-            <Route path="/field/targets" element={guard(NAV_ACCESS.fieldView, <SalesTargetsPage />)} />
-            <Route path="/field/orders" element={guard(NAV_ACCESS.fieldView, <OrdersPage />)} />
-            <Route path="/field/collections" element={guard(NAV_ACCESS.fieldView, <CollectionsPage />)} />
-            <Route path="/field/products" element={guard(NAV_ACCESS.fieldManage, <ProductsPage />)} />
-            <Route path="/field/tracking" element={guard(NAV_ACCESS.fieldManage, <LiveTrackingPage />)} />
-            <Route path="/field/trail" element={guard(NAV_ACCESS.fieldView, <TrailPage />)} />
             {/* Task notifications link to /field/tasks/<id>. */}
             <Route path="/field/tasks/:id" element={<Navigate to="/field/tasks" replace />} />
+            <Route path="/field/team-map" element={guard(NAV_ACCESS.fieldView, <TeamMapPage />)} />
+            <Route path="/field/routes" element={guard(NAV_ACCESS.fieldView, <RoutePage />)} />
+            <Route path="/field/settings" element={guard(NAV_ACCESS.fieldManage, <FieldSettingsPage />)} />
+            {/* Old field paths, kept for bookmarks. */}
+            <Route path="/field/clients" element={<Navigate to="/field/sites" replace />} />
+            <Route path="/field/clients/map" element={<Navigate to="/field/sites?view=map" replace />} />
+            <Route path="/field/tracking" element={<Navigate to="/field/team-map" replace />} />
+            <Route path="/field/trail" element={<Navigate to="/field/routes" replace />} />
 
             {/* Payroll */}
             <Route path="/payroll" element={guard(NAV_ACCESS.payrollAdmin, <PayrollDashboardPage />)} />

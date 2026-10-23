@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthUser } from '@/lib/auth.api';
 import { hasAnyPermission } from '@/lib/permissions';
-import { visibleNavLeaves } from './navigation';
+import { NAV_ACCESS, NAV_GROUPS, visibleNavLeaves } from './navigation';
 
 function leavesFor(user: AuthUser): string[] {
   return visibleNavLeaves({
@@ -44,29 +44,49 @@ describe('sidebar visibility', () => {
     expect(tos.filter((to) => /^\/(projects|timesheets)\b/.test(to))).toEqual([]);
   });
 
-  it('shows Field Sales only to field-sales holders, management items only with manage', () => {
-    expect(leavesFor(employee()).filter((to) => to.startsWith('/field'))).toEqual([]);
+  describe('Field Visits', () => {
+    const fieldLeaves = (user: AuthUser): string[] => leavesFor(user).filter((to) => to.startsWith('/field'));
+    const as = (slug: string, permissions: string[]): AuthUser => ({
+      _id: `u-${slug}`,
+      email: `${slug}@example.com`,
+      role: { slug, name: slug, permissions },
+    });
+    const EMPLOYEE_ITEMS = ['/field/my-day', '/field/sites', '/field/visits'];
+    const MANAGER_ITEMS = ['/field/planning', '/field/team-map', '/field/routes', '/field/reports'];
 
-    const rep = leavesFor(employee(['field-sales.view']));
-    expect(rep).toEqual(
-      expect.arrayContaining([
-        '/field',
-        '/field/clients',
-        '/field/visits',
-        '/field/orders',
-        '/field/collections',
-        '/field/tasks',
-        '/field/targets',
-        '/field/trail',
-        '/field/clients/map',
-      ]),
-    );
-    expect(rep).not.toContain('/field/products');
-    expect(rep).not.toContain('/field/tracking');
+    it('is hidden from people without a field permission', () => {
+      expect(fieldLeaves(employee())).toEqual([]);
+    });
 
-    const fieldManager = leavesFor(employee(['field-sales.view', 'field-sales.manage']));
-    expect(fieldManager).toContain('/field/products');
-    expect(fieldManager).toContain('/field/tracking');
+    it('gives a field employee My day, Sites and Visits only', () => {
+      for (const user of [as('field_employee', ['leaves.view', 'field.view']), employee(['field.view'])]) {
+        const tos = fieldLeaves(user);
+        expect(tos).toEqual(expect.arrayContaining(EMPLOYEE_ITEMS));
+        for (const to of [...MANAGER_ITEMS, '/field/settings']) expect(tos).not.toContain(to);
+      }
+    });
+
+    it('adds Planning, Team map, Routes and Reports for a manager', () => {
+      const tos = fieldLeaves(as('manager', ['employees.view', 'leaves.approve', 'field.view']));
+      expect(tos).toEqual(expect.arrayContaining([...EMPLOYEE_ITEMS, ...MANAGER_ITEMS]));
+      expect(tos).not.toContain('/field/settings');
+    });
+
+    it('adds Settings for field.manage holders', () => {
+      const tos = fieldLeaves(as('field_manager', ['field.view', 'field.manage']));
+      expect(tos).toEqual(expect.arrayContaining([...EMPLOYEE_ITEMS, ...MANAGER_ITEMS, '/field/settings']));
+      // HR roles hold field.manage alone.
+      expect(fieldLeaves(as('hr_manager', ['employees.view', 'field.manage']))).toContain('/field/settings');
+    });
+
+    it('has no sales entries left, even for an admin', () => {
+      const admin = as('admin', ['*']);
+      const labels = NAV_GROUPS.flatMap((g) => [g.title, ...g.items.flatMap((i) => [i.label, ...(i.children ?? []).map((c) => c.label)])]);
+      expect(labels.filter((l) => /\b(sales?|orders?|products?|collections?|targets?|clients?)\b/i.test(l))).toEqual([]);
+      expect(NAV_GROUPS.map((g) => g.title)).toContain('Field Visits');
+      expect(fieldLeaves(admin).filter((to) => /orders|products|collections|targets|clients/.test(to))).toEqual([]);
+      expect(JSON.stringify(NAV_ACCESS)).not.toContain('field-sales');
+    });
   });
 
   it('shows the regularization queue to approvers only', () => {

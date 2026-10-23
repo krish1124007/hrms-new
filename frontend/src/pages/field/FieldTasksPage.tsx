@@ -12,11 +12,12 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from '@/c
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { RowActionsMenu, type RowAction } from '@/components/common/RowActionsMenu';
 import { NoEmployeeProfileNotice } from '@/components/common/NoEmployeeProfile';
-import { ClientPicker } from '@/components/field/ClientPicker';
+import { SitePicker } from '@/components/field/SitePicker';
 import { PhotoInput, PhotoStrip } from '@/components/field/FieldBits';
 import {
   useAcceptFieldTask,
   useCanManageField,
+  useCanPickEmployees,
   useCompleteFieldTask,
   useCreateFieldTask,
   useDeleteFieldTask,
@@ -25,7 +26,6 @@ import {
   useMyEmployeeId,
   useUpdateFieldTask,
 } from '@/hooks/use-field';
-import { usePermissions } from '@/hooks/use-permissions';
 import { isNoEmployeeProfileError } from '@/lib/api-error';
 import { businessInstant } from '@/lib/business-day';
 import {
@@ -65,8 +65,8 @@ interface FormState {
   title: string;
   description: string;
   assignedTo: string;
-  clientId: string;
-  clientName: string;
+  siteId: string;
+  siteName: string;
   priority: FieldTaskPriority;
   status: FieldTaskStatus;
   dueDate: string;
@@ -75,8 +75,8 @@ const blank: FormState = {
   title: '',
   description: '',
   assignedTo: '',
-  clientId: '',
-  clientName: '',
+  siteId: '',
+  siteName: '',
   priority: 'medium',
   status: 'new',
   dueDate: '',
@@ -85,11 +85,16 @@ const blank: FormState = {
 /** A due day picked as an IST calendar day → end of that IST day. */
 const dueInstant = (key: string): string => businessInstant(key, '23:59').toISOString();
 
-export default function FieldTasksPage(): ReactElement {
+/**
+ * Tasks at sites: `field.manage` assigns them (and follows them up), the
+ * assignee accepts and completes them — usually on the mobile app, here too.
+ * Used as its own page and as the Tasks tab of Planning.
+ */
+export function FieldTasksPanel(): ReactElement {
   const canManage = useCanManageField();
+  const canPick = useCanPickEmployees();
   const myEmployeeId = useMyEmployeeId();
-  const { has } = usePermissions();
-  const { data: reps = [] } = useFieldReps(canManage && has('employees.view'));
+  const { data: reps = [] } = useFieldReps(canPick);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
@@ -127,8 +132,8 @@ export default function FieldTasksPage(): ReactElement {
       title: t.title,
       description: t.description ?? '',
       assignedTo: refId(t.assignedTo),
-      clientId: t.clientId ? refId(t.clientId) : '',
-      clientName: typeof t.clientId === 'object' && t.clientId ? t.clientId.name : '',
+      siteId: t.siteId ? refId(t.siteId) : '',
+      siteName: typeof t.siteId === 'object' && t.siteId ? t.siteId.name : '',
       priority: t.priority,
       status: t.status,
       dueDate: t.dueDate ? toISTDateKey(t.dueDate) : '',
@@ -142,17 +147,17 @@ export default function FieldTasksPage(): ReactElement {
       title: form.title.trim(),
       description: form.description.trim() || undefined,
       assignedTo: form.assignedTo,
-      clientId: form.clientId || undefined,
+      siteId: form.siteId || undefined,
       priority: form.priority,
       status: form.status,
       dueDate: form.dueDate ? dueInstant(form.dueDate) : undefined,
     };
     if (editing) {
-      // An emptied description, client or due date goes as `null`, so the server clears it.
+      // An emptied description, site or due date goes as `null`, so the server clears it.
       const changes: FieldTaskUpdate = {
         ...input,
         description: input.description ?? null,
-        clientId: input.clientId ?? null,
+        siteId: input.siteId ?? null,
         dueDate: input.dueDate ?? null,
       };
       update.mutate({ id: editing._id, input: changes }, { onSuccess: () => setOpen(false) });
@@ -172,8 +177,8 @@ export default function FieldTasksPage(): ReactElement {
         <div className="max-w-xs">
           <div className="font-medium">{r.title}</div>
           {r.description && <div className="line-clamp-1 text-xs text-muted-foreground">{r.description}</div>}
-          {typeof r.clientId === 'object' && r.clientId && (
-            <div className="text-xs text-muted-foreground">Client: {r.clientId.name}</div>
+          {typeof r.siteId === 'object' && r.siteId && (
+            <div className="text-xs text-muted-foreground">Site: {r.siteId.name}</div>
           )}
         </div>
       ),
@@ -265,22 +270,7 @@ export default function FieldTasksPage(): ReactElement {
   ];
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Field Tasks"
-        description={canManage ? 'Assign work to reps and follow it to completion' : 'Work assigned to you'}
-        icon={ClipboardList}
-        breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Field Sales', to: '/field' }, { label: 'Tasks' }]}
-        actions={
-          canManage ? (
-            <Button onClick={startCreate}>
-              <Plus className="mr-2 size-4" />
-              New task
-            </Button>
-          ) : undefined
-        }
-      />
-
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Select aria-label="Status" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className="w-40">
           <option value="">All statuses</option>
@@ -306,6 +296,12 @@ export default function FieldTasksPage(): ReactElement {
               </option>
             ))}
           </Select>
+        )}
+        {canManage && (
+          <Button onClick={startCreate} className="ml-auto">
+            <Plus className="size-4" />
+            New task
+          </Button>
         )}
       </div>
 
@@ -342,7 +338,7 @@ export default function FieldTasksPage(): ReactElement {
           <div className="space-y-1.5">
             <Label htmlFor="task-assignee">Assign to *</Label>
             <Select id="task-assignee" value={form.assignedTo} onChange={(e) => setForm({ ...form, assignedTo: e.target.value })}>
-              <option value="">— Select a rep —</option>
+              <option value="">— Select an employee —</option>
               {form.assignedTo && !reps.some((r) => r._id === form.assignedTo) && editing && (
                 <option value={form.assignedTo}>{personName(editing.assignedTo)}</option>
               )}
@@ -354,12 +350,12 @@ export default function FieldTasksPage(): ReactElement {
               ))}
             </Select>
           </div>
-          <ClientPicker
-            id="task-client"
-            label="Client (optional)"
-            value={form.clientId}
-            selectedLabel={form.clientName}
-            onChange={(id, name) => setForm({ ...form, clientId: id, clientName: name })}
+          <SitePicker
+            id="task-site"
+            label="Site (optional)"
+            value={form.siteId}
+            selectedLabel={form.siteName}
+            onChange={(id, name) => setForm({ ...form, siteId: id, siteName: name })}
           />
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -386,7 +382,7 @@ export default function FieldTasksPage(): ReactElement {
               </div>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">The rep is notified when a task is assigned to them.</p>
+          <p className="text-xs text-muted-foreground">The employee is notified when a task is assigned to them, and you when it is completed.</p>
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
@@ -426,7 +422,7 @@ export default function FieldTasksPage(): ReactElement {
                   id: completing._id,
                   input: {
                     completionNotes: completionNotes.trim() || undefined,
-                    completionPhotos: completionPhoto ? [completionPhoto] : undefined,
+                    photoKeys: completionPhoto ? [completionPhoto] : undefined,
                   },
                 },
                 { onSuccess: () => setCompleting(null) },
@@ -457,9 +453,24 @@ export default function FieldTasksPage(): ReactElement {
         onConfirm={() => confirm && remove.mutate(confirm.t._id, { onSuccess: () => setConfirm(null) })}
         loading={remove.isPending}
         title={`Delete “${confirm?.t.title ?? ''}”?`}
-        description="The task disappears from the rep's list."
+        description="The task disappears from the employee's list."
         confirmLabel="Delete task"
       />
+    </div>
+  );
+}
+
+export default function FieldTasksPage(): ReactElement {
+  const canManage = useCanManageField();
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Tasks at sites"
+        description={canManage ? 'Assign work at sites and follow it to completion' : 'Work assigned to you'}
+        icon={ClipboardList}
+        breadcrumbs={[{ label: 'Home', to: '/dashboard' }, { label: 'Field Visits' }, { label: 'Tasks' }]}
+      />
+      <FieldTasksPanel />
     </div>
   );
 }

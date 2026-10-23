@@ -57,7 +57,9 @@ function buildRepIcon(name: string, opts: { onVisit?: boolean; stale?: boolean; 
 const VISIT_COLOURS: Record<string, string> = {
   completed: '#16a34a',
   in_progress: '#f59e0b',
+  planned: '#64748b',
   scheduled: '#64748b',
+  missed: '#dc2626',
   cancelled: '#dc2626',
 };
 
@@ -73,19 +75,40 @@ export function visitIcon(n: number | string, status: string): L.DivIcon {
   });
 }
 
-const CATEGORY_COLOURS: Record<string, string> = { A: '#16a34a', B: '#f59e0b', C: '#64748b' };
+const siteIconCache = new Map<string, L.DivIcon>();
 
-/** A small dot per client, coloured by category (A/B/C). */
-export function clientIcon(category: string, inactive = false): L.DivIcon {
-  const bg = inactive ? '#cbd5e1' : (CATEGORY_COLOURS[category] ?? '#64748b');
+/** A site pin: a small dot; grey once it has gone a month without a visit. */
+export function siteIcon(opts: { stale?: boolean; selected?: boolean } = {}): L.DivIcon {
+  const key = `${opts.stale ? 1 : 0}${opts.selected ? 1 : 0}`;
+  const hit = siteIconCache.get(key);
+  if (hit) return hit;
+  const bg = opts.stale ? '#94a3b8' : '#0d9488';
+  const size = opts.selected ? 20 : 16;
+  const icon = L.divIcon({
+    className: 'field-site-icon',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${bg};border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+  });
+  siteIconCache.set(key, icon);
+  return icon;
+}
+
+function pointIcon(kind: 'in' | 'out'): L.DivIcon {
+  const bg = kind === 'in' ? '#16a34a' : '#dc2626';
   return L.divIcon({
-    className: 'field-client-icon',
-    html: `<div style="width:16px;height:16px;border-radius:9999px;background:${bg};border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
-    popupAnchor: [0, -8],
+    className: 'field-visit-point-icon',
+    html: `<div style="padding:2px 6px;border-radius:9999px;background:${bg};color:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);font:700 11px/1.2 system-ui,sans-serif">${kind === 'in' ? 'In' : 'Out'}</div>`,
+    iconSize: [34, 20],
+    iconAnchor: [17, 10],
+    popupAnchor: [0, -10],
   });
 }
+
+/** A visit's check-in (green "In") and check-out (red "Out") points. */
+export const checkInIcon: L.DivIcon = pointIcon('in');
+export const checkOutIcon: L.DivIcon = pointIcon('out');
 
 /** The moving "you are here" dot of trail playback. */
 export const playheadIcon: L.DivIcon = L.divIcon({

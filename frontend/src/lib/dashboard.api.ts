@@ -25,7 +25,6 @@ export interface OverviewData {
   crm?: { openDeals: number; totalRevenue: number; newLeadsThisMonth: number };
   projects?: { active: number; overdue: number; completedThisMonth: number };
   tasks?: { myPending: number; myOverdue: number; completedThisWeek: number };
-  fieldSales?: { activeAgents: number; visitsToday: number; ordersToday: number };
 }
 
 export interface AttendanceDay {
