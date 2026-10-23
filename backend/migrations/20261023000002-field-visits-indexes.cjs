@@ -18,9 +18,9 @@
  *  2. `day` (the visit's IST business day: check-in, else planned date, else
  *     creation) is filled in where missing.
  *  3. The one-open-visit index becomes per employee AND day (an offline
- *     replay of an older day may land while today's visit is open). Stops
- *     before dropping anything if an employee has two open visits on one
- *     day, listing them.
+ *     replay of an older day may land while today's visit is open). Before
+ *     step 1 changes anything, stops if an employee has two open visits on
+ *     one day (by the day step 2 gives them), listing them.
  *  4. Indexes:
  *       visits          employee_clientRef_unique { employeeId, clientRef }
  *                       (unique, partial clientRef string),
@@ -188,36 +188,43 @@ async function reshapeLegacyVisits(db) {
   return changed;
 }
 
-async function backfillDays(db) {
-  const res = await db.collection('visits').updateMany({ day: { $exists: false } }, [
-    {
-      $set: {
-        day: {
-          $dateFromString: {
-            dateString: {
-              $dateToString: {
-                format: '%Y-%m-%d',
-                timezone: TZ,
-                date: { $ifNull: ['$checkIn.time', { $ifNull: ['$plannedDate', '$createdAt'] }] },
-              },
-            },
-            timezone: 'UTC',
-            onNull: null,
-          },
-        },
+/** Aggregation expression: the IST business-day label of the check-in, else the planned date, else creation. */
+const COMPUTED_DAY = {
+  $dateFromString: {
+    dateString: {
+      $dateToString: {
+        format: '%Y-%m-%d',
+        timezone: TZ,
+        date: { $ifNull: ['$checkIn.time', { $ifNull: ['$plannedDate', '$createdAt'] }] },
       },
     },
-  ]);
+    timezone: 'UTC',
+    onNull: null,
+  },
+};
+
+async function backfillDays(db) {
+  const res = await db.collection('visits').updateMany({ day: { $exists: false } }, [{ $set: { day: COMPUTED_DAY } }]);
   return res.modifiedCount;
 }
 
-/** Employees with two open visits on one day — the per-day index cannot be built over them. */
+/**
+ * Employees with two open visits on one day — the per-day index cannot be
+ * built over them. Grouped by the day the visit has, or the one step 2 would
+ * give it, so the check can run before anything is changed.
+ */
 async function openVisitClashes(db) {
   return db
     .collection('visits')
     .aggregate([
       { $match: { status: 'in_progress', isDeleted: false } },
-      { $group: { _id: { employeeId: '$employeeId', day: '$day' }, ids: { $push: '$_id' }, n: { $sum: 1 } } },
+      {
+        $group: {
+          _id: { employeeId: '$employeeId', day: { $ifNull: ['$day', COMPUTED_DAY] } },
+          ids: { $push: '$_id' },
+          n: { $sum: 1 },
+        },
+      },
       { $match: { n: { $gt: 1 } } },
     ])
     .toArray();
@@ -225,17 +232,18 @@ async function openVisitClashes(db) {
 
 module.exports = {
   async up(db) {
-    const reshaped = await reshapeLegacyVisits(db);
-    const days = await backfillDays(db);
-
+    // Abort before changing anything (data or indexes).
     const clashes = await openVisitClashes(db);
     if (clashes.length > 0) {
       throw new Error(
-        `Employees with two open visits on the same day — close one of each pair first (nothing was dropped):\n  ${clashes
+        `Employees with two open visits on the same day — close one of each pair first (nothing was changed):\n  ${clashes
           .map((c) => `employee ${c._id.employeeId}: visits ${c.ids.join(', ')}`)
           .join('\n  ')}`,
       );
     }
+
+    const reshaped = await reshapeLegacyVisits(db);
+    const days = await backfillDays(db);
     for (const [collection, key, options] of INDEXES) {
       // eslint-disable-next-line no-await-in-loop
       await ensureIndex(db, collection, key, options);
