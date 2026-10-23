@@ -1332,7 +1332,9 @@ pm2 restart all
 build; nginx serves `frontend/dist` as before.
 
 - **Seed** refreshes the system roles and adds **Field Employee** (own visits) and **Field Manager**
-  (their team). Expect `Roles: 2 created, … refreshed`.
+  (their team). With `LOG_LEVEL=info` it prints `Roles: 2 created, 5 refreshed; …` here (a fresh
+  database prints `Roles: 7 created, 0 refreshed`); with `LOG_LEVEL=warn` it prints nothing — check
+  with `mongosh hrms --quiet --eval 'db.roles.find({slug:/^field_/},{slug:1}).toArray()'`.
 - **Migrations** (each prints `MIGRATED UP: <file>`):
   - `20261023000001-field-visits-foundation`: prints `field visits: N client(s) copied to sites; dropped …`.
     Clients become sites (same ids, so old visits/tasks still point at them), `field-sales.*`
@@ -1367,9 +1369,10 @@ build; nginx serves `frontend/dist` as before.
 
 ### E. What changes for users
 
-- Field employees: Field tab in the app → *My day* (planned visits, pin a new site, check in/out),
+- Field employees: *Field visits* in the app (Home quick action, More, or the side menu) → *My day* (planned visits, pin a new site, check in/out),
   work report at check-out, *Sites near me* with a map, travel allowance for a day in one tap. Works
-  without network; the app syncs when it is back and shows what is still waiting.
+  without network; the app syncs when it is back and shows what is still waiting. Claim travel after the
+  day check-out: a claim uses the km so far, and a day is claimed once (the app asks first).
 - Managers: web → Field Visits: team map, routes, visits, planning and recurring visits, reports with
   Excel/PDF; travel claims arrive in normal expense approval showing computed vs claimed km.
 - Gone: orders, products, payments/receipts, targets, leaderboard, live tracking.

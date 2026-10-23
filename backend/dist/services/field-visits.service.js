@@ -409,9 +409,11 @@ export async function resolveReport(input, settings, opts) {
 /**
  * The Mongo update that merges `report` into a visit's stored report: sent
  * fields replace theirs; photos and documents are ADDED (deduplicated — the
- * apps send only new files on an edit); `submittedAt` is set once.
+ * apps send only new files on an edit); `submittedAt` is set once, to when
+ * the report was filed on the phone (`filedAt`, the capture time — an offline
+ * report keeps it), never later than an earlier filing.
  */
-export function reportUpdate(report, existing, now) {
+export function reportUpdate(report, existing, now, filedAt = now) {
     const $set = { 'report.updatedAt': now };
     const $unset = {};
     const $addToSet = {};
@@ -434,7 +436,7 @@ export function reportUpdate(report, existing, now) {
         if (fresh.length)
             $push['report.documents'] = { $each: fresh };
     }
-    return { $set, $unset, $addToSet, $push, $min: { 'report.submittedAt': now } };
+    return { $set, $unset, $addToSet, $push, $min: { 'report.submittedAt': filedAt } };
 }
 /** Drop empty operators (an empty `$unset` is an error on older servers). */
 export function compactUpdate(update) {

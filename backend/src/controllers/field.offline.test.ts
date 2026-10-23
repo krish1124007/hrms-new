@@ -149,6 +149,8 @@ describe('captured offline, synced days later', () => {
     });
     expect(out.status).toBe(200);
     expect(out.body.data.durationMinutes).toBe(55);
+    // The report counts as filed when it was filed on the phone, not when it synced.
+    expect(out.body.data.report.submittedAt).toBe(istAt(-3, '11:00').toISOString());
 
     const day = await request(app).get('/api/v1/field/my-day').query({ date: ymd(-3) }).set(auth(rep.token));
     expect(day.body.data.completed.map((v: { clientRef: string }) => v.clientRef)).toEqual([visit.body.data.clientRef]);

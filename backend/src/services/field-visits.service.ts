@@ -533,12 +533,15 @@ export async function resolveReport(input: ReportFieldsInput, settings: FieldSet
 /**
  * The Mongo update that merges `report` into a visit's stored report: sent
  * fields replace theirs; photos and documents are ADDED (deduplicated — the
- * apps send only new files on an edit); `submittedAt` is set once.
+ * apps send only new files on an edit); `submittedAt` is set once, to when
+ * the report was filed on the phone (`filedAt`, the capture time — an offline
+ * report keeps it), never later than an earlier filing.
  */
 export function reportUpdate(
   report: ResolvedReport,
   existing: Pick<NonNullable<IVisit['report']>, 'documents'> | undefined | null,
   now: Date,
+  filedAt: Date = now,
 ): { $set: Obj; $unset: Record<string, ''>; $addToSet: Obj; $push: Obj; $min: Obj } {
   const $set: Obj = { 'report.updatedAt': now };
   const $unset: Record<string, ''> = {};
@@ -557,7 +560,7 @@ export function reportUpdate(
     const fresh = report.documents.filter((d) => !have.has(d.key) && have.add(d.key));
     if (fresh.length) $push['report.documents'] = { $each: fresh };
   }
-  return { $set, $unset, $addToSet, $push, $min: { 'report.submittedAt': now } };
+  return { $set, $unset, $addToSet, $push, $min: { 'report.submittedAt': filedAt } };
 }
 
 /** Drop empty operators (an empty `$unset` is an error on older servers). */

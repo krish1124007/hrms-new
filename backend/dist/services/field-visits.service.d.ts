@@ -314,9 +314,11 @@ export declare function resolveReport(input: ReportFieldsInput, settings: FieldS
 /**
  * The Mongo update that merges `report` into a visit's stored report: sent
  * fields replace theirs; photos and documents are ADDED (deduplicated — the
- * apps send only new files on an edit); `submittedAt` is set once.
+ * apps send only new files on an edit); `submittedAt` is set once, to when
+ * the report was filed on the phone (`filedAt`, the capture time — an offline
+ * report keeps it), never later than an earlier filing.
  */
-export declare function reportUpdate(report: ResolvedReport, existing: Pick<NonNullable<IVisit['report']>, 'documents'> | undefined | null, now: Date): {
+export declare function reportUpdate(report: ResolvedReport, existing: Pick<NonNullable<IVisit['report']>, 'documents'> | undefined | null, now: Date, filedAt?: Date): {
     $set: Obj;
     $unset: Record<string, ''>;
     $addToSet: Obj;

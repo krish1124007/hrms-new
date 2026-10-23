@@ -540,7 +540,7 @@ async function writeCheckOut(mode, visit, input) {
     const withReport = ($set) => {
         if (!report)
             return { $set };
-        const r = reportUpdate(report, visit.report, now);
+        const r = reportUpdate(report, visit.report, now, at);
         return compactUpdate({ ...r, $set: { ...$set, ...r.$set } });
     };
     if (mode === 'keep') {
@@ -727,7 +727,7 @@ export async function updateReport(req, res) {
         existing: visit.report,
         lenient: wasCapturedOffline(editedAt, edited, now),
     });
-    const r = reportUpdate(report, visit.report, now);
+    const r = reportUpdate(report, visit.report, now, edited);
     const update = compactUpdate({ ...r, $push: { ...r.$push, ...(ref ? pushReportRef(ref) : {}) } });
     const doc = await Visit.findOneAndUpdate({ _id: visit._id, status: 'completed', ...(ref ? { reportClientRefs: { $ne: ref } } : {}) }, update, { new: true }).exec();
     if (!doc) {

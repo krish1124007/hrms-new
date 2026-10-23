@@ -633,7 +633,7 @@ async function writeCheckOut(mode: CheckOutMode, visit: LeanVisit, input: CheckO
   const autoClosed = { _id: visit._id, status: 'completed', 'flags.autoClosed': true, ...notThisRef };
   const withReport = ($set: Record<string, unknown>): Record<string, Record<string, unknown>> => {
     if (!report) return { $set };
-    const r = reportUpdate(report, visit.report, now);
+    const r = reportUpdate(report, visit.report, now, at);
     return compactUpdate({ ...r, $set: { ...$set, ...r.$set } });
   };
 
@@ -822,7 +822,7 @@ export async function updateReport(req: Request, res: Response): Promise<void> {
     existing: visit.report,
     lenient: wasCapturedOffline(editedAt, edited, now),
   });
-  const r = reportUpdate(report, visit.report, now);
+  const r = reportUpdate(report, visit.report, now, edited);
   const update = compactUpdate({ ...r, $push: { ...r.$push, ...(ref ? pushReportRef(ref) : {}) } });
   const doc = await Visit.findOneAndUpdate(
     { _id: visit._id, status: 'completed', ...(ref ? { reportClientRefs: { $ne: ref } } : {}) },
