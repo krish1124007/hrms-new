@@ -8,6 +8,7 @@ import { audit } from '../services/audit.service.js';
 import { createNotification, formatBusinessDate } from '../services/notification.service.js';
 import { notifyTaskCompleted } from '../services/field-visits.service.js';
 import { getFieldSettings } from '../services/field-settings.service.js';
+import { assertSiteRead, loadSite } from '../services/field-sites.service.js';
 import { logger } from '../config/logger.js';
 import { idOf } from '../lib/access.js';
 import {
@@ -187,6 +188,15 @@ function managesTask(req: Request, scope: FieldScope, task: Pick<IFieldTask, 'as
   return scopeIncludes(scope, task.assignedTo) && idOf(task.assignedTo) !== (scope.self ? String(scope.self) : null);
 }
 
+/**
+ * A task's site: a live site (404 otherwise) the caller may see (403
+ * otherwise — sites outside their scope stay hidden); field managers any.
+ */
+async function assertTaskSite(req: Request, scope: FieldScope, siteId: string): Promise<void> {
+  const site = await loadSite(siteId);
+  if (!scope.manage) await assertSiteRead(req, site);
+}
+
 /** 403 unless the caller may give a task to `employeeId` (self, a direct report, or anyone with field.manage). */
 function assertMayAssign(scope: FieldScope, employeeId: string): void {
   if (!scopeIncludes(scope, employeeId)) {
@@ -197,7 +207,9 @@ function assertMayAssign(scope: FieldScope, employeeId: string): void {
 export async function createTask(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createTaskSchema>;
   const userId = await assigneeUserId(body.assignedTo);
-  assertMayAssign(await fieldScope(req), body.assignedTo);
+  const scope = await fieldScope(req);
+  assertMayAssign(scope, body.assignedTo);
+  if (body.siteId) await assertTaskSite(req, scope, body.siteId);
   const doc = await FieldTask.create({ ...body, ...(req.user?._id ? { createdBy: req.user._id } : {}) });
   void audit({ action: 'create', entity: 'FieldTask', entityId: String(doc._id) });
   await notifyAssignee(userId, doc);
@@ -220,6 +232,10 @@ export async function updateTask(req: Request, res: Response): Promise<void> {
       throw new AppError('Only a field manager can cancel a task', 403, 'FORBIDDEN');
     }
     if (set.status === 'completed') set.completedAt = new Date();
+  }
+
+  if (manager && body.siteId && body.siteId !== (task.siteId ? idOf(task.siteId) : null)) {
+    await assertTaskSite(req, scope, body.siteId);
   }
 
   const reassigned = manager && body.assignedTo && body.assignedTo !== String(task.assignedTo);

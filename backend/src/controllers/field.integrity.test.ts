@@ -313,6 +313,32 @@ describe('field tasks', () => {
         .status,
     ).toBe(400);
   });
+
+  it('a task’s site must be one the caller may see (field managers: any live site)', async () => {
+    const theirs = await newSite({ name: 'Their plant', assignedTo: [B.employee._id], location: { type: 'Point', coordinates: [MUMBAI.lng, MUMBAI.lat] } });
+    const mine = await newSite({ name: 'My plant', assignedTo: [A.employee._id] });
+    const create = (who: Actor, siteId: string) =>
+      request(app).post('/api/v1/field/tasks').set(auth(who.token)).send({ title: 'Look around', assignedTo: String(A.employee._id), siteId });
+
+    const leak = await create(A, String(theirs._id));
+    expect(leak.status).toBe(403);
+    expect(await FieldTask.countDocuments({ siteId: theirs._id })).toBe(0);
+    expect((await create(A, '64b000000000000000000000')).status).toBe(404);
+
+    const own = await create(A, String(mine._id));
+    expect(own.status).toBe(201);
+    const moved = await request(app).patch(`/api/v1/field/tasks/${own.body.data._id}`).set(auth(A.token)).send({ siteId: String(theirs._id) });
+    expect(moved.status).toBe(403);
+    expect(String((await FieldTask.findById(own.body.data._id).lean())?.siteId)).toBe(String(mine._id));
+    // An edit that leaves the site as it is still goes through.
+    const renamed = await request(app)
+      .patch(`/api/v1/field/tasks/${own.body.data._id}`)
+      .set(auth(A.token))
+      .send({ title: 'Look closely', siteId: String(mine._id) });
+    expect(renamed.status).toBe(200);
+
+    expect((await create(M, String(theirs._id))).status).toBe(201);
+  });
 });
 
 describe('field photo upload', () => {
