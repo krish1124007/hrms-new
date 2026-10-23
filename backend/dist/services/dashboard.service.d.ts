@@ -32,12 +32,20 @@ export interface DashboardData {
         myOverdue: number;
         completedThisWeek: number;
     };
-    fieldSales?: {
+    field?: {
         activeAgents: number;
         visitsToday: number;
-        ordersToday: number;
     };
 }
+/**
+ * Today's field figures (IST day): visits checked in (cancelled ones aside)
+ * and how many people made them. Locations are only recorded at check-in /
+ * check-out now, so "active in the field" means "checked in at a site today".
+ */
+export declare function fieldTodayFigures(): Promise<{
+    activeAgents: number;
+    visitsToday: number;
+}>;
 /**
  * Attendance rate over the business days `from`..`to` (day labels,
  * inclusive): present-ish rows of active (and on-notice) employees on the

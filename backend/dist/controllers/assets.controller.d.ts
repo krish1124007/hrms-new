@@ -21,8 +21,8 @@ export declare const createAssetSchema: z.ZodObject<{
     category: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool";
     condition: "new" | "good" | "fair" | "poor" | "damaged";
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
-    assetCode?: string | undefined;
     location?: string | undefined;
+    assetCode?: string | undefined;
     notes?: string | undefined;
     serialNumber?: string | undefined;
     manufacturer?: string | undefined;
@@ -35,10 +35,10 @@ export declare const createAssetSchema: z.ZodObject<{
 }, {
     name: string;
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
+    location?: string | undefined;
     assetCode?: string | undefined;
     category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
     condition?: "new" | "good" | "fair" | "poor" | "damaged" | undefined;
-    location?: string | undefined;
     notes?: string | undefined;
     serialNumber?: string | undefined;
     manufacturer?: string | undefined;
@@ -68,10 +68,10 @@ export declare const updateAssetSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
     name?: string | undefined;
+    location?: string | undefined;
     assetCode?: string | undefined;
     category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
     condition?: "new" | "good" | "fair" | "poor" | "damaged" | undefined;
-    location?: string | undefined;
     notes?: string | undefined;
     serialNumber?: string | undefined;
     manufacturer?: string | undefined;
@@ -84,10 +84,10 @@ export declare const updateAssetSchema: z.ZodObject<{
 }, {
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
     name?: string | undefined;
+    location?: string | undefined;
     assetCode?: string | undefined;
     category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
     condition?: "new" | "good" | "fair" | "poor" | "damaged" | undefined;
-    location?: string | undefined;
     notes?: string | undefined;
     serialNumber?: string | undefined;
     manufacturer?: string | undefined;
@@ -112,16 +112,16 @@ export declare const listQuerySchema: z.ZodObject<{
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
     sort?: string | undefined;
     search?: string | undefined;
-    category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
     assignedTo?: string | undefined;
+    category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
 }, {
     status?: "available" | "assigned" | "maintenance" | "retired" | "lost" | undefined;
     sort?: string | undefined;
     page?: number | undefined;
     limit?: number | undefined;
     search?: string | undefined;
-    category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
     assignedTo?: string | undefined;
+    category?: "other" | "laptop" | "desktop" | "mobile" | "tablet" | "monitor" | "peripheral" | "furniture" | "vehicle" | "tool" | undefined;
 }>;
 export declare const assignSchema: z.ZodObject<{
     employee: z.ZodString;

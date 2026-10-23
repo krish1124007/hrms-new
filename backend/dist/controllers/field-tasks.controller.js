@@ -5,18 +5,26 @@ import { Employee } from '../models/employee.model.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { createNotification, formatBusinessDate } from '../services/notification.service.js';
+import { notifyTaskCompleted } from '../services/field-visits.service.js';
+import { getFieldSettings } from '../services/field-settings.service.js';
+import { assertSiteRead, loadSite } from '../services/field-sites.service.js';
 import { logger } from '../config/logger.js';
-import { assertFieldRead, assertFieldWrite, canManageField, fieldScope, requireOwnEmployeeId, } from '../lib/field-access.js';
+import { idOf } from '../lib/access.js';
+import { assertFieldRead, assertFieldWrite, canManageField, listScopeFilter, requireOwnEmployeeId, } from '../lib/field-access.js';
+import { fieldScope, scopeIncludes } from '../lib/field-scope.js';
+import { fieldFileRefs } from '../lib/field-files.js';
+import { captureTimes } from '../lib/offline-capture.js';
 import { objectIdString, pageParams, setAndUnset, sortParam } from '../lib/field-utils.js';
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const STATUSES = ['new', 'accepted', 'in_progress', 'completed', 'cancelled'];
 const CLOSED = ['completed', 'cancelled'];
+/** An upload key from POST /field/uploads/photo (or a signed link to one, turned back into its stored form). */
 const photoRef = z.string().trim().min(1).max(2048);
 export const createTaskSchema = z.object({
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().max(5000).optional(),
     assignedTo: objectIdString,
-    clientId: objectIdString.optional(),
+    siteId: objectIdString.optional(),
     location: z
         .object({
         lat: z.coerce.number().min(-90).max(90).optional(),
@@ -28,19 +36,27 @@ export const createTaskSchema = z.object({
     status: z.enum(['new', 'accepted', 'in_progress']).default('new'),
     dueDate: z.coerce.date().optional(),
 });
-/** `null` clears an optional field: the description, client, location or due date (never the assignee). */
+/** `null` clears an optional field: the description, site, location or due date (never the assignee). */
 export const updateTaskSchema = z.object({
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(5000).nullable().optional(),
     assignedTo: objectIdString.optional(),
-    clientId: objectIdString.nullable().optional(),
+    siteId: objectIdString.nullable().optional(),
     location: createTaskSchema.shape.location.unwrap().nullable().optional(),
     priority: z.enum(PRIORITIES).optional(),
     status: z.enum(STATUSES).optional(),
     dueDate: z.coerce.date().nullable().optional(),
 });
-/** `notes`/`photo` are the mobile app's names for `completionNotes`/`completionPhotos`. */
+/**
+ * Completion, offline-safe: `clientRef` (a replay answers 200 with the task)
+ * and `capturedAt` (the device time, stored as `completedAt`). Photos as
+ * upload keys in `photoKeys`; `completionPhotos` / `photo` / `notes` are older
+ * names still accepted.
+ */
 export const completeSchema = z.object({
+    clientRef: z.string().trim().uuid().optional(),
+    capturedAt: z.string().trim().max(40).optional(),
+    photoKeys: z.array(photoRef).max(20).optional(),
     completionPhotos: z.array(photoRef).max(20).optional(),
     completionNotes: z.string().trim().max(5000).optional(),
     notes: z.string().trim().max(5000).optional(),
@@ -56,7 +72,7 @@ export const listQuerySchema = z.object({
 export const myQuerySchema = z.object({ ...pageParams, status: z.enum(STATUSES).optional() });
 const POPULATE = [
     { path: 'assignedTo', select: 'firstName lastName employeeId' },
-    { path: 'clientId', select: 'name address location' },
+    { path: 'siteId', select: 'name type address location radiusM' },
 ];
 async function loadTask(id) {
     const task = await FieldTask.findById(id).exec();
@@ -95,7 +111,7 @@ async function notifyAssignee(userId, task) {
 }
 export async function listTasks(req, res) {
     const q = req.query;
-    const filter = await fieldScope(req, q.assignedTo, 'assignedTo');
+    const filter = await listScopeFilter(req, q.assignedTo, 'assignedTo');
     if (q.status)
         filter.status = q.status;
     if (q.priority)
@@ -117,14 +133,14 @@ export async function myTasks(req, res) {
         page: q.page,
         limit: q.limit,
         sort: { dueDate: 1, createdAt: -1 },
-        populate: [{ path: 'clientId', select: 'name address location' }],
+        populate: [{ path: 'siteId', select: 'name type address location radiusM' }],
     });
     res.json({ success: true, data: result.data, pagination: result.pagination });
 }
 /** The tasks of the reps the caller can see (field managers: everyone), paginated. */
 export async function teamTasks(req, res) {
     const q = req.query;
-    const filter = await fieldScope(req, undefined, 'assignedTo');
+    const filter = await listScopeFilter(req, undefined, 'assignedTo');
     // A rep's "team" is the people who report to them, not themselves.
     if (!canManageField(req)) {
         const self = await requireOwnEmployeeId(req);
@@ -148,10 +164,40 @@ export async function getTask(req, res) {
     await assertFieldRead(req, doc.assignedTo);
     res.json({ success: true, data: doc });
 }
+/**
+ * May the caller manage `task` (edit everything, reassign, cancel, delete)?
+ * A field manager; whoever created it; or the assignee's direct manager.
+ */
+function managesTask(req, scope, task) {
+    if (scope.manage)
+        return true;
+    if (task.createdBy && req.user?._id && idOf(task.createdBy) === String(req.user._id))
+        return true;
+    return scopeIncludes(scope, task.assignedTo) && idOf(task.assignedTo) !== (scope.self ? String(scope.self) : null);
+}
+/**
+ * A task's site: a live site (404 otherwise) the caller may see (403
+ * otherwise — sites outside their scope stay hidden); field managers any.
+ */
+async function assertTaskSite(req, scope, siteId) {
+    const site = await loadSite(siteId);
+    if (!scope.manage)
+        await assertSiteRead(req, site);
+}
+/** 403 unless the caller may give a task to `employeeId` (self, a direct report, or anyone with field.manage). */
+function assertMayAssign(scope, employeeId) {
+    if (!scopeIncludes(scope, employeeId)) {
+        throw new AppError('You can assign tasks only to yourself and your direct reports', 403, 'FORBIDDEN');
+    }
+}
 export async function createTask(req, res) {
     const body = req.body;
     const userId = await assigneeUserId(body.assignedTo);
-    const doc = await FieldTask.create(body);
+    const scope = await fieldScope(req);
+    assertMayAssign(scope, body.assignedTo);
+    if (body.siteId)
+        await assertTaskSite(req, scope, body.siteId);
+    const doc = await FieldTask.create({ ...body, ...(req.user?._id ? { createdBy: req.user._id } : {}) });
     void audit({ action: 'create', entity: 'FieldTask', entityId: String(doc._id) });
     await notifyAssignee(userId, doc);
     res.status(201).json({ success: true, data: doc });
@@ -160,8 +206,10 @@ export async function createTask(req, res) {
 export async function updateTask(req, res) {
     const body = req.body;
     const task = await loadTask(String(req.params.id));
-    await assertFieldWrite(req, task.assignedTo);
-    const manager = canManageField(req);
+    const scope = await fieldScope(req);
+    const manager = managesTask(req, scope, task);
+    if (!manager)
+        await assertFieldWrite(req, task.assignedTo);
     const set = manager ? { ...body } : {};
     if (!manager && body.status)
         set.status = body.status;
@@ -169,12 +217,17 @@ export async function updateTask(req, res) {
         if (CLOSED.includes(task.status))
             throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
         if (set.status === 'cancelled' && !manager) {
-            throw new AppError('Only a field sales manager can cancel a task', 403, 'FORBIDDEN');
+            throw new AppError('Only a field manager can cancel a task', 403, 'FORBIDDEN');
         }
         if (set.status === 'completed')
             set.completedAt = new Date();
     }
+    if (manager && body.siteId && body.siteId !== (task.siteId ? idOf(task.siteId) : null)) {
+        await assertTaskSite(req, scope, body.siteId);
+    }
     const reassigned = manager && body.assignedTo && body.assignedTo !== String(task.assignedTo);
+    if (reassigned)
+        assertMayAssign(scope, body.assignedTo);
     const newAssigneeUser = reassigned ? await assigneeUserId(body.assignedTo) : null;
     const doc = await FieldTask.findByIdAndUpdate(task._id, setAndUnset(set), { new: true }).exec();
     if (!doc)
@@ -185,6 +238,9 @@ export async function updateTask(req, res) {
 }
 export async function deleteTask(req, res) {
     const doc = await loadTask(String(req.params.id));
+    if (!managesTask(req, await fieldScope(req), doc)) {
+        throw new AppError('Only a field manager, the task’s creator or the assignee’s manager can delete it', 403, 'FORBIDDEN');
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await doc.softDelete({ by: req.user?._id });
     void audit({ action: 'delete', entity: 'FieldTask', entityId: String(doc._id) });
@@ -198,21 +254,45 @@ export async function acceptTask(req, res) {
         throw new AppError(`A task that is ${task.status} cannot be accepted`, 409, 'TASK_CLOSED');
     res.json({ success: true, data: doc });
 }
+/**
+ * PATCH /field/tasks/:id/complete — the assignee (or a field manager) closes
+ * the task with notes and proof photos. Idempotent by `clientRef`. The
+ * assignee's manager and the task's creator are told.
+ */
 export async function completeTask(req, res) {
     const body = req.body;
     const task = await loadTask(String(req.params.id));
     await assertFieldWrite(req, task.assignedTo);
-    const photos = [...(body.completionPhotos ?? []), ...(body.photo ? [body.photo] : [])];
+    const populated = () => FieldTask.findById(task._id).populate(POPULATE).exec();
+    if (body.clientRef && task.completionClientRef === body.clientRef) {
+        res.json({ success: true, data: await populated() }); // replay
+        return;
+    }
+    if (CLOSED.includes(task.status))
+        throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
+    const times = captureTimes(body.capturedAt, await getFieldSettings());
+    const keys = [...(body.photoKeys ?? []), ...(body.completionPhotos ?? []), ...(body.photo ? [body.photo] : [])];
+    const photos = [...new Set(await fieldFileRefs(keys, 'photo', { userId: req.user?._id }))];
     const doc = await FieldTask.findOneAndUpdate({ _id: task._id, status: { $nin: CLOSED } }, {
         $set: {
             status: 'completed',
-            completedAt: new Date(),
+            completedAt: times.capturedAt,
+            completionReceivedAt: times.receivedAt,
             completionPhotos: photos,
             completionNotes: body.completionNotes ?? body.notes,
+            ...(body.clientRef ? { completionClientRef: body.clientRef } : {}),
         },
     }, { new: true }).exec();
-    if (!doc)
-        throw new AppError(`The task is already ${task.status}`, 409, 'TASK_CLOSED');
-    res.json({ success: true, data: doc });
+    if (!doc) {
+        const now = await FieldTask.findById(task._id).select('completionClientRef status').lean().exec();
+        if (body.clientRef && now?.completionClientRef === body.clientRef) {
+            res.json({ success: true, data: await populated() });
+            return;
+        }
+        throw new AppError(`The task is already ${now?.status ?? task.status}`, 409, 'TASK_CLOSED');
+    }
+    void audit({ action: 'update', entity: 'FieldTask', entityId: String(doc._id), after: { status: 'completed' } });
+    await notifyTaskCompleted(doc, req.user?._id ? String(req.user._id) : null);
+    res.json({ success: true, data: await populated() });
 }
 //# sourceMappingURL=field-tasks.controller.js.map

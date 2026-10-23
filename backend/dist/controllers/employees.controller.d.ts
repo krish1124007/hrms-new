@@ -193,7 +193,7 @@ export declare const createEmployeeSchema: z.ZodObject<{
     phone?: string | undefined;
     personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
-    gender?: "male" | "female" | "other" | undefined;
+    gender?: "other" | "male" | "female" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
     bloodGroup?: string | undefined;
     profileImage?: string | undefined;
@@ -255,7 +255,7 @@ export declare const createEmployeeSchema: z.ZodObject<{
     phone?: string | undefined;
     personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
-    gender?: "male" | "female" | "other" | undefined;
+    gender?: "other" | "male" | "female" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
     bloodGroup?: string | undefined;
     profileImage?: string | undefined;
@@ -476,7 +476,7 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     phone?: string | undefined;
     personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
-    gender?: "male" | "female" | "other" | undefined;
+    gender?: "other" | "male" | "female" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
     bloodGroup?: string | undefined;
     profileImage?: string | undefined;
@@ -538,7 +538,7 @@ export declare const updateEmployeeSchema: z.ZodObject<Omit<{
     phone?: string | undefined;
     personalEmail?: string | undefined;
     dateOfBirth?: Date | undefined;
-    gender?: "male" | "female" | "other" | undefined;
+    gender?: "other" | "male" | "female" | undefined;
     maritalStatus?: "single" | "married" | "divorced" | "widowed" | undefined;
     bloodGroup?: string | undefined;
     profileImage?: string | undefined;

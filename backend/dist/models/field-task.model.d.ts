@@ -11,14 +11,21 @@ export interface IFieldTask extends Document {
     title: string;
     description?: string;
     assignedTo: Types.ObjectId;
-    clientId?: Types.ObjectId;
+    siteId?: Types.ObjectId;
     location?: IFieldTaskLocation;
     priority: FieldTaskPriority;
     status: FieldTaskStatus;
     dueDate?: Date;
     completedAt?: Date;
+    /** Proof photos (`/uploads/<key>`), signed into links on the way out. */
     completionPhotos: string[];
     completionNotes?: string;
+    /** Idempotency key of the completion (offline replays are no-ops). */
+    completionClientRef?: string;
+    /** When the server received the completion (`completedAt` is the captured time). */
+    completionReceivedAt?: Date;
+    /** User who created the task. */
+    createdBy?: Types.ObjectId;
     verifiedBy?: Types.ObjectId;
     verifiedAt?: Date;
     createdAt: Date;

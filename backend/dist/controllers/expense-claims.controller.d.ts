@@ -1,5 +1,12 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { type IExpenseClaim } from '../models/index.js';
+/**
+ * Tell the claimant's reporting manager about a claim waiting for them — not
+ * when the manager is the one who filed it. Never throws. (Also used by the
+ * field travel allowance claim.)
+ */
+export declare function notifyManagerOfClaim(claim: IExpenseClaim): Promise<void>;
 export declare const createCategorySchema: z.ZodObject<{
     name: z.ZodString;
     code: z.ZodString;
@@ -81,6 +88,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
     }>, "many">>;
     paymentMethod: z.ZodOptional<z.ZodEnum<["cash", "bank", "card", "upi", "cheque", "other"]>>;
     status: z.ZodDefault<z.ZodEnum<["draft", "pending"]>>;
+    /** The field visit the expense was incurred at (one of the claimant's own visits). */
+    visitId: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     status: "pending" | "draft";
     date: Date;
@@ -93,7 +102,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
     }[];
     description?: string | undefined;
     employeeId?: string | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }, {
     date: Date;
     amount: number;
@@ -106,7 +116,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }>, {
     status: "pending" | "draft";
     date: Date;
@@ -119,7 +130,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
     }[];
     description?: string | undefined;
     employeeId?: string | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }, {
     date: Date;
     amount: number;
@@ -132,7 +144,8 @@ export declare const createClaimSchema: z.ZodEffects<z.ZodObject<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }>;
 export declare const updateClaimSchema: z.ZodObject<Omit<{
     employeeId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
@@ -153,6 +166,7 @@ export declare const updateClaimSchema: z.ZodObject<Omit<{
     }>, "many">>>;
     paymentMethod: z.ZodOptional<z.ZodOptional<z.ZodEnum<["cash", "bank", "card", "upi", "cheque", "other"]>>>;
     status: z.ZodOptional<z.ZodDefault<z.ZodEnum<["draft", "pending"]>>>;
+    visitId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
 }, "employeeId">, "strip", z.ZodTypeAny, {
     status?: "pending" | "draft" | undefined;
     date?: Date | undefined;
@@ -164,7 +178,8 @@ export declare const updateClaimSchema: z.ZodObject<Omit<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }, {
     status?: "pending" | "draft" | undefined;
     date?: Date | undefined;
@@ -176,7 +191,8 @@ export declare const updateClaimSchema: z.ZodObject<Omit<{
         name: string;
         fileUrl: string;
     }[] | undefined;
-    paymentMethod?: "cash" | "upi" | "cheque" | "other" | "bank" | "card" | undefined;
+    paymentMethod?: "other" | "cash" | "bank" | "card" | "upi" | "cheque" | undefined;
+    visitId?: string | undefined;
 }>;
 export declare const claimQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodNumber>;
@@ -193,18 +209,18 @@ export declare const claimQuerySchema: z.ZodObject<{
     status?: "pending" | "approved" | "rejected" | "draft" | "reimbursed" | undefined;
     sort?: string | undefined;
     employeeId?: string | undefined;
-    category?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;
+    category?: string | undefined;
 }, {
     status?: "pending" | "approved" | "rejected" | "draft" | "reimbursed" | undefined;
     sort?: string | undefined;
     page?: number | undefined;
     limit?: number | undefined;
     employeeId?: string | undefined;
-    category?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;
+    category?: string | undefined;
 }>;
 export declare const rejectClaimSchema: z.ZodObject<{
     reason: z.ZodString;

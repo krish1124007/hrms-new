@@ -1,3 +1,6 @@
+import { type IAttendance } from '../models/attendance.model.js';
+import { type IAttendanceConfig } from '../models/attendance-config.model.js';
+import { type IShift } from '../models/shift.model.js';
 export interface DayCloseCounts {
     /** `absent` rows written for working days with no row. */
     absentCreated: number;
@@ -39,6 +42,14 @@ export declare class DayCloseError extends AggregateError {
 /** Check-out time used when `settings.autoCheckoutTime` is unset or invalid. */
 export declare const DEFAULT_AUTO_CHECKOUT_TIME = "23:59";
 /**
+ * Where the day-close closes a check-in of business day `day` that is still
+ * open once the day is over: an overnight shift at its end + grace, any other
+ * at the auto-checkout time (never before the check-in). Null when an
+ * overnight shift has no usable times. (Used for days that are already
+ * closed, e.g. a field visit captured offline that syncs days later.)
+ */
+export declare function autoCheckoutFor(day: Date, checkIn: Date, shift: IShift | null, cfg: IAttendanceConfig | null): Date | null;
+/**
  * Close the business day containing `dateIST` (any instant; it is resolved to
  * its calendar day in the business timezone). With `dryRun`, returns the
  * counts it would produce without writing anything.
@@ -68,4 +79,11 @@ export interface ScheduledExitsResult {
 export declare function applyScheduledExits(dateIST: Date, opts?: {
     dryRun?: boolean;
 }): Promise<ScheduledExitsResult>;
+/**
+ * Stamp the auto check-out on `row` at `out` and recompute it (in memory), as
+ * the day-close does: open breaks end
+ * there, hours and shift rules recomputed, no overtime or early leave (an
+ * assumed time is evidence of neither). Mutates `row`; the caller saves it.
+ */
+export declare function closeOpenRow(row: IAttendance, out: Date, shift: IShift | null, cfg: IAttendanceConfig | null): void;
 //# sourceMappingURL=day-close.service.d.ts.map

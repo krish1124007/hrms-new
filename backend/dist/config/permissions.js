@@ -19,7 +19,7 @@
  * hold `*.approve_all`. `permissions.test.ts` knows about and checks them.
  *
  * Keys group the Roles UI by module. They normally equal the prefix of the
- * names beneath them; `field` groups the `field-sales.*` permissions.
+ * names beneath them.
  */
 export const PERMISSIONS_BY_MODULE = {
     users: ['users.view', 'users.create', 'users.update', 'users.delete'],
@@ -72,7 +72,7 @@ export const PERMISSIONS_BY_MODULE = {
     notices: ['notices.manage'],
     events: ['events.manage'],
     locations: ['locations.manage'],
-    field: ['field-sales.view', 'field-sales.manage'],
+    field: ['field.view', 'field.manage'],
     projects: ['projects.view', 'projects.create', 'projects.update', 'projects.delete'],
     audit: ['audit.view'],
     backups: ['backups.view', 'backups.manage'],

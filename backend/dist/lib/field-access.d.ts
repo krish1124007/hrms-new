@@ -1,25 +1,20 @@
 /**
- * Who may see and change which field-sales record.
+ * Who may see and change which field record (visits, tasks).
  *
- *   • `field-sales.manage` — field managers / HR: every rep's records, and the
- *     manager-only actions (confirm/deliver orders, edit/verify payments, …).
- *   • `field-sales.view` holders with direct reports (team leads) — read their
- *     own records and their direct reports' (`reportingManager` = them), but
+ *   • `field.manage` — field managers / HR: every employee's records, and the
+ *     manager-only actions.
+ *   • `field.view` holders with direct reports (team leads) — read their own
+ *     records and their direct reports' (`reportingManager` = them), but
  *     change only their own.
- *   • every other `field-sales.view` holder (a rep) — their own records only.
+ *   • every other `field.view` holder — their own records only.
  *
  * Ownership is the record's Employee (`employeeId`, or `assignedTo` for tasks),
  * always taken from the session on create — never from the request body.
+ * The scope itself lives in lib/field-scope.ts.
  */
 import type { Request } from 'express';
 import { Types } from 'mongoose';
-import { AppError } from './errors.js';
-export declare const FIELD_VIEW = "field-sales.view";
-export declare const FIELD_MANAGE = "field-sales.manage";
-/** True when the caller holds `field-sales.manage` (or `*`). */
-export declare function canManageField(req: Request): boolean;
-/** 404 `NO_EMPLOYEE_PROFILE` — a self-service field action needs an employee record. */
-export declare function noEmployeeProfile(): AppError;
+export { FIELD_MANAGE, FIELD_VIEW, canManageField, noEmployeeProfile } from './field-scope.js';
 /** The caller's Employee `_id`, or 404 `NO_EMPLOYEE_PROFILE`. */
 export declare function requireOwnEmployeeId(req: Request): Promise<Types.ObjectId>;
 /**
@@ -33,7 +28,7 @@ export declare function visibleEmployeeIds(req: Request): Promise<Types.ObjectId
  * any `requested` employee; anyone else to one of the employees they can see —
  * a request outside that scope is ignored (they keep getting their own scope).
  */
-export declare function fieldScope(req: Request, requested?: string, field?: string): Promise<Record<string, unknown>>;
+export declare function listScopeFilter(req: Request, requested?: string, field?: string): Promise<Record<string, unknown>>;
 /** 403 unless the caller may read a record owned by `owner` (manager, owner, or owner's manager). */
 export declare function assertFieldRead(req: Request, owner: unknown): Promise<void>;
 /** 403 unless the caller may change a record owned by `owner` (field manager or the owner). */

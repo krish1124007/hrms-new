@@ -29,10 +29,16 @@ export interface ICheckinMetadata {
     autoCheckout?: boolean;
     /** Punch times set by an approved regularization request. */
     regularized?: boolean;
+    /** Check-in made by the first field visit of the day (services/attendance-field-link.service.ts). */
+    fieldVisitId?: string;
+    /** A past field day closed by the auto-checkout rule before any visit check-out of it had arrived. */
+    fieldProvisional?: boolean;
 }
+/** `field_visit`: the day's check-in came from a field visit check-in (not a punch method). */
+export type CheckinMethod = AttendanceMethod | 'field_visit';
 export interface ICheckinRecord {
     time?: Date;
-    method?: AttendanceMethod;
+    method?: CheckinMethod;
     location?: ILocationPoint;
     photo?: string;
     deviceInfo?: IDeviceInfo;

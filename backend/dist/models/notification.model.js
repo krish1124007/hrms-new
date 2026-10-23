@@ -16,6 +16,7 @@ const notificationSchema = new Schema({
             'regularization_decision',
             'decision',
             'payslip_ready',
+            'field_update',
         ],
         required: true,
     },

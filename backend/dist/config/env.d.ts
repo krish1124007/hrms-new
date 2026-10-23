@@ -25,7 +25,6 @@ export declare const env: {
     ESI_WAGE_CEILING: number;
     ESI_EMPLOYEE_PERCENT: number;
     ESI_EMPLOYER_PERCENT: number;
-    FIELD_VISIT_RADIUS_M: number;
     CORS_ORIGIN: string;
     LOG_LEVEL: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
     ENABLE_API_DOCS: "true" | "false";
@@ -39,6 +38,7 @@ export declare const env: {
     SMTP_PASS?: string | undefined;
     COMPANY_EMAIL?: string | undefined;
     SUPPORT_EMAIL?: string | undefined;
+    GOOGLE_MAPS_API_KEY?: string | undefined;
     METRICS_TOKEN?: string | undefined;
     FIREBASE_SERVICE_ACCOUNT_PATH?: string | undefined;
     AGORA_APP_ID?: string | undefined;
