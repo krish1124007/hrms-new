@@ -5,14 +5,15 @@ import type { FileFilterCallback } from 'multer';
 import { AppError, ValidationAppError } from '../lib/errors.js';
 import { saveFile } from '../lib/local-storage.js';
 import { businessYearMonth } from '../lib/field-utils.js';
-import { newFieldFileKey, type FieldFileKind } from '../lib/field-files.js';
+import { newFieldFileKey, recordFieldUpload, type FieldFileKind } from '../lib/field-files.js';
 
 /**
  * Field uploads: photos (check-in selfies, site photos, report photos, task
  * proof) and documents (report attachments). Stored privately under
  * UPLOAD_DIR like every other upload; the response is `{ url, key }` — `url`
  * a short-lived signed link for showing the file, `key` what the client sends
- * in the record's body (lib/field-files.ts checks it).
+ * in the record's body (lib/field-files.ts checks it). The uploader is
+ * recorded (`fielduploads`): a key can only be attached by whoever uploaded it.
  */
 
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
@@ -108,10 +109,16 @@ function uploadErrors(field: string, what: string) {
 export const photoUploadErrors = uploadErrors('photo', 'Photos');
 export const documentUploadErrors = uploadErrors('document', 'Documents');
 
-async function store(kind: FieldFileKind, ext: string, file: Express.Multer.File): Promise<{ url: string; key: string }> {
+async function store(
+  req: Request,
+  kind: FieldFileKind,
+  ext: string,
+  file: Express.Multer.File,
+): Promise<{ url: string; key: string }> {
   const { year, month } = businessYearMonth();
   const key = newFieldFileKey(kind, ext, year, month, randomBytes(6).toString('hex'));
   const url = await saveFile(key, file.buffer, file.mimetype);
+  await recordFieldUpload(key, kind, req.user?._id);
   return { url, key };
 }
 
@@ -121,7 +128,7 @@ export async function uploadPhoto(req: Request, res: Response): Promise<void> {
   if (!file) throw new ValidationAppError('No photo uploaded — send a multipart "photo" field');
   const kind = sniffImage(file.buffer);
   if (!kind) throw new AppError('The file is not a JPEG, PNG, WebP or HEIC image', 400, 'UNSUPPORTED_FILE_TYPE');
-  res.status(201).json({ success: true, data: await store('photo', kind, file) });
+  res.status(201).json({ success: true, data: await store(req, 'photo', kind, file) });
 }
 
 /**
@@ -137,7 +144,7 @@ export async function uploadDocument(req: Request, res: Response): Promise<void>
   if (!ext) {
     throw new AppError('The file’s contents do not match its type', 400, 'UNSUPPORTED_FILE_TYPE');
   }
-  const stored = await store('document', ext, file);
+  const stored = await store(req, 'document', ext, file);
   const name = path.basename(file.originalname).slice(0, 200);
   res.status(201).json({ success: true, data: { ...stored, name } });
 }

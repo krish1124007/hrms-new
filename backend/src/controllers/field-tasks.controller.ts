@@ -289,7 +289,7 @@ export async function completeTask(req: Request, res: Response): Promise<void> {
 
   const times = captureTimes(body.capturedAt, await getFieldSettings());
   const keys = [...(body.photoKeys ?? []), ...(body.completionPhotos ?? []), ...(body.photo ? [body.photo] : [])];
-  const photos = [...new Set(await fieldFileRefs(keys, 'photo'))];
+  const photos = [...new Set(await fieldFileRefs(keys, 'photo', { userId: req.user?._id }))];
   const doc = await FieldTask.findOneAndUpdate(
     { _id: task._id, status: { $nin: CLOSED } },
     {

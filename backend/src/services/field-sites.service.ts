@@ -178,9 +178,11 @@ export function canSeeSite(req: Request, scope: FieldScope, site: Pick<IFieldSit
   return (site.assignedTo ?? []).some((e) => scopeIncludes(scope, e));
 }
 
-/** A live site by id, or 404. */
-export async function loadSite(id: string) {
-  const site = Types.ObjectId.isValid(id) ? await FieldSite.findById(id).exec() : null;
+/** A live site by id (`withDeleted`: a deleted one too), or 404. */
+export async function loadSite(id: string, opts: { withDeleted?: boolean } = {}) {
+  const site = Types.ObjectId.isValid(id)
+    ? await FieldSite.findById(id).setOptions(opts.withDeleted ? { withDeleted: true } : {}).exec()
+    : null;
   if (!site) throw new NotFoundError('Site not found');
   return site;
 }
@@ -208,6 +210,17 @@ export function canonicalSiteType(type: string, settings: FieldSettings): string
 }
 
 /**
+ * The settings' spelling of `type`; an unknown type (an offline pin made
+ * before HR changed the types) becomes "Other" — the settings' type of that
+ * name, else their last type.
+ */
+export function siteTypeOrOther(type: string, settings: FieldSettings): string {
+  const match = settings.siteTypes.find((t) => t.toLowerCase() === type.trim().toLowerCase());
+  if (match) return match;
+  return settings.siteTypes.find((t) => t.toLowerCase() === 'other') ?? settings.siteTypes[settings.siteTypes.length - 1] ?? 'Other';
+}
+
+/**
  * The employees a site may be assigned to by this caller: existing employees,
  * and — unless the caller manages the field — only themselves or their direct
  * reports (403 otherwise).
@@ -230,12 +243,13 @@ const blankAddress = (a?: { line1?: string; city?: string; state?: string; pinco
  * Create a site for the caller (idempotent by `clientRef`, per creator).
  * The creator, when they have an employee record, is always assigned.
  * Without an address, the pin is reverse-geocoded (when Google is set up).
- * A replay returns the stored site with `created: false`.
+ * A replay returns the stored site with `created: false`. `lenientType` (an
+ * offline pin): an unknown type becomes "Other" instead of 400.
  */
 export async function createFieldSite(
   req: Request,
   input: NewSiteInput,
-  opts: { clientRef?: string; createdVia: SiteCreatedVia },
+  opts: { clientRef?: string; createdVia: SiteCreatedVia; lenientType?: boolean },
 ): Promise<{ site: IFieldSite; created: boolean }> {
   const settings = await getFieldSettings();
   const scope = await fieldScope(req);
@@ -243,10 +257,10 @@ export async function createFieldSite(
 
   const run = async () => {
     const capturedAt = input.capturedAt !== undefined ? acceptCapturedAt(input.capturedAt, settings) : undefined;
-    const type = canonicalSiteType(input.type, settings);
+    const type = opts.lenientType ? siteTypeOrOther(input.type, settings) : canonicalSiteType(input.type, settings);
     const assignees = await checkAssignees(scope, input.assignedTo ?? []);
     if (scope.self && !assignees.some((id) => id.equals(scope.self!))) assignees.unshift(scope.self);
-    const photo = input.photo ? await fieldFileRef(input.photo, 'photo') : undefined;
+    const photo = input.photo ? await fieldFileRef(input.photo, 'photo', { userId: req.user?._id }) : undefined;
     let address = input.address && !blankAddress(input.address) ? input.address : undefined;
     if (!address && googleMaps.isConfigured()) {
       address = (await googleMaps.reverseGeocode(input.location.lat, input.location.lng)) ?? undefined;

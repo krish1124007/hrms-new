@@ -24,7 +24,7 @@ import { FieldSite } from '../models/field-site.model.js';
 import { Employee } from '../models/employee.model.js';
 import { AppError } from '../lib/errors.js';
 import { atBusinessTime, DAY_MS, startOfBusinessDay } from '../lib/business-day.js';
-import { fieldFileRef, fieldFileRefs } from '../lib/field-files.js';
+import { fieldFileRef, fieldFileRefs, type FileOwner } from '../lib/field-files.js';
 import { logger } from '../config/logger.js';
 import { getFieldSettings, type FieldSettings } from './field-settings.service.js';
 import { siteLatLng } from './field-sites.service.js';
@@ -88,10 +88,19 @@ export const dayInputSchema = z
 
 /* ── Purposes ── */
 
-/** The settings' spelling of `purpose`, or 400 `INVALID_PURPOSE`. */
-export function canonicalPurpose(purpose: string, settings: Pick<FieldSettings, 'visitPurposes'>): string {
+/**
+ * The settings' spelling of `purpose`, or 400 `INVALID_PURPOSE`. `lenient`
+ * (an offline capture: HR may have renamed the purpose since) keeps an
+ * unknown purpose as it was sent instead.
+ */
+export function canonicalPurpose(
+  purpose: string,
+  settings: Pick<FieldSettings, 'visitPurposes'>,
+  lenient = false,
+): string {
   const match = settings.visitPurposes.find((p) => p.toLowerCase() === purpose.trim().toLowerCase());
   if (!match) {
+    if (lenient) return purpose.trim();
     throw new AppError(
       `"${purpose}" is not a visit purpose. Use one of: ${settings.visitPurposes.join(', ')}`,
       400,
@@ -359,61 +368,104 @@ export interface ResolvedReport {
   checklist?: { checklistId: string; answers: Array<{ itemId: string; value: unknown }> } | null;
 }
 
+class BadAnswer extends AppError {
+  constructor(label: string, why: string) {
+    super(`Checklist item "${label}": ${why}`, 400, 'INVALID_CHECKLIST_ANSWER');
+  }
+}
+
 function badAnswer(label: string, why: string): AppError {
-  return new AppError(`Checklist item "${label}": ${why}`, 400, 'INVALID_CHECKLIST_ANSWER');
+  return new BadAnswer(label, why);
+}
+
+type ChecklistAnswer = { itemId: string; value: unknown };
+
+const isBlank = (raw: unknown): boolean => raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '');
+
+export interface ResolveChecklistOptions {
+  /** Whose photo uploads a photo answer may name. */
+  owner: FileOwner;
+  /** The answers already stored for this same checklist: merged with the sent ones by item. */
+  stored?: ChecklistAnswer[];
+  /**
+   * An offline capture (the checklist may have changed since): an unknown
+   * checklist is dropped (null), an answer that no longer fits its item is
+   * left out, and missing required answers are tolerated.
+   */
+  lenient?: boolean;
 }
 
 /**
  * Checklist answers checked against the settings checklist: unknown items are
  * dropped (the checklist may have changed since an offline capture), values
  * are typed by the item kind (yes/no → boolean, number → number, select → one
- * of the options, photo → an uploaded photo key), every required item must be
- * answered (400 `CHECKLIST_INCOMPLETE`, `details.missing`).
+ * of the options, photo → an uploaded photo key). Answers are merged by item
+ * into `opts.stored` (an item sent with an empty value clears its answer), and
+ * every required item must be answered in the merged set (400
+ * `CHECKLIST_INCOMPLETE`, `details.missing`). 400 `INVALID_CHECKLIST` for a
+ * checklist that does not exist — null instead when `opts.lenient`.
  */
 export async function resolveChecklist(
   input: NonNullable<ReportFieldsInput['checklist']>,
   settings: Pick<FieldSettings, 'checklists'>,
-): Promise<{ checklistId: string; answers: Array<{ itemId: string; value: unknown }> }> {
+  opts: ResolveChecklistOptions,
+): Promise<{ checklistId: string; answers: ChecklistAnswer[] } | null> {
   const checklist = settings.checklists.find((c) => c._id === input.checklistId);
-  if (!checklist) throw new AppError('This checklist does not exist (any more)', 400, 'INVALID_CHECKLIST');
-  const answers: Array<{ itemId: string; value: unknown }> = [];
+  if (!checklist) {
+    if (opts.lenient) return null;
+    throw new AppError('This checklist does not exist (any more)', 400, 'INVALID_CHECKLIST');
+  }
+  const sent = new Map(input.answers.map((a) => [a.itemId, a.value]));
+  const answers: ChecklistAnswer[] = [];
   for (const item of checklist.items) {
-    const raw = input.answers.find((a) => a.itemId === item._id)?.value;
-    if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) continue;
+    if (!sent.has(item._id)) {
+      // Not sent: the stored answer stays.
+      const kept = opts.stored?.find((a) => a.itemId === item._id);
+      if (kept && !isBlank(kept.value)) answers.push({ itemId: item._id, value: kept.value });
+      continue;
+    }
+    const raw = sent.get(item._id);
+    if (isBlank(raw)) continue;
     let value: unknown;
-    switch (item.kind) {
-      case 'yes_no': {
-        const s = typeof raw === 'string' ? raw.trim().toLowerCase() : raw;
-        if (s === true || s === 'yes' || s === 'true') value = true;
-        else if (s === false || s === 'no' || s === 'false') value = false;
-        else throw badAnswer(item.label, 'answer yes or no');
-        break;
+    try {
+      switch (item.kind) {
+        case 'yes_no': {
+          const s = typeof raw === 'string' ? raw.trim().toLowerCase() : raw;
+          if (s === true || s === 'yes' || s === 'true') value = true;
+          else if (s === false || s === 'no' || s === 'false') value = false;
+          else throw badAnswer(item.label, 'answer yes or no');
+          break;
+        }
+        case 'number': {
+          const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : Number.NaN;
+          if (!Number.isFinite(n)) throw badAnswer(item.label, 'a number is needed');
+          value = n;
+          break;
+        }
+        case 'select': {
+          const option = (item.options ?? []).find((o) => o.toLowerCase() === String(raw).trim().toLowerCase());
+          if (!option) throw badAnswer(item.label, `choose one of: ${(item.options ?? []).join(', ')}`);
+          value = option;
+          break;
+        }
+        case 'photo':
+          if (typeof raw !== 'string') throw badAnswer(item.label, 'a photo is needed');
+          // Sequential on purpose: a checklist has a handful of photo items.
+          // eslint-disable-next-line no-await-in-loop
+          value = await fieldFileRef(raw, 'photo', opts.owner);
+          break;
+        default:
+          value = String(raw).trim();
       }
-      case 'number': {
-        const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : Number.NaN;
-        if (!Number.isFinite(n)) throw badAnswer(item.label, 'a number is needed');
-        value = n;
-        break;
-      }
-      case 'select': {
-        const option = (item.options ?? []).find((o) => o.toLowerCase() === String(raw).trim().toLowerCase());
-        if (!option) throw badAnswer(item.label, `choose one of: ${(item.options ?? []).join(', ')}`);
-        value = option;
-        break;
-      }
-      case 'photo':
-        if (typeof raw !== 'string') throw badAnswer(item.label, 'a photo is needed');
-        // Sequential on purpose: a checklist has a handful of photo items.
-        // eslint-disable-next-line no-await-in-loop
-        value = await fieldFileRef(raw, 'photo');
-        break;
-      default:
-        value = String(raw).trim();
+    } catch (err) {
+      // Offline: the item changed since the answer was given — leave the answer out.
+      if (opts.lenient && err instanceof BadAnswer) continue;
+      throw err;
     }
     answers.push({ itemId: item._id, value });
   }
   const missing = checklist.items.filter((i) => i.required && !answers.some((a) => a.itemId === i._id));
-  if (missing.length > 0) {
+  if (missing.length > 0 && !opts.lenient) {
     throw new AppError(
       `Answer the required checklist items: ${missing.map((i) => i.label).join(', ')}`,
       400,
@@ -424,13 +476,34 @@ export async function resolveChecklist(
   return { checklistId: checklist._id, answers };
 }
 
-/** Validate a report change: upload keys → stored references, checklist answers checked. */
-export async function resolveReport(input: ReportFieldsInput, settings: FieldSettings): Promise<ResolvedReport> {
+export interface ResolveReportOptions {
+  /** The caller's user id: only their own uploads may be attached. */
+  userId: unknown;
+  /** The visit's stored report: its files are accepted as they are, checklist answers merge into its. */
+  existing?: IVisit['report'] | null;
+  /** An offline capture: an unknown or changed checklist is degraded instead of refused (see resolveChecklist). */
+  lenient?: boolean;
+}
+
+/** The stored file references of `report` (photos, documents, photo answers). */
+function storedFiles(report: IVisit['report'] | null | undefined): string[] {
+  if (!report) return [];
+  const answers = (report.checklist?.answers ?? []).map((a) => a.value).filter((v): v is string => typeof v === 'string');
+  return [...(report.photos ?? []), ...(report.documents ?? []).map((d) => d.key), ...answers.filter((v) => v.startsWith('/uploads/'))];
+}
+
+/**
+ * Validate a report change: upload keys → stored references (the caller's
+ * own uploads, or files the report already has), checklist answers checked
+ * and merged into the stored ones for the same checklist.
+ */
+export async function resolveReport(input: ReportFieldsInput, settings: FieldSettings, opts: ResolveReportOptions): Promise<ResolvedReport> {
+  const owner: FileOwner = { userId: opts.userId, keep: storedFiles(opts.existing) };
   const out: ResolvedReport = {};
   if (input.notes !== undefined) out.notes = input.notes;
-  if (input.photos !== undefined) out.photos = [...new Set(await fieldFileRefs(input.photos, 'photo'))];
+  if (input.photos !== undefined) out.photos = [...new Set(await fieldFileRefs(input.photos, 'photo', owner))];
   if (input.documents !== undefined) {
-    const refs = await fieldFileRefs(input.documents.map((d) => d.key), 'any');
+    const refs = await fieldFileRefs(input.documents.map((d) => d.key), 'any', owner);
     out.documents = input.documents.map((d, i) => ({ key: refs[i]!, name: d.name || 'Document' }));
   }
   if (input.peopleMet !== undefined) {
@@ -443,8 +516,16 @@ export async function resolveReport(input: ReportFieldsInput, settings: FieldSet
   if (input.outcome !== undefined) out.outcome = input.outcome;
   if (input.nextAction !== undefined) out.nextAction = input.nextAction;
   if (input.followUpDate !== undefined) out.followUpDate = input.followUpDate;
-  if (input.checklist !== undefined) {
-    out.checklist = input.checklist === null ? null : await resolveChecklist(input.checklist, settings);
+  if (input.checklist === null) out.checklist = null;
+  else if (input.checklist !== undefined) {
+    const stored = opts.existing?.checklist;
+    const resolved = await resolveChecklist(input.checklist, settings, {
+      owner,
+      lenient: opts.lenient,
+      ...(stored && stored.checklistId === input.checklist.checklistId ? { stored: stored.answers ?? [] } : {}),
+    });
+    // null: an offline report's checklist that no longer exists — the rest of the report stands.
+    if (resolved) out.checklist = resolved;
   }
   return out;
 }
@@ -772,14 +853,29 @@ export async function markMissedVisits(today: Date): Promise<number> {
   return res.modifiedCount ?? 0;
 }
 
+/** Where the auto-close ends a visit of `day` checked in at `inAt`: the day's `autoCloseTime`, never before the check-in. */
+export function autoCloseInstant(day: Date, inAt: Date | null | undefined, settings: Pick<FieldSettings, 'autoCloseTime'>): Date {
+  return new Date(Math.max(atBusinessTime(day, settings.autoCloseTime).getTime(), inAt?.getTime() ?? 0));
+}
+
 /**
  * Visits still in progress from a day before `today` are closed at that day's
- * `autoCloseTime` (never before their check-in) and flagged `autoClosed`. A
- * real check-out that syncs later replaces this one (see the check-out).
+ * `autoCloseTime` (never before their check-in) and flagged `autoClosed`,
+ * with `checkOut.receivedAt` = `now` (when the auto-close ran). A real
+ * check-out captured before then replaces it later (see the check-out).
+ * Nightly for everyone; on demand for one employee (`filter.employeeId`)
+ * before their check-in, so a visit of an earlier day that synced after the
+ * nightly run does not stay open.
  */
-export async function autoCloseOpenVisits(today: Date, settings: FieldSettings, now: Date = new Date()): Promise<number> {
+export async function autoCloseOpenVisits(
+  today: Date,
+  settings: FieldSettings,
+  now: Date = new Date(),
+  filter: { employeeId?: Types.ObjectId | string } = {},
+): Promise<number> {
   const startOfToday = atBusinessTime(today, '00:00');
   const open = await Visit.find({
+    ...(filter.employeeId ? { employeeId: new Types.ObjectId(String(filter.employeeId)) } : {}),
     status: 'in_progress',
     $or: [{ day: { $lt: today } }, { day: null, 'checkIn.time': { $lt: startOfToday } }],
   })
@@ -790,7 +886,7 @@ export async function autoCloseOpenVisits(today: Date, settings: FieldSettings, 
   for (const v of open) {
     const inAt = v.checkIn?.time ?? null;
     const day = v.day ?? (inAt ? startOfBusinessDay(inAt) : startOfBusinessDay(new Date(today.getTime() - DAY_MS)));
-    const closeAt = new Date(Math.max(atBusinessTime(day, settings.autoCloseTime).getTime(), inAt?.getTime() ?? 0));
+    const closeAt = autoCloseInstant(day, inAt, settings);
     const minutes = inAt ? Math.max(0, Math.round((closeAt.getTime() - inAt.getTime()) / 60_000)) : 0;
     // eslint-disable-next-line no-await-in-loop
     const res = await Visit.updateOne(
