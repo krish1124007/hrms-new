@@ -1269,7 +1269,8 @@ follow-up, checklist), and it all works offline and syncs later with the origina
 Managers plan visits (one-off and recurring), see the team map (last check-in/out point and status),
 day routes, daily/summary/exception/site reports with Excel and PDF, and approve a **travel allowance
 by km** that goes through normal expense approval. Location is recorded only at check-in and check-out:
-continuous tracking is gone. The database gets three migrations.
+continuous tracking is gone (the server now always tells installed apps that live tracking is off —
+production had it switched on). The database gets four migrations.
 
 **Prerequisite:** `field-visits` is merged into the branch the server tracks and pushed. Note the commit
 you are on, for rollback (G):
@@ -1320,16 +1321,15 @@ Order: **A → B → C → D**, then tell people (E) and verify (F). Ship the **
 ### C. Pull, install, seed, migrate, restart
 
 ```bash
-cd /var/www/hrms-new && git checkout -- backend/package-lock.json && git pull && cd backend && npm ci --omit=dev && npm run build
+cd /var/www/hrms-new && git checkout -- backend/package-lock.json && git pull && cd backend && npm ci --omit=dev
 node dist/scripts/seed.js
 npm run migrate:up
 npm run migrate:status
 pm2 restart all
-cd ../frontend && npm ci && npm run build
 ```
 
-(Use the same build/publish steps for `backend/dist` and `frontend/dist` as in section 4 if the server
-builds differently.)
+`backend/dist` and `frontend/dist` are committed (rebuilt for this release), so the server does not
+build; nginx serves `frontend/dist` as before.
 
 - **Seed** refreshes the system roles and adds **Field Employee** (own visits) and **Field Manager**
   (their team). Expect `Roles: 2 created, … refreshed`.
@@ -1343,8 +1343,11 @@ builds differently.)
   - `20261023000005-field-team-travel`: the built-in Field Manager role keeps `field.view` (self + direct
     reports) and loses `field.manage` (everybody + settings), which stays with HR/admin; builds the
     one-travel-claim-per-day index and the route cache index.
+  - `20261023000006-field-uploads`: records who uploaded each field photo/document from now on and
+    makes a selfie usable for one visit only (unique index). Stops, listing them, if two visits already
+    share a selfie (production has no visits).
 
-  All three are idempotent; after fixing data, run `npm run migrate:up` again. `migrate:status` must
+  All four are idempotent; after fixing data, run `npm run migrate:up` again. `migrate:status` must
   show no `PENDING`.
 - **Restart** and check `pm2 logs backend --lines 30 --nostream` for `API listening` and the `field`
   queue (nightly job 00:15 IST: plans recurring visits 7 days ahead, marks yesterday's unvisited plans
