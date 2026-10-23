@@ -15,8 +15,9 @@
  *
  * Measured legs are kept per employee and day (`fielddayroutes`) under a
  * signature of the day's points, and reused until a new point arrives. A
- * route that had to fall back while Google is configured is not kept, so the
- * next request asks Google again.
+ * route that had to fall back while Google is configured (a failure) is kept
+ * for 10 minutes only (`retryAfter`), then Google is asked again — so a
+ * failing key is not called on every team-map poll or summary.
  */
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
@@ -55,6 +56,8 @@ export interface DayRoute {
   estimated: boolean;
 }
 
+/** A route that fell back while Google is configured is measured again after this long. */
+export const ROUTE_RETRY_AFTER_MS = 10 * 60 * 1000;
 /** A visit's own check-in → check-out leg shorter than this is not travel. */
 export const SAME_VISIT_MIN_LEG_M = 50;
 /** Day routes measured at the same time (each asks Google for up to 4 legs at once). */
@@ -352,7 +355,7 @@ export async function measureDays(
   const ids = [...new Set(toMeasure.map((d) => d.employeeId))].map((id) => new Types.ObjectId(id));
   const dates = [...new Set(toMeasure.map((d) => d.date))];
   const cached = await FieldDayRoute.find({ employeeId: { $in: ids }, date: { $in: dates } })
-    .select('employeeId date signature legs estimated')
+    .select('employeeId date signature legs estimated retryAfter')
     .lean()
     .exec();
   const cache = new Map(cached.map((c) => [dayKey(String(c.employeeId), c.date), c]));
@@ -362,8 +365,10 @@ export async function measureDays(
     const key = dayKey(d.employeeId, d.date);
     const signature = signatureOf(d.points);
     const hit = cache.get(key);
-    // An estimate made while Google is configured was a failure: measure again.
-    if (hit && hit.signature === signature && (!hit.estimated || !googleOn)) {
+    // An estimate made while Google is configured was a failure: measure
+    // again once its retry time has passed.
+    const retryLater = hit?.retryAfter instanceof Date && hit.retryAfter.getTime() > Date.now();
+    if (hit && hit.signature === signature && (!hit.estimated || !googleOn || retryLater)) {
       const legs = hit.legs.map((l) => ({
         fromIndex: l.fromIndex,
         toIndex: l.toIndex,
@@ -375,26 +380,26 @@ export async function measureDays(
     }
     const route = routeOf(d.date, d.points, await measureLegs(d.points));
     routes.set(key, route);
-    if (!route.estimated || !googleOn) {
-      await FieldDayRoute.updateOne(
-        { employeeId: new Types.ObjectId(d.employeeId), date: d.date },
-        {
-          $set: {
-            signature,
-            legs: route.legs,
-            totalKm: route.totalKm,
-            estimated: route.estimated,
-            computedAt: new Date(),
-          },
+    const failed = route.estimated && googleOn;
+    await FieldDayRoute.updateOne(
+      { employeeId: new Types.ObjectId(d.employeeId), date: d.date },
+      {
+        $set: {
+          signature,
+          legs: route.legs,
+          totalKm: route.totalKm,
+          estimated: route.estimated,
+          computedAt: new Date(),
+          retryAfter: failed ? new Date(Date.now() + ROUTE_RETRY_AFTER_MS) : null,
         },
-        { upsert: true },
-      )
-        .exec()
-        // A concurrent request stored the same day first: keep theirs.
-        .catch((err: { code?: number }) => {
-          if (err?.code !== 11000) throw err;
-        });
-    }
+      },
+      { upsert: true },
+    )
+      .exec()
+      // A concurrent request stored the same day first: keep theirs.
+      .catch((err: { code?: number }) => {
+        if (err?.code !== 11000) throw err;
+      });
   });
   return routes;
 }

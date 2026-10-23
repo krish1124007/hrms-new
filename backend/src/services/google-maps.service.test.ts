@@ -1,13 +1,16 @@
 /**
  * The Google Maps service with `fetch` mocked: Routes API legs (request
- * shape, caching, fallback on failure / timeout / no key) and reverse
- * geocoding.
+ * shape, caching, fallback on failure / timeout / no key, failures remembered
+ * for a while, the circuit breaker, a stalled body) and reverse geocoding.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { distanceMeters } from '../lib/field-utils.js';
 import {
+  BREAKER_OPEN_MS,
+  BREAKER_THRESHOLD,
+  FAILURE_TTL_MS,
   GOOGLE_TIMEOUT_MS,
   ROUTES_URL,
   clearGoogleMapsCache,
@@ -131,6 +134,87 @@ describe('routeDistanceMeters', () => {
   it('a zero-length route (no distanceMeters in the reply) is 0 m', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ routes: [{}] })));
     expect(await googleMaps.routeDistanceMeters([A, B])).toEqual({ legsM: [0], legsEstimated: [false], estimated: false });
+  });
+});
+
+describe('failures', () => {
+  /** A Response whose body never arrives: json() settles only when the request is aborted. */
+  const stalledBody = (_url: string, init: RequestInit) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    } as unknown as Response);
+
+  it('the 3 s timeout also covers reading the body', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(stalledBody));
+    const pending = googleMaps.routeDistanceMeters([A, B]);
+    const settled = vi.fn();
+    void pending.then(settled);
+    await vi.advanceTimersByTimeAsync(GOOGLE_TIMEOUT_MS + 10);
+    expect(settled).toHaveBeenCalledWith({ legsM: [estimatedLegMeters(A, B)], legsEstimated: [true], estimated: true });
+
+    vi.stubGlobal('fetch', vi.fn(stalledBody));
+    const geocoding = googleMaps.reverseGeocode(18.5, 73.8);
+    const geocoded = vi.fn();
+    void geocoding.then(geocoded);
+    await vi.advanceTimersByTimeAsync(GOOGLE_TIMEOUT_MS + 10);
+    expect(geocoded).toHaveBeenCalledWith(null);
+  });
+
+  it('a failed leg (HTTP error, or no route) is not asked again for 10 minutes', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ error: { message: 'billing' } }, 403))
+      .mockResolvedValueOnce(json({ routes: [] }))
+      .mockResolvedValue(json({ routes: [{ distanceMeters: 9100 }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect((await googleMaps.routeDistanceMeters([A, B])).estimated).toBe(true);
+    expect((await googleMaps.routeDistanceMeters([B, C])).estimated).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Asked again within the 10 minutes: the estimate, no call.
+    expect(await googleMaps.routeDistanceMeters([A, B, C])).toEqual({
+      legsM: [estimatedLegMeters(A, B), estimatedLegMeters(B, C)],
+      legsEstimated: [true, true],
+      estimated: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(FAILURE_TTL_MS + 1);
+    expect(await googleMaps.routeDistanceMeters([A, B])).toEqual({ legsM: [9100], legsEstimated: [false], estimated: false });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it(`after ${BREAKER_THRESHOLD} failed calls in a row Google is left alone for a while, then tried again`, async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => json({ error: { message: 'API key not valid' } }, 403));
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(logger, 'warn');
+    const far = (i: number) => ({ lat: A.lat + i * 0.01, lng: A.lng });
+    const points = Array.from({ length: 20 }, (_, i) => far(i));
+
+    const result = await googleMaps.routeDistanceMeters(points);
+    expect(result.estimated).toBe(true);
+    expect(result.legsEstimated.every(Boolean)).toBe(true);
+    // Up to the threshold (plus the calls already in flight, 4 at a time), then no more.
+    const made = fetchMock.mock.calls.length;
+    expect(made).toBeGreaterThanOrEqual(BREAKER_THRESHOLD);
+    expect(made).toBeLessThanOrEqual(BREAKER_THRESHOLD + 3);
+    expect((await googleMaps.routeDistanceMeters([C, B])).estimated).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(made);
+
+    vi.advanceTimersByTime(BREAKER_OPEN_MS + 1);
+    fetchMock.mockImplementation(async () => json({ routes: [{ distanceMeters: 4200 }] }));
+    expect(await googleMaps.routeDistanceMeters([C, B])).toEqual({ legsM: [4200], legsEstimated: [false], estimated: false });
+    expect(fetchMock).toHaveBeenCalledTimes(made + 1);
+    // The key never reaches the logs.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(KEY);
   });
 });
 
