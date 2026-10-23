@@ -63,6 +63,8 @@ export interface ICheckinMetadata {
   regularized?: boolean;
   /** Check-in made by the first field visit of the day (services/attendance-field-link.service.ts). */
   fieldVisitId?: string;
+  /** A past field day closed by the auto-checkout rule before any visit check-out of it had arrived. */
+  fieldProvisional?: boolean;
 }
 
 /** `field_visit`: the day's check-in came from a field visit check-in (not a punch method). */
@@ -153,6 +155,7 @@ const metadataSchema = new Schema<ICheckinMetadata>(
     autoCheckout: { type: Boolean },
     regularized: { type: Boolean },
     fieldVisitId: String,
+    fieldProvisional: { type: Boolean },
   },
   { _id: false },
 );

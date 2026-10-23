@@ -391,7 +391,7 @@ describe('5. checklist answers on a report edit', () => {
 describe('6. a past day’s attendance made by an offline visit', () => {
   const att = (n: number) => Attendance.findOne({ employeeId: rep.employee._id, date: dayLabel(n) }).lean();
 
-  it('is closed at once by the auto-checkout rule; a later visit check-out of that day moves it forward', async () => {
+  it('is closed at once by the auto-checkout rule provisionally; the first visit check-out replaces it, later ones only move it forward', async () => {
     await AttendanceConfig.updateOne({}, { $set: { 'settings.autoCheckoutTime': '18:00' } }, { upsert: true });
     const site = await pinnedSite([rep.employee]);
     const visit = await checkIn({ clientRef: randomUUID(), capturedAt: istAt(-2, '10:00').toISOString(), siteId: String(site._id), purpose: 'Meeting', location: MUMBAI });
@@ -399,13 +399,16 @@ describe('6. a past day’s attendance made by an offline visit', () => {
     let row = await att(-2);
     expect(row?.checkIn?.time?.toISOString()).toBe(istAt(-2, '10:00').toISOString());
     expect(row?.checkOut?.time?.toISOString()).toBe(istAt(-2, '18:00').toISOString());
-    expect(row?.checkOut?.metadata).toMatchObject({ autoCheckout: true, fieldVisitId: visit.body.data._id });
+    expect(row?.checkOut?.metadata).toMatchObject({ autoCheckout: true, fieldVisitId: visit.body.data._id, fieldProvisional: true });
     expect(row?.totalWorkingHours).toBeCloseTo(8, 1);
 
-    // Earlier than the auto check-out: nothing moves.
+    // The day's first visit check-out replaces the provisional 18:00, although earlier.
     const early = await checkOut(visit.body.data._id, { clientRef: randomUUID(), capturedAt: istAt(-2, '12:00').toISOString() });
     expect(early.status).toBe(200);
-    expect((await att(-2))?.checkOut?.time?.toISOString()).toBe(istAt(-2, '18:00').toISOString());
+    row = await att(-2);
+    expect(row?.checkOut?.time?.toISOString()).toBe(istAt(-2, '12:00').toISOString());
+    expect(row?.checkOut?.metadata?.fieldProvisional).toBeFalsy();
+    expect(row?.totalWorkingHours).toBeCloseTo(2, 1);
 
     const second = await checkIn({ clientRef: randomUUID(), capturedAt: istAt(-2, '18:30').toISOString(), siteId: String(site._id), purpose: 'Meeting' });
     const late = await checkOut(second.body.data._id, { clientRef: randomUUID(), capturedAt: istAt(-2, '19:30').toISOString() });

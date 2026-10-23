@@ -17,8 +17,10 @@
  * A day that is already over (an offline visit synced after that day's
  * day-close ran) is closed straight away, the way the day-close does: at the
  * day's last visit check-out when there is one, else by the auto-checkout
- * rule. A visit check-out of that day that arrives later moves the
- * check-out forward when it is later (`extendFieldDayCheckOut`).
+ * rule. That rule's time is provisional: the first visit check-out of that
+ * day to arrive replaces it (earlier or later — an offline check-in usually
+ * syncs just before its check-out); after that, a visit check-out only moves
+ * the day's check-out forward (`extendFieldDayCheckOut`).
  *
  * Conditional writes only (no transactions): a punch or another visit
  * racing this one wins, and this call becomes a no-op.
@@ -63,10 +65,14 @@ function settledFields(row: IAttendance): Record<string, unknown> {
 }
 
 /** The auto check-out record of a field-made day (`closeOpenRow`'s, plus the visit). */
-const fieldAutoCheckOut = (out: Date, visitId: string | undefined): ICheckinRecord => ({
+const fieldAutoCheckOut = (out: Date, visitId: string | undefined, provisional = false): ICheckinRecord => ({
   time: out,
   method: 'manual',
-  metadata: { autoCheckout: true, ...(visitId ? { fieldVisitId: visitId } : {}) },
+  metadata: {
+    autoCheckout: true,
+    ...(visitId ? { fieldVisitId: visitId } : {}),
+    ...(provisional ? { fieldProvisional: true } : {}),
+  },
 });
 
 /** The latest real (not auto-closed) visit check-out of `employeeId` on the visit day `day`. */
@@ -101,10 +107,11 @@ async function closeIfDayOver(
   const inAt = row?.checkIn?.time;
   if (!row || !inAt || row.checkOut?.time || isRowInProgress(row, shift, now)) return;
   const lastOut = await lastVisitCheckOut(row.employeeId, row.date);
-  const out = lastOut && lastOut.getTime() >= inAt.getTime() ? lastOut : autoCheckoutFor(row.date, inAt, shift, cfg);
+  const known = !!lastOut && lastOut.getTime() >= inAt.getTime();
+  const out = known ? lastOut : autoCheckoutFor(row.date, inAt, shift, cfg);
   if (!out || out.getTime() > now.getTime()) return;
   closeOpenRow(row, out, shift, cfg);
-  row.checkOut = fieldAutoCheckOut(out, visitId);
+  row.checkOut = fieldAutoCheckOut(out, visitId, !known);
   await Attendance.updateOne({ _id: row._id, 'checkOut.time': null }, { $set: settledFields(row) }).exec();
 }
 
@@ -188,8 +195,10 @@ export async function ensureDayCheckIn(
 /**
  * A visit checked in at `visitIn` was checked out at `out`: when its
  * attendance day was closed automatically (by the day-close, or at once for
- * an offline visit) with a field check-in, and `out` is later than that
- * check-out, the check-out moves to `out` and the day is settled again.
+ * an offline visit) with a field check-in, the check-out moves to `out` when
+ * that is later — or, while the close is still provisional (no visit
+ * check-out of the day had arrived), to the day's last visit check-out
+ * whether earlier or later. The day is settled again.
  */
 export async function extendFieldDayCheckOut(employeeId: Types.ObjectId | string, visitIn: Date, out: Date): Promise<void> {
   const employee = await Employee.findById(employeeId).select('shift').exec();
@@ -202,9 +211,18 @@ export async function extendFieldDayCheckOut(employeeId: Types.ObjectId | string
     'checkOut.metadata.autoCheckout': true,
   }).exec();
   const before = row?.checkOut?.time;
-  if (!row || !before || before.getTime() >= out.getTime()) return;
+  const inAt = row?.checkIn?.time;
+  if (!row || !before || !inAt) return;
+  let target = out;
+  if (row.checkOut?.metadata?.fieldProvisional) {
+    const lastOut = await lastVisitCheckOut(row.employeeId, row.date);
+    if (lastOut && lastOut.getTime() > target.getTime()) target = lastOut;
+    if (target.getTime() < inAt.getTime() || target.getTime() === before.getTime()) return;
+  } else if (before.getTime() >= target.getTime()) {
+    return;
+  }
   const visitId = row.checkOut?.metadata?.fieldVisitId;
-  closeOpenRow(row, out, shift, cfg);
-  row.checkOut = fieldAutoCheckOut(out, visitId);
+  closeOpenRow(row, target, shift, cfg);
+  row.checkOut = fieldAutoCheckOut(target, visitId);
   await Attendance.updateOne({ _id: row._id, 'checkOut.time': before }, { $set: settledFields(row) }).exec();
 }
