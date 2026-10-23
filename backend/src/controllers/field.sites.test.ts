@@ -28,7 +28,7 @@ interface Actor {
 }
 
 async function actor(
-  roleSlug: 'field_employee' | 'field_manager' | 'employee',
+  roleSlug: 'field_employee' | 'field_manager' | 'hr_executive' | 'employee',
   overrides: Partial<Record<keyof IEmployee, unknown>> = {},
 ): Promise<Actor> {
   const { user, token } = await createUser({ roleSlug });
@@ -46,7 +46,8 @@ let head: Actor;
 beforeEach(async () => {
   app = createApp();
   rep = await actor('field_employee');
-  head = await actor('field_manager');
+  // field.manage (sees every site): HR. A field manager is team-scoped (field.view).
+  head = await actor('hr_executive');
 });
 
 afterEach(() => {

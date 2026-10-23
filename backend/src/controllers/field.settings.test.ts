@@ -25,7 +25,8 @@ beforeEach(async () => {
   const rep = await createUser({ roleSlug: 'field_employee' });
   await createEmployeeFor(rep.user);
   repToken = rep.token;
-  const head = await createUser({ roleSlug: 'field_manager' });
+  // field.manage: HR (a field manager's field.view is team-scoped and has no settings).
+  const head = await createUser({ roleSlug: 'hr_executive' });
   await createEmployeeFor(head.user);
   headToken = head.token;
 });
@@ -64,7 +65,7 @@ describe('GET /field/settings', () => {
 });
 
 describe('PUT /field/settings', () => {
-  it('a field manager saves a subset; the rest keeps its value; checklists get ids', async () => {
+  it('field.manage saves a subset; the rest keeps its value; checklists get ids', async () => {
     const res = await put(headToken, {
       selfieRequired: false,
       vehicles: [
@@ -148,8 +149,10 @@ describe('PUT /field/settings', () => {
     expect(ok.body.data).toMatchObject({ autoCloseTime: '21:45', offlineMaxAgeDays: 3, siteTypes: ['Clinic', 'Other'] });
   });
 
-  it('is for field managers only', async () => {
+  it('is for field.manage only — not a field employee, not a (team-scoped) field manager', async () => {
     expect((await put(repToken, { selfieRequired: false })).status).toBe(403);
+    const lead = await createUser({ roleSlug: 'field_manager' });
+    expect((await put(lead.token, { selfieRequired: false })).status).toBe(403);
     const { token } = await createUser({ roleSlug: 'hr_executive' });
     expect((await put(token, { selfieRequired: false })).status).toBe(200);
   });

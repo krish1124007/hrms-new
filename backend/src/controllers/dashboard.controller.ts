@@ -5,10 +5,8 @@ import { LeaveRequest } from '../models/leave-request.model.js';
 import { LeaveType } from '../models/leave-type.model.js';
 import { AuditLog } from '../models/audit-log.model.js';
 import { Department } from '../models/department.model.js';
-import { Visit } from '../models/visit.model.js';
 import { Task } from '../models/task.model.js';
-import { LocationTrack } from '../models/location-track.model.js';
-import { getDashboardData } from '../services/dashboard.service.js';
+import { fieldTodayFigures, getDashboardData } from '../services/dashboard.service.js';
 import { UnauthorizedError } from '../lib/errors.js';
 import { startOfBusinessDay, endOfBusinessDay } from '../lib/business-day.js';
 
@@ -251,7 +249,6 @@ export async function recentActivity(_req: Request, res: Response): Promise<void
 
 export async function analytics(_req: Request, res: Response): Promise<void> {
   const now = new Date();
-  const todayStart = startOfDay(now);
   const todayEnd = endOfDay(now);
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
@@ -360,17 +357,8 @@ export async function analytics(_req: Request, res: Response): Promise<void> {
     count: l.count,
   }));
 
-  /* ── Field stats today ── */
-  const [activeAgents, visitsToday] = await Promise.all([
-    LocationTrack.distinct('employeeId', {
-      timestamp: { $gte: todayStart, $lte: todayEnd },
-    }).then((ids) => ids.length),
-    Visit.countDocuments({
-      createdAt: { $gte: todayStart, $lte: todayEnd },
-      status: { $ne: 'cancelled' },
-    }),
-  ]);
-  const fieldStats = { activeAgents, visitsToday };
+  /* ── Field stats today: visits checked in and the people who made them ── */
+  const fieldStats = await fieldTodayFigures();
 
   /* ── Health indicators ── */
   const pendingLeaves = await LeaveRequest.countDocuments({ status: 'pending' });

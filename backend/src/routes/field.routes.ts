@@ -11,7 +11,9 @@ import * as sites from '../controllers/field-sites.controller.js';
 import * as visits from '../controllers/field-visits.controller.js';
 import * as tasks from '../controllers/field-tasks.controller.js';
 import * as tracking from '../controllers/field-tracking.controller.js';
-import * as fieldMap from '../controllers/field-map.controller.js';
+import * as team from '../controllers/field-team.controller.js';
+import * as travel from '../controllers/field-travel.controller.js';
+import * as reports from '../controllers/field-reports.controller.js';
 import * as uploads from '../controllers/field-uploads.controller.js';
 
 const router = Router();
@@ -112,12 +114,6 @@ router.get(
   asyncHandler(visits.todayVisits),
 );
 router.get(
-  '/visits/map',
-  requirePermission('field.view'),
-  validate(fieldMap.visitsMapQuerySchema, 'query'),
-  asyncHandler(fieldMap.visitsMap),
-);
-router.get(
   '/visits/timeline/:employeeId',
   requirePermission('field.view'),
   asyncHandler(visits.visitTimeline),
@@ -216,32 +212,64 @@ router.patch(
   asyncHandler(tasks.completeTask),
 );
 
-/* ── Live Tracking ── */
-// The one ingest (also mounted at POST /attendance/tracking/batch): only while
-// live tracking is on and the caller is clocked in.
+/* ── Team status and day routes ── */
+router.get(
+  '/team/status',
+  requirePermission('field.view'),
+  validate(team.dayQuerySchema, 'query'),
+  asyncHandler(team.teamStatus),
+);
+router.get(
+  '/route/:employeeId',
+  requirePermission('field.view'),
+  validate(team.dayQuerySchema, 'query'),
+  asyncHandler(team.employeeRoute),
+);
+
+/* ── Travel allowance (self) ── */
+router.get(
+  '/travel/day',
+  requirePermission('field.view'),
+  validate(travel.travelDayQuerySchema, 'query'),
+  asyncHandler(travel.travelDay),
+);
 router.post(
-  '/tracking/batch',
+  '/travel/claims',
   requirePermission('field.view'),
-  validate(tracking.batchSchema),
-  asyncHandler(tracking.ingestBatch),
+  validate(travel.travelClaimSchema),
+  asyncHandler(travel.createTravelClaim),
+);
+
+/* ── Reports (JSON, or ?format=xlsx|pdf) ── */
+router.get(
+  '/reports/daily',
+  requirePermission('field.view'),
+  validate(reports.dailyQuerySchema, 'query'),
+  asyncHandler(reports.dailyReport),
 );
 router.get(
-  '/tracking/live',
+  '/reports/summary',
   requirePermission('field.view'),
-  asyncHandler(tracking.liveTracking),
+  validate(reports.summaryQuerySchema, 'query'),
+  asyncHandler(reports.summaryReport),
 );
 router.get(
-  '/tracking/:employeeId/trail',
+  '/reports/exceptions',
   requirePermission('field.view'),
-  validate(tracking.trailQuerySchema, 'query'),
-  asyncHandler(tracking.trackingTrail),
+  validate(reports.rangeQuerySchema, 'query'),
+  asyncHandler(reports.exceptionsReport),
 );
-// Older name for the trail; same response.
 router.get(
-  '/tracking/history/:employeeId',
+  '/reports/sites',
   requirePermission('field.view'),
-  validate(tracking.trailQuerySchema, 'query'),
-  asyncHandler(tracking.trackingTrail),
+  validate(reports.rangeQuerySchema, 'query'),
+  asyncHandler(reports.sitesReport),
 );
+
+/* ── Tracking (removed) ── */
+// Locations are recorded only at check-in/check-out. Old app builds that still
+// upload a location queue get 200 { ignored: true } (also at
+// POST /attendance/tracking/batch); nothing is stored.
+router.post('/tracking/batch', tracking.ignoreTrackingBatch);
 
 export default router;

@@ -147,13 +147,16 @@ const HR_MANAGER_PERMISSIONS: string[] = [
 /**
  * Field Visits roles. A field employee is an employee who also checks in at
  * sites, pins sites and files visit reports (`field.view`: their own records,
- * plus their direct reports' if they have any). A field manager runs the
- * field team: a manager who also sees every field employee's visits, sites,
- * routes and reports and edits the field settings (`field.manage`).
+ * plus their direct reports' if they have any). A field manager runs their
+ * field team: a manager (approves their reports' leave, expenses — travel
+ * claims included — and attendance) who also sees their team's visits,
+ * sites, routes and reports, plans their visits and goes to sites themselves
+ * — `field.view`, scoped to themselves and their direct reports. Seeing
+ * everybody and the field settings (`field.manage`) stay with HR and admin.
  */
 const FIELD_EMPLOYEE_PERMISSIONS: string[] = [...EMPLOYEE_PERMISSIONS, 'field.view'];
 
-const FIELD_MANAGER_PERMISSIONS: string[] = [...MANAGER_PERMISSIONS, 'field.view', 'field.manage'];
+const FIELD_MANAGER_PERMISSIONS: string[] = [...MANAGER_PERMISSIONS, 'field.view'];
 
 export const DEFAULT_ROLES: Array<{
   name: string;
@@ -207,7 +210,7 @@ export const DEFAULT_ROLES: Array<{
   {
     name: 'Field Manager',
     slug: 'field_manager',
-    description: 'Manager of the field team — plans visits, sees every field employee’s visits, routes and reports, edits field settings',
+    description: 'Manager of a field team — plans their team’s visits, sees their visits, routes and reports, approves their claims',
     permissions: FIELD_MANAGER_PERMISSIONS,
     isSystem: true,
   },

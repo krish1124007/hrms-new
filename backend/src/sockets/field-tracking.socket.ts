@@ -23,7 +23,7 @@ export function getFieldTrackingNamespace(): Namespace | null {
 
 /**
  * Namespace gate, after `socketAuth`: only field users may watch reps.
- * Rooms follow the same visibility as `GET /field/tracking/live` —
+ * Rooms follow the field visibility rule —
  * `field.manage` joins `managers:all` (every rep); every field user
  * with an employee record joins `reports:<their employee id>` (their direct
  * reports). Anyone else is refused with `FORBIDDEN`.
@@ -43,10 +43,11 @@ export function fieldTrackingAccess(socket: Socket, next: (err?: Error) => void)
 }
 
 /**
- * `/field-tracking` — managers watch their reps' live locations. JWT auth
- * (active users only) then the field gate above; clients never choose
- * their rooms. The ingest (`services/location-track.service.ts`) emits
- * `location:update` to `managers:all` and the rep's manager's room.
+ * `/field-tracking` — managers watched their reps' live locations here. JWT
+ * auth (active users only) then the field gate above; clients never choose
+ * their rooms. Continuous tracking is gone, so nothing emits
+ * `location:update` any more; the namespace stays only so older clients that
+ * connect to it are not refused.
  */
 export function registerFieldTrackingNamespace(io: SocketServer): void {
   nsp = io.of(FIELD_TRACKING_NAMESPACE);

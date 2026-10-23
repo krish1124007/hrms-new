@@ -225,15 +225,10 @@ router.delete(
 );
 
 // ---------- LIVE TRACKING ----------
-// The same ingest as POST /field/tracking/batch (kept for the shipped mobile
-// app, which polls it for every user): stored only for field staff, while
-// live tracking is on and the caller is clocked in — otherwise 200
-// `{ ignored: true }`, never an error.
-router.post(
-  '/tracking/batch',
-  validate(tracking.batchSchema),
-  asyncHandler(tracking.ingestLegacyBatch),
-);
+// Continuous tracking is gone: shipped app builds still post their location
+// queue here (for every user) and get 200 `{ ignored: true }`; nothing is
+// stored. The live map below shows fixes stored before.
+router.post('/tracking/batch', tracking.ignoreTrackingBatch);
 router.get(
   '/tracking/live',
   requirePermission('attendance.view'),
