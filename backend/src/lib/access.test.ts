@@ -40,7 +40,7 @@ describe('hasPermission', () => {
   });
 
   it('honours customPermissions on the user', () => {
-    expect(hasPermission(fakeUser([], ['field-sales.manage']), 'field-sales.manage')).toBe(true);
+    expect(hasPermission(fakeUser([], ['field.manage']), 'field.manage')).toBe(true);
   });
 
   it('fails when there is no user', () => {

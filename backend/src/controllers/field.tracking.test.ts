@@ -1,10 +1,10 @@
 /**
  * Field live tracking: the one consented ingest (both URLs), the live socket
  * broadcast, the live / trail / map read endpoints and their visibility, and
- * the socket handshake.
+ * the socket handshake. (Site pins: field.sites.test.ts.)
  *
- * Visibility everywhere: `field-sales.manage` sees every rep; a plain
- * `field-sales.view` holder sees themselves and their direct reports.
+ * Visibility everywhere: `field.manage` sees every rep; a plain
+ * `field.view` holder sees themselves and their direct reports.
  */
 import request from 'supertest';
 import type { Express } from 'express';
@@ -17,7 +17,7 @@ import type { IEmployee } from '../models/employee.model.js';
 import { Attendance } from '../models/attendance.model.js';
 import { AttendanceConfig } from '../models/attendance-config.model.js';
 import { LocationTrack } from '../models/location-track.model.js';
-import { Client } from '../models/client.model.js';
+import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
 import { atBusinessTime, startOfBusinessDay } from '../lib/business-day.js';
 import * as ioRegistry from '../sockets/io-registry.js';
@@ -42,7 +42,7 @@ async function fieldActor(
   opts: { manage?: boolean; firstName?: string; reportingManager?: unknown } = {},
 ): Promise<Actor> {
   const { user, token } = await createUser({ roleSlug: 'employee' });
-  const perms = opts.manage ? ['field-sales.view', 'field-sales.manage'] : ['field-sales.view'];
+  const perms = opts.manage ? ['field.view', 'field.manage'] : ['field.view'];
   await User.updateOne({ _id: user._id }, { $set: { customPermissions: perms } });
   const employee = await createEmployeeFor(user, {
     firstName: opts.firstName ?? 'Rep',
@@ -236,10 +236,10 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
     expect(await LocationTrack.countDocuments({ employeeId: admin._id })).toBe(1);
   });
 
-  it('403 NOT_FIELD_STAFF for a field-sales.manage holder HR has not flagged as field staff', async () => {
+  it('403 NOT_FIELD_STAFF for a field.manage holder HR has not flagged as field staff', async () => {
     await enableTracking();
     const { user, token } = await createUser({ roleSlug: 'hr_manager' });
-    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field-sales.view', 'field-sales.manage'] } });
+    await User.updateOne({ _id: user._id }, { $set: { customPermissions: ['field.view', 'field.manage'] } });
     const hr = await createEmployeeFor(user);
     await clockIn(hr);
     const res = await request(app)
@@ -318,7 +318,7 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
       const res = await request(app)
         .post('/api/v1/field/tracking/batch')
         .set(auth(rep.token))
-        // Out of order on purpose: the broadcast carries the newest fix.
+        // Unsorted on purpose: the broadcast carries the newest fix.
         .send({ points: [latest, point(6)] });
       expect(res.status).toBe(201);
     } finally {
@@ -347,7 +347,7 @@ describe('POST /field/tracking/batch — one consented ingest', () => {
 // ─── Live ──────────────────────────────────────────────────────────────────
 
 describe('GET /field/tracking/live', () => {
-  it('a plain-view manager sees their report, not a stranger; field-sales.manage sees both', async () => {
+  it('a plain-view manager sees their report, not a stranger; field.manage sees both', async () => {
     const manager = await fieldActor({ firstName: 'Meera' });
     const report = await fieldActor({ firstName: 'Ravi', reportingManager: manager.employee._id });
     const stranger = await fieldActor({ firstName: 'Sam' });
@@ -357,10 +357,10 @@ describe('GET /field/tracking/live', () => {
     await track(report.employee, new Date(now - 5 * MIN), 72.81, 19.01);
     await track(stranger.employee, new Date(now - 10 * MIN));
 
-    const client = await Client.create({ name: 'Acme Traders' });
+    const site = await FieldSite.create({ name: 'Acme Traders', type: 'Branch' });
     await Visit.create({
       employeeId: report.employee._id,
-      clientId: client._id,
+      siteId: site._id,
       status: 'in_progress',
       checkIn: { time: new Date(now - 20 * MIN), location: { lat: 19.01, lng: 72.81 } },
     });
@@ -375,7 +375,7 @@ describe('GET /field/tracking/live', () => {
       lat: 19.01,
       lng: 72.81,
       accuracy: 12,
-      onVisit: { clientName: 'Acme Traders' },
+      onVisit: { siteName: 'Acme Traders' },
     });
     expect(new Date(row.recordedAt).getTime()).toBe(now - 5 * MIN);
     expect(row).toHaveProperty('avatar');
@@ -432,20 +432,21 @@ describe('GET /field/tracking/:employeeId/trail', () => {
     await track(rep.employee, ist('2026-10-15', '23:50'), 72.5);
     await track(rep.employee, ist('2026-10-16', '00:05'), 72.6); // next IST day
 
-    const client = await Client.create({
+    const site = await FieldSite.create({
       name: 'Acme Traders',
+      type: 'Branch',
       location: { type: 'Point', coordinates: [72.3, 19.3] },
     });
     await Visit.create({
       employeeId: rep.employee._id,
-      clientId: client._id,
+      siteId: site._id,
       status: 'completed',
       checkIn: { time: ist('2026-10-15', '11:00'), location: { lat: 19.31, lng: 72.31 } },
       checkOut: { time: ist('2026-10-15', '11:40') },
     });
     await Visit.create({
       employeeId: rep.employee._id,
-      clientId: client._id,
+      siteId: site._id,
       status: 'completed',
       checkIn: { time: ist('2026-10-14', '23:30') },
     });
@@ -462,7 +463,7 @@ describe('GET /field/tracking/:employeeId/trail', () => {
 
     expect(res.body.data.visits).toHaveLength(1);
     expect(res.body.data.visits[0]).toMatchObject({
-      clientName: 'Acme Traders',
+      siteName: 'Acme Traders',
       lat: 19.31,
       lng: 72.31,
       checkInAt: ist('2026-10-15', '11:00').toISOString(),
@@ -508,14 +509,15 @@ describe('GET /field/visits/map', () => {
     const report = await fieldActor({ firstName: 'Ravi', reportingManager: manager.employee._id });
     const stranger = await fieldActor({ firstName: 'Sam' });
     const head = await fieldActor({ manage: true });
-    const client = await Client.create({
+    const site = await FieldSite.create({
       name: 'Acme Traders',
+      type: 'Branch',
       location: { type: 'Point', coordinates: [72.3, 19.3] },
     });
     const visit = (employee: IEmployee, at: Date) =>
       Visit.create({
         employeeId: employee._id,
-        clientId: client._id,
+        siteId: site._id,
         status: 'completed',
         checkIn: { time: at, location: { lat: 19.31, lng: 72.31 } },
       });
@@ -532,7 +534,7 @@ describe('GET /field/visits/map', () => {
     expect(mine.body.data[0]).toMatchObject({
       employeeId: String(report.employee._id),
       employeeName: 'Ravi Kumar',
-      clientName: 'Acme Traders',
+      siteName: 'Acme Traders',
       lat: 19.31,
       lng: 72.31,
       checkInAt: ist('2026-10-15', '00:30').toISOString(),
@@ -555,47 +557,6 @@ describe('GET /field/visits/map', () => {
       .set(auth(head.token));
     expect(one.body.data).toHaveLength(1);
     expect(one.body.data[0].employeeName).toBe('Sam Kumar');
-  });
-});
-
-describe('GET /field/clients/map', () => {
-  it('returns only clients inside the bbox', async () => {
-    const rep = await fieldActor();
-    await Client.create({ name: 'Inside', location: { type: 'Point', coordinates: [72.85, 19.07] } });
-    await Client.create({ name: 'East', location: { type: 'Point', coordinates: [80.2, 13.08] } });
-    await Client.create({ name: 'No location' });
-
-    const res = await request(app)
-      .get('/api/v1/field/clients/map')
-      .query({ bbox: '72.5,18.8,73.2,19.4' })
-      .set(auth(rep.token));
-    expect(res.status).toBe(200);
-    expect(res.body.data.map((c: { name: string }) => c.name)).toEqual(['Inside']);
-    expect(res.body.data[0]).toMatchObject({ lat: 19.07, lng: 72.85 });
-    expect(res.body.truncated).toBe(false);
-
-    const bad = await request(app)
-      .get('/api/v1/field/clients/map')
-      .query({ bbox: '72.5,18.8,abc' })
-      .set(auth(rep.token));
-    expect(bad.status).toBe(400);
-  });
-
-  it('is bounded to 500 pins', async () => {
-    const rep = await fieldActor();
-    await Client.insertMany(
-      Array.from({ length: 505 }, (_, i) => ({
-        name: `Client ${i}`,
-        location: { type: 'Point', coordinates: [72.85, 19.07] },
-      })),
-    );
-    const res = await request(app)
-      .get('/api/v1/field/clients/map')
-      .query({ bbox: '72.5,18.8,73.2,19.4' })
-      .set(auth(rep.token));
-    expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(500);
-    expect(res.body.truncated).toBe(true);
   });
 });
 
@@ -641,7 +602,7 @@ describe('socket handshake', () => {
     expect(err?.message).toBe('USER_INACTIVE');
   });
 
-  it('joins managers:all for field-sales.manage, reports:<own employee> for view, refuses others', async () => {
+  it('joins managers:all for field.manage, reports:<own employee> for view, refuses others', async () => {
     const head = await fieldActor({ manage: true });
     const headSocket = fakeSocket(head.token);
     expect(await run(socketAuth as Middleware, headSocket)).toBeUndefined();

@@ -99,6 +99,17 @@ const envSchema = z.object({
    */
   FIELD_VISIT_RADIUS_M: z.coerce.number().positive().default(300),
 
+  /**
+   * Google Maps server key (Routes API + Geocoding API enabled). Set: road
+   * distances for travel allowance and addresses for pinned sites come from
+   * Google. Unset or blank: no Google call is made — km use the straight-line
+   * estimate and addresses stay as entered.
+   */
+  GOOGLE_MAPS_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().optional(),
+  ),
+
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

@@ -1,7 +1,8 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Visit, type IVisit } from '../models/visit.model.js';
-import { Client } from '../models/client.model.js';
+import { FieldSite } from '../models/field-site.model.js';
+import { recordSiteVisit } from '../services/field-sites.service.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
@@ -10,7 +11,7 @@ import {
   assertFieldRead,
   assertFieldWrite,
   canManageField,
-  fieldScope,
+  listScopeFilter,
   ownerForCreate,
   requireOwnEmployeeId,
 } from '../lib/field-access.js';
@@ -33,7 +34,7 @@ import {
  * Times are the server's clock — a client-supplied check-in/out time is ignored.
  */
 
-const PURPOSES = ['sales', 'service', 'collection', 'followup', 'delivery', 'other'] as const;
+const PURPOSES = ['service', 'collection', 'followup', 'delivery', 'other'] as const;
 /** Mobile app spellings → stored purpose. */
 const PURPOSE_ALIASES: Record<string, (typeof PURPOSES)[number]> = {
   support: 'service',
@@ -49,8 +50,6 @@ const OUTCOMES = ['positive', 'negative', 'neutral', 'followup_required'] as con
 /** Mobile app outcomes → stored outcome. */
 const OUTCOME_ALIASES: Record<string, (typeof OUTCOMES)[number]> = {
   successful: 'positive',
-  order_taken: 'positive',
-  payment_collected: 'positive',
   follow_up_needed: 'followup_required',
   not_available: 'negative',
   other: 'neutral',
@@ -82,8 +81,8 @@ const checkpointSchema = z.object({
 export const createVisitSchema = z.object({
   /** Honoured only for a field manager (plan a visit for a rep). */
   employeeId: objectIdString.optional(),
-  clientId: objectIdString,
-  purpose: purposeSchema.default('sales'),
+  siteId: objectIdString,
+  purpose: purposeSchema.default('other'),
   isPlanned: z.boolean().default(true),
   notes: notes.optional(),
   /** A visit is planned here; check-in starts it. */
@@ -99,19 +98,18 @@ export const updateVisitSchema = z.object({
   followUpDate: z.coerce.date().optional(),
   status: z.enum(STATUSES).optional(),
   photos: z.array(photoRef).max(20).optional(),
-  productsDiscussed: z.array(z.string().trim().max(200)).max(100).optional(),
   meetingWith: z.string().trim().max(200).optional(),
 });
 
 /**
- * Web shape `{ clientId, purpose, checkIn: { location, photo, address } }`; the
- * mobile app's flat `{ clientId, purpose, location, photo, notes }` is
+ * Web shape `{ siteId, purpose, checkIn: { location, photo, address } }`; the
+ * mobile app's flat `{ siteId, purpose, location, photo, notes }` is
  * accepted too. `visitId` starts a planned visit instead of creating one.
  */
 export const checkInSchema = z.object({
-  clientId: objectIdString,
+  siteId: objectIdString,
   visitId: objectIdString.optional(),
-  purpose: purposeSchema.default('sales'),
+  purpose: purposeSchema.default('other'),
   isPlanned: z.boolean().optional(),
   checkIn: checkpointSchema.optional(),
   location: latLng.optional(),
@@ -134,13 +132,12 @@ export const checkOutSchema = z.object({
   outcome: outcomeSchema.optional(),
   nextFollowUpDate: z.coerce.date().optional(),
   followUpDate: z.coerce.date().optional(),
-  productsDiscussed: z.array(z.string().trim().max(200)).max(100).optional(),
 });
 
 export const listQuerySchema = z.object({
   ...pageParams,
   employeeId: objectIdString.optional(),
-  clientId: objectIdString.optional(),
+  siteId: objectIdString.optional(),
   status: z.enum(STATUSES).optional(),
   purpose: purposeSchema.optional(),
   from: dateBound('from').optional(),
@@ -149,7 +146,7 @@ export const listQuerySchema = z.object({
 });
 
 const LIST_POPULATE = [
-  { path: 'clientId', select: 'name category company address location' },
+  { path: 'siteId', select: 'name type address location radiusM' },
   { path: 'employeeId', select: 'firstName lastName employeeId avatar' },
 ];
 
@@ -165,10 +162,10 @@ async function loadVisit(id: string) {
   return visit;
 }
 
-async function loadClient(id: string) {
-  const client = await Client.findById(id).select('name location').lean().exec();
-  if (!client) throw new NotFoundError('Client not found');
-  return client;
+async function loadSite(id: string) {
+  const site = await FieldSite.findById(id).select('name location').lean().exec();
+  if (!site) throw new NotFoundError('Site not found');
+  return site;
 }
 
 const isDuplicateKey = (err: unknown): boolean =>
@@ -185,8 +182,8 @@ function alreadyOpen(visitId?: unknown): AppError {
 
 export async function listVisits(req: Request, res: Response): Promise<void> {
   const q = req.query as unknown as z.infer<typeof listQuerySchema>;
-  const filter: Record<string, unknown> = await fieldScope(req, q.employeeId);
-  if (q.clientId) filter.clientId = q.clientId;
+  const filter: Record<string, unknown> = await listScopeFilter(req, q.employeeId);
+  if (q.siteId) filter.siteId = q.siteId;
   if (q.status) filter.status = q.status;
   if (q.purpose) filter.purpose = q.purpose;
   const range = rangeFilter(q.from, q.to);
@@ -208,7 +205,7 @@ export async function todayVisits(req: Request, res: Response): Promise<void> {
   if (empId) filter.employeeId = empId;
   else if (!canManageField(req)) await requireOwnEmployeeId(req);
   const docs = await Visit.find(filter)
-    .populate('clientId', 'name category address location')
+    .populate('siteId', 'name type address location')
     .sort({ createdAt: -1 })
     .limit(200)
     .exec();
@@ -217,7 +214,7 @@ export async function todayVisits(req: Request, res: Response): Promise<void> {
 
 export async function getVisit(req: Request, res: Response): Promise<void> {
   const doc = await Visit.findById(String(req.params.id))
-    .populate('clientId', 'name category company phone address location')
+    .populate('siteId', 'name type address location radiusM contactName contactPhone')
     .populate('employeeId', 'firstName lastName employeeId avatar')
     .exec();
   if (!doc) throw new NotFoundError('Visit not found');
@@ -229,10 +226,10 @@ export async function getVisit(req: Request, res: Response): Promise<void> {
 export async function createVisit(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof createVisitSchema>;
   const employeeId = await ownerForCreate(req, body.employeeId);
-  await loadClient(body.clientId);
+  await loadSite(body.siteId);
   const doc = await Visit.create({
     employeeId,
-    clientId: body.clientId,
+    siteId: body.siteId,
     purpose: body.purpose,
     isPlanned: body.isPlanned,
     notes: body.notes,
@@ -249,7 +246,7 @@ export async function updateVisit(req: Request, res: Response): Promise<void> {
   await assertFieldWrite(req, visit.employeeId);
 
   const set: Record<string, unknown> = {};
-  for (const key of ['purpose', 'notes', 'outcome', 'photos', 'productsDiscussed', 'meetingWith'] as const) {
+  for (const key of ['purpose', 'notes', 'outcome', 'photos', 'meetingWith'] as const) {
     if (body[key] !== undefined) set[key] = body[key];
   }
   const followUp = body.nextFollowUpDate ?? body.followUpDate;
@@ -294,15 +291,15 @@ export async function deleteVisit(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Start a visit at a client. Stores how far the check-in fix was from the
- * client's pin and flags it (`locationMismatch`) beyond FIELD_VISIT_RADIUS_M;
- * a check-in without a fix at a client that has a pin is flagged
+ * Start a visit at a site. Stores how far the check-in fix was from the
+ * site's pin and flags it (`locationMismatch`) beyond FIELD_VISIT_RADIUS_M;
+ * a check-in without a fix at a site that has a pin is flagged
  * `locationMissing` — flags for the manager, never a refusal.
  */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof checkInSchema>;
   const empId = await requireOwnEmployeeId(req);
-  const client = await loadClient(body.clientId);
+  const site = await loadSite(body.siteId);
 
   const location = body.checkIn?.location ?? body.location;
   const point = {
@@ -311,12 +308,12 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     ...((body.checkIn?.photo ?? body.photo) ? { photo: body.checkIn?.photo ?? body.photo } : {}),
     ...((body.checkIn?.address ?? body.address) ? { address: body.checkIn?.address ?? body.address } : {}),
   };
-  const clientPoint = pointOf(client.location?.coordinates);
+  const sitePoint = pointOf(site.location?.coordinates);
   const distanceFromClientM =
-    location && clientPoint ? Math.round(distanceMeters(location, clientPoint)) : undefined;
+    location && sitePoint ? Math.round(distanceMeters(location, sitePoint)) : undefined;
   const locationMismatch = distanceFromClientM !== undefined && distanceFromClientM > env.FIELD_VISIT_RADIUS_M;
   // Nothing to compare: without a fix a check-in could be made from anywhere.
-  const locationMissing = !location && clientPoint !== null;
+  const locationMissing = !location && sitePoint !== null;
 
   const open = await Visit.findOne({ employeeId: empId, status: 'in_progress' }).select('_id').lean().exec();
   if (open) throw alreadyOpen(open._id);
@@ -339,8 +336,8 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
       if (String(planned.employeeId) !== String(empId)) {
         throw new AppError('Only the assigned rep can start this visit', 403, 'FORBIDDEN');
       }
-      if (String(planned.clientId) !== String(client._id)) {
-        throw new ValidationAppError('The planned visit is for a different client');
+      if (String(planned.siteId) !== String(site._id)) {
+        throw new ValidationAppError('The planned visit is for a different site');
       }
       doc = await Visit.findOneAndUpdate(
         { _id: planned._id, status: 'scheduled' },
@@ -351,7 +348,7 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     } else {
       doc = await Visit.create({
         employeeId: empId,
-        clientId: client._id,
+        siteId: site._id,
         isPlanned: body.isPlanned ?? false,
         ...fields,
       });
@@ -362,7 +359,7 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     throw err;
   }
 
-  await Client.updateOne({ _id: client._id }, { $set: { lastVisitDate: point.time } }).exec();
+  await recordSiteVisit(site._id, point.time);
   res.status(201).json({ success: true, data: doc });
 }
 
@@ -399,7 +396,6 @@ export async function checkOut(req: Request, res: Response): Promise<void> {
   if (body.outcome) set.outcome = body.outcome;
   const followUp = body.nextFollowUpDate ?? body.followUpDate;
   if (followUp) set.nextFollowUpDate = followUp;
-  if (body.productsDiscussed) set.productsDiscussed = body.productsDiscussed;
 
   // Conditional on still being open, so two concurrent check-outs cannot both win.
   const doc = await Visit.findOneAndUpdate(
@@ -418,7 +414,7 @@ export async function visitTimeline(req: Request, res: Response): Promise<void> 
   await assertFieldRead(req, employeeId);
   const { start, end } = windowForDateParam(req.query.date);
   const docs = await Visit.find({ employeeId, ...inWindow(start, end) })
-    .populate('clientId', 'name address location')
+    .populate('siteId', 'name address location')
     .sort({ 'checkIn.time': 1, createdAt: 1 })
     .limit(500)
     .exec();

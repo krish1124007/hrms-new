@@ -7,7 +7,7 @@ export const FIELD_TRACKING_NAMESPACE = '/field-tracking';
 /** Event carrying one rep's newest fix: `{ employeeId, name, lat, lng, accuracy, recordedAt }`. */
 export const LOCATION_UPDATE_EVENT = 'location:update';
 
-/** Every `field-sales.manage` holder: they watch every rep. */
+/** Every `field.manage` holder: they watch every rep. */
 export const MANAGERS_ROOM = 'managers:all';
 
 /** A manager's room: updates from the reps whose `reportingManager` is `managerEmployeeId`. */
@@ -22,16 +22,16 @@ export function getFieldTrackingNamespace(): Namespace | null {
 }
 
 /**
- * Namespace gate, after `socketAuth`: only field-sales users may watch reps.
+ * Namespace gate, after `socketAuth`: only field users may watch reps.
  * Rooms follow the same visibility as `GET /field/tracking/live` —
- * `field-sales.manage` joins `managers:all` (every rep); every field user
+ * `field.manage` joins `managers:all` (every rep); every field user
  * with an employee record joins `reports:<their employee id>` (their direct
  * reports). Anyone else is refused with `FORBIDDEN`.
  */
 export function fieldTrackingAccess(socket: Socket, next: (err?: Error) => void): void {
   const data = getAuthed(socket);
-  const manage = socketHasPermission(data, 'field-sales.manage');
-  if (!manage && !socketHasPermission(data, 'field-sales.view')) {
+  const manage = socketHasPermission(data, 'field.manage');
+  if (!manage && !socketHasPermission(data, 'field.view')) {
     next(new Error('FORBIDDEN'));
     return;
   }
@@ -44,7 +44,7 @@ export function fieldTrackingAccess(socket: Socket, next: (err?: Error) => void)
 
 /**
  * `/field-tracking` — managers watch their reps' live locations. JWT auth
- * (active users only) then the field-sales gate above; clients never choose
+ * (active users only) then the field gate above; clients never choose
  * their rooms. The ingest (`services/location-track.service.ts`) emits
  * `location:update` to `managers:all` and the rep's manager's room.
  */

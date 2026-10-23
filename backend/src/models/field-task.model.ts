@@ -24,7 +24,7 @@ export interface IFieldTask extends Document {
   title: string;
   description?: string;
   assignedTo: Types.ObjectId;
-  clientId?: Types.ObjectId;
+  siteId?: Types.ObjectId;
   location?: IFieldTaskLocation;
   priority: FieldTaskPriority;
   status: FieldTaskStatus;
@@ -51,7 +51,7 @@ const fieldTaskSchema = new Schema<IFieldTask>({
   title: { type: String, required: true, trim: true },
   description: String,
   assignedTo: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
-  clientId: { type: Schema.Types.ObjectId, ref: 'Client' },
+  siteId: { type: Schema.Types.ObjectId, ref: 'FieldSite' },
   location: locationSchema,
   priority: {
     type: String,

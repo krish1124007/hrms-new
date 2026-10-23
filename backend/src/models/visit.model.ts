@@ -6,7 +6,7 @@ import {
   type PaginateModel,
 } from '../lib/mongoose-plugins.js';
 
-export type VisitPurpose = 'sales' | 'service' | 'collection' | 'followup' | 'delivery' | 'other';
+export type VisitPurpose = 'service' | 'collection' | 'followup' | 'delivery' | 'other';
 export type VisitOutcome = 'positive' | 'negative' | 'neutral' | 'followup_required';
 export type VisitStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -21,15 +21,15 @@ export interface IVisitCheckpoint {
 
 export interface IVisit extends Document {
   employeeId: Types.ObjectId;
-  clientId: Types.ObjectId;
+  siteId: Types.ObjectId;
   purpose: VisitPurpose;
   checkIn?: IVisitCheckpoint;
   checkOut?: IVisitCheckpoint;
-  /** Metres between the check-in fix and the client's pin; unset when either is unknown. */
+  /** Metres between the check-in fix and the site's pin; unset when either is unknown. */
   distanceFromClientM?: number;
-  /** Check-in farther than FIELD_VISIT_RADIUS_M from the client — flagged, never refused. */
+  /** Check-in farther than FIELD_VISIT_RADIUS_M from the site — flagged, never refused. */
   locationMismatch?: boolean;
-  /** Checked in without a location fix at a client that has a pin — flagged, never refused. */
+  /** Checked in without a location fix at a site that has a pin — flagged, never refused. */
   locationMissing?: boolean;
   duration?: number; // minutes
   notes?: string;
@@ -37,9 +37,6 @@ export interface IVisit extends Document {
   nextFollowUpDate?: Date;
   photos: string[];
   meetingWith?: string;
-  productsDiscussed: string[];
-  orderPlaced?: Types.ObjectId;
-  paymentCollected?: Types.ObjectId;
   isPlanned: boolean;
   status: VisitStatus;
   createdAt: Date;
@@ -63,11 +60,11 @@ const checkpointSchema = new Schema<IVisitCheckpoint>(
 
 const visitSchema = new Schema<IVisit>({
   employeeId: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
-  clientId: { type: Schema.Types.ObjectId, ref: 'Client', required: true },
+  siteId: { type: Schema.Types.ObjectId, ref: 'FieldSite', required: true },
   purpose: {
     type: String,
-    enum: ['sales', 'service', 'collection', 'followup', 'delivery', 'other'],
-    default: 'sales',
+    enum: ['service', 'collection', 'followup', 'delivery', 'other'],
+    default: 'other',
   },
   checkIn: checkpointSchema,
   checkOut: checkpointSchema,
@@ -83,9 +80,6 @@ const visitSchema = new Schema<IVisit>({
   nextFollowUpDate: Date,
   photos: { type: [String], default: [] },
   meetingWith: String,
-  productsDiscussed: { type: [String], default: [] },
-  orderPlaced: { type: Schema.Types.ObjectId, ref: 'ProductOrder' },
-  paymentCollected: { type: Schema.Types.ObjectId, ref: 'PaymentCollection' },
   isPlanned: { type: Boolean, default: false },
   status: {
     type: String,
@@ -98,7 +92,7 @@ visitSchema.plugin(softDeletePlugin);
 visitSchema.plugin(paginatePlugin);
 
 visitSchema.index({ employeeId: 1, createdAt: -1 });
-visitSchema.index({ clientId: 1, createdAt: -1 });
+visitSchema.index({ siteId: 1, createdAt: -1 });
 visitSchema.index({ status: 1 });
 visitSchema.index({ 'checkIn.time': -1 });
 // One open visit per rep: a concurrent second check-in fails on this index.

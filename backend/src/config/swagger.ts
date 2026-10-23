@@ -10,7 +10,7 @@ const options: swaggerJsdoc.Options = {
       version: '1.0.0',
       description:
         'REST API of D-HRMS (Dharmesh Deshani Group of Companies): employees, attendance, ' +
-        'leave, payroll, expenses and field sales. ' +
+        'leave, payroll, expenses and field visits. ' +
         'Authentication is JWT-based; include the token in the `Authorization: Bearer <token>` header.',
       license: { name: 'Proprietary' },
     },
@@ -282,7 +282,7 @@ const options: swaggerJsdoc.Options = {
       { name: 'Expense Claims', description: 'Employee expense claim management' },
       { name: 'Projects', description: 'Project management with milestones, tasks, and time entries' },
       { name: 'Timesheets', description: 'Employee timesheet views' },
-      { name: 'Field Sales', description: 'Field sales operations (clients, visits, tasks, targets, orders, payments, live tracking)' },
+      { name: 'Field Visits', description: 'Field visits (sites, check-in/out, work reports, planning, tasks, routes, travel allowance, reports)' },
       { name: 'Documents', description: 'Document management & versioning' },
       { name: 'Tasks', description: 'Standalone task management' },
       { name: 'Calendar', description: 'Calendar & events' },
