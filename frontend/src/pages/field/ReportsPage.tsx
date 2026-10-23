@@ -23,6 +23,8 @@ import {
   useTeamStatus,
   type ReportDownload,
 } from '@/hooks/use-field-reports';
+import { useActiveEmployees } from '@/hooks/use-employee-picker';
+import { useCanManageField, useCanPickEmployees } from '@/hooks/use-field';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
 import {
   MAX_REPORT_DAYS,
@@ -101,13 +103,21 @@ export default function ReportsPage(): ReactElement {
 
   const { profile } = useMyEmployeeProfile();
   const team = useTeamStatus(today);
-  const people = useMemo(
-    () =>
-      (team.data?.data ?? [])
-        .map((r) => r.employee)
-        .sort((a, b) => personName(a).localeCompare(personName(b))),
-    [team.data],
-  );
+  // A field manager may open anyone's day — also people who have left or who
+  // are not on today's team map — so they pick from every employee.
+  const canManage = useCanManageField();
+  const canPick = useCanPickEmployees();
+  const everyone = useActiveEmployees({ includeFormer: true, enabled: canManage && canPick });
+  const people = useMemo(() => {
+    const byId = new Map<string, FieldEmployeeRef>();
+    for (const r of team.data?.data ?? []) byId.set(r.employee._id, r.employee);
+    for (const e of everyone.data ?? []) {
+      if (!byId.has(e._id)) {
+        byId.set(e._id, { _id: e._id, firstName: e.firstName, lastName: e.lastName, employeeId: e.employeeId });
+      }
+    }
+    return [...byId.values()].sort((a, b) => personName(a).localeCompare(personName(b)));
+  }, [team.data, everyone.data]);
   // Start the daily report on the user's own day, or the only person they can see.
   useEffect(() => {
     if (employeeId) return;
@@ -186,7 +196,7 @@ export default function ReportsPage(): ReactElement {
               <div className="min-w-[220px] flex-1 space-y-1.5">
                 <Label htmlFor="report-employee">Employee</Label>
                 <Select id="report-employee" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
-                  <option value="">{team.isLoading ? 'Loading…' : '— Select an employee —'}</option>
+                  <option value="">{team.isLoading || everyone.isLoading ? 'Loading…' : '— Select an employee —'}</option>
                   {people.map((p) => (
                     <option key={p._id} value={p._id}>
                       {personName(p)}

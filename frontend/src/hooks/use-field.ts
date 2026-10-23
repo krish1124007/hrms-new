@@ -15,6 +15,7 @@ import {
 import { usePermissions } from '@/hooks/use-permissions';
 import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { useMyEmployeeProfile } from '@/hooks/use-my-profile';
+import { useAuthStore } from '@/stores/auth.store';
 
 /*
  * Mutation failures are toasted once, by the global handler
@@ -50,6 +51,11 @@ export function useMyEmployeeId(): string | undefined {
   return useMyEmployeeProfile().profile?._id;
 }
 
+/** The signed-in user's login id — what a site's or task's `createdBy` holds. */
+export function useMyUserId(): string | undefined {
+  return useAuthStore((s) => s.user?._id);
+}
+
 /* ── Settings ── */
 
 export function useFieldSettings() {
@@ -69,6 +75,8 @@ export function useUpdateFieldSettings() {
     mutationFn: (input: FieldSettings) => fieldApi.updateSettings(input),
     onSuccess: (res) => {
       qc.setQueryData(['field-settings'], res);
+      // Travel allowance reads the vehicle rates under their own key.
+      void qc.invalidateQueries({ queryKey: ['field', 'settings'] });
       toast.success('Field settings saved');
     },
   });

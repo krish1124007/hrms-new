@@ -1,10 +1,12 @@
-import type {
-  ChecklistAnswerValue,
-  ChecklistItemKind,
-  Site,
-  VisitFlags,
-  VisitOutcome,
-  VisitStatus,
+import {
+  refId,
+  type ChecklistAnswerValue,
+  type ChecklistItemKind,
+  type FieldTask,
+  type Site,
+  type VisitFlags,
+  type VisitOutcome,
+  type VisitStatus,
 } from './field.api';
 
 /** Display text for visit statuses, flags, outcomes and checklist answers. */
@@ -89,12 +91,33 @@ export function answerText(kind: ChecklistItemKind | undefined, value: Checklist
 
 const SITE_EDIT_WINDOW_MS = 24 * 3600_000;
 
-/** `field.manage` edits any site; the employee who added one may edit it for 24 hours. */
+/**
+ * `field.manage` edits any site; whoever added one may edit it for 24 hours.
+ * `createdBy` is the creator's login, so it is compared with the signed-in
+ * user's id (`myUserId`), never an employee id.
+ */
 export function canEditSite(
   site: Pick<Site, 'createdBy' | 'createdAt'>,
-  ctx: { canManage: boolean; myEmployeeId?: string },
+  ctx: { canManage: boolean; myUserId?: string },
 ): boolean {
   if (ctx.canManage) return true;
-  if (!ctx.myEmployeeId || site.createdBy?._id !== ctx.myEmployeeId) return false;
+  if (!ctx.myUserId || site.createdBy?._id !== ctx.myUserId) return false;
   return !site.createdAt || Date.now() - new Date(site.createdAt).getTime() < SITE_EDIT_WINDOW_MS;
+}
+
+/**
+ * May the signed-in user edit, cancel or delete `task` (the server's
+ * `managesTask`)? `field.manage`; whoever created it (`createdBy` is a user
+ * id); or the assignee's manager. A `field.view` holder's task list holds only
+ * their own and their direct reports' tasks, so one not assigned to them is a
+ * report's.
+ */
+export function canManageTask(
+  task: Pick<FieldTask, 'assignedTo' | 'createdBy'>,
+  ctx: { canManage: boolean; myUserId?: string; myEmployeeId?: string },
+): boolean {
+  if (ctx.canManage) return true;
+  if (ctx.myUserId && task.createdBy && task.createdBy === ctx.myUserId) return true;
+  const assignee = refId(task.assignedTo);
+  return !!ctx.myEmployeeId && assignee !== '' && assignee !== ctx.myEmployeeId;
 }

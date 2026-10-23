@@ -7,6 +7,7 @@ import { api } from '@/lib/axios';
 import type { DailyReport } from '@/lib/field-reports.api';
 import { createAppQueryClient } from '@/lib/query-client';
 import { selfApi } from '@/lib/self.api';
+import { useAuthStore } from '@/stores/auth.store';
 import ReportsPage from './ReportsPage';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
@@ -173,6 +174,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useAuthStore.getState().clear();
 });
 
 describe('ReportsPage', () => {
@@ -251,6 +253,37 @@ describe('ReportsPage', () => {
     fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-04-03' } }); // 93 days
     expect(await screen.findByText(/at most 92 days/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /excel/i })).toBeDisabled();
+  });
+
+  it('lets a field manager open the day of anyone, also someone not on today’s team map', async () => {
+    useAuthStore.getState().setSession({
+      user: { _id: 'u-hr', email: 'hr@example.com', role: { slug: 'hr', name: 'HR', permissions: ['field.view', 'field.manage', 'employees.view'] } },
+    });
+    const base = get.getMockImplementation();
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === '/employees') {
+        return {
+          data: {
+            success: true,
+            data: [{ _id: 'e9', firstName: 'Old', lastName: 'Timer', employeeId: 'EMP-9', status: 'terminated' }],
+            pagination: { page: 1, limit: 100, total: 1, pages: 1 },
+          },
+        };
+      }
+      return base!(url, config);
+    });
+    renderPage();
+    const picker = screen.getByLabelText('Employee');
+    expect(await within(picker).findByRole('option', { name: 'Old Timer (EMP-9)' })).toBeInTheDocument();
+    expect(within(picker).getByRole('option', { name: 'Ravi Kumar (EMP-1)' })).toBeInTheDocument();
+    // Former employees too: the picker asks for every status.
+    const call = get.mock.calls.find(([url]) => url === '/employees');
+    expect((call?.[1] as { params: Record<string, unknown> }).params).not.toHaveProperty('status');
+
+    await userEvent.selectOptions(picker, 'e9');
+    await waitFor(() =>
+      expect(get.mock.calls.some(([url, cfg]) => url === '/field/reports/daily' && (cfg as { params: { employeeId: string } }).params.employeeId === 'e9')).toBe(true),
+    );
   });
 
   it('refuses a range that ends before it starts', async () => {

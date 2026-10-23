@@ -76,6 +76,18 @@ function fromDraft(d: Draft): FieldSettings {
 
 const isInt = (s: string, min: number, max: number): boolean => /^\d+$/.test(s.trim()) && +s >= min && +s <= max;
 
+/** The server's limits on names and lists (`services/field-settings.service.ts`). */
+const MAX_NAME_LENGTH = 60;
+const MAX_LIST_LENGTH = 50;
+const MAX_VEHICLES = 3;
+
+const vehicleTypeLabel = (t: VehicleType): string => VEHICLE_TYPES.find((v) => v.value === t)?.label ?? t;
+
+/** The first vehicle kind not used yet, for a new vehicle row (null when all are used). */
+function unusedVehicleType(vehicles: VehicleDraft[]): VehicleType | null {
+  return VEHICLE_TYPES.find((t) => !vehicles.some((v) => v.type === t.value))?.value ?? null;
+}
+
 /** The first problem that stops the settings being saved, or `null`. */
 function draftError(d: Draft): string | null {
   if (!isInt(d.defaultSiteRadiusM, 10, 5000)) return 'The default site radius must be a whole number of metres from 10 to 5000.';
@@ -84,9 +96,22 @@ function draftError(d: Draft): string | null {
   if (!isInt(d.offlineMaxAgeDays, 1, 30)) return 'Offline records may be 1–30 days old.';
   if (d.siteTypes.length === 0) return 'Keep at least one site type.';
   if (d.visitPurposes.length === 0) return 'Keep at least one visit purpose.';
+  if (d.siteTypes.length > MAX_LIST_LENGTH) return `Keep at most ${MAX_LIST_LENGTH} site types.`;
+  if (d.visitPurposes.length > MAX_LIST_LENGTH) return `Keep at most ${MAX_LIST_LENGTH} visit purposes.`;
+  const longType = d.siteTypes.find((t) => t.length > MAX_NAME_LENGTH);
+  if (longType) return `The site type “${longType.slice(0, 20)}…” is longer than ${MAX_NAME_LENGTH} characters.`;
+  const longPurpose = d.visitPurposes.find((t) => t.length > MAX_NAME_LENGTH);
+  if (longPurpose) return `The visit purpose “${longPurpose.slice(0, 20)}…” is longer than ${MAX_NAME_LENGTH} characters.`;
   if (d.vehicles.length === 0) return 'Keep at least one vehicle for travel allowance.';
+  if (d.vehicles.length > MAX_VEHICLES) return `Keep at most ${MAX_VEHICLES} vehicles — one per kind.`;
+  for (const [i, v] of d.vehicles.entries()) {
+    if (d.vehicles.findIndex((x) => x.type === v.type) !== i) {
+      return `Only one rate per kind of vehicle: “${vehicleTypeLabel(v.type)}” is listed twice.`;
+    }
+  }
   for (const [i, v] of d.vehicles.entries()) {
     if (!v.label.trim()) return `Vehicle ${i + 1} needs a name.`;
+    if (v.label.trim().length > MAX_NAME_LENGTH) return `The name of vehicle ${i + 1} is longer than ${MAX_NAME_LENGTH} characters.`;
     const rate = Number(v.rate);
     if (v.rate.trim() === '' || !Number.isFinite(rate) || rate < 0 || rate > 1000) {
       return `The rate for ${v.label.trim() || `vehicle ${i + 1}`} must be between ₹0 and ₹1000 per km.`;
@@ -142,6 +167,7 @@ function StringListEditor({
           id={id}
           value={text}
           placeholder={placeholder}
+          maxLength={MAX_NAME_LENGTH}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -279,6 +305,7 @@ export default function FieldSettingsPage(): ReactElement {
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]): void => setDraft((d) => (d ? { ...d, [key]: value } : d));
   const error = draftError(draft);
+  const nextVehicleType = draft.vehicles.length < MAX_VEHICLES ? unusedVehicleType(draft.vehicles) : null;
   const dirty = !!loaded && JSON.stringify(fromDraft(draft)) !== JSON.stringify(fromDraft(toDraft(loaded)));
 
   return (
@@ -392,6 +419,7 @@ export default function FieldSettingsPage(): ReactElement {
               <Input
                 aria-label={`Vehicle ${i + 1} name`}
                 placeholder="Name shown to employees"
+                maxLength={MAX_NAME_LENGTH}
                 value={v.label}
                 onChange={(e) => set('vehicles', draft.vehicles.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))}
               />
@@ -421,11 +449,19 @@ export default function FieldSettingsPage(): ReactElement {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => set('vehicles', [...draft.vehicles, { type: 'other', label: '', rate: '0' }])}
+            disabled={nextVehicleType === null}
+            onClick={() => {
+              if (nextVehicleType) {
+                set('vehicles', [...draft.vehicles, { type: nextVehicleType, label: vehicleTypeLabel(nextVehicleType), rate: '0' }]);
+              }
+            }}
           >
             <Plus className="size-4" />
             Add vehicle
           </Button>
+          {nextVehicleType === null && (
+            <p className="text-xs text-muted-foreground">Each kind of vehicle has one rate ({MAX_VEHICLES} at most).</p>
+          )}
         </div>
       </Section>
 

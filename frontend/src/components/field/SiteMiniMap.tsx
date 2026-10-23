@@ -1,5 +1,6 @@
 import { useMemo, type ReactElement } from 'react';
 import { Circle, Marker, Polyline, Popup } from 'react-leaflet';
+import { MapPinOff } from 'lucide-react';
 import type { LatLng, VisitPoint } from '@/lib/field.api';
 import { formatDistance } from '@/lib/field-visits';
 import { formatTime } from '@/lib/format';
@@ -12,6 +13,7 @@ const LINK_STYLE = { color: '#64748b', weight: 2, dashArray: '4 6' } as const;
 /**
  * A site's pin and allowed radius, and — for a visit — where the check-in
  * and check-out were recorded, each joined to the pin by a dashed line.
+ * A site without a pin yet shows "No pin yet" instead of a map.
  */
 export function SiteMiniMap({
   site,
@@ -19,12 +21,12 @@ export function SiteMiniMap({
   checkOut,
   height = 300,
 }: {
-  site: { name: string; location: LatLng; radiusM: number };
+  site: { name: string; location: LatLng | null; radiusM: number };
   checkIn?: VisitPoint;
   checkOut?: VisitPoint;
   height?: number;
 }): ReactElement {
-  const pin: [number, number] = [site.location.lat, site.location.lng];
+  const pin: [number, number] | null = site.location ? [site.location.lat, site.location.lng] : null;
   const inAt = checkIn?.location ? ([checkIn.location.lat, checkIn.location.lng] as [number, number]) : null;
   const outAt = checkOut?.location ? ([checkOut.location.lat, checkOut.location.lng] as [number, number]) : null;
   // The coordinates, not the array identities, decide the view.
@@ -36,6 +38,20 @@ export function SiteMiniMap({
     () => fitKey.split('|').map((p) => p.split(',').map(Number) as [number, number]),
     [fitKey],
   );
+
+  if (!pin) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/40 p-6 text-center text-sm text-muted-foreground"
+        style={{ height }}
+        data-testid="site-no-pin"
+      >
+        <MapPinOff className="size-6" aria-hidden />
+        <p className="font-medium text-foreground">No pin yet</p>
+        <p className="text-xs">Edit the site to place its pin; until then check-ins here cannot be checked against it.</p>
+      </div>
+    );
+  }
 
   return (
     <MapCanvas height={height}>

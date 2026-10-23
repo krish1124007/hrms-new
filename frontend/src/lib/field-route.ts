@@ -87,3 +87,8 @@ export function travelSummary(travel: { claimedKm: number; vehicleType: VehicleT
   const km = formatNumber(travel.claimedKm, { maximumFractionDigits: 1 });
   return `${km} km · ${VEHICLE_LABEL[travel.vehicleType]}`;
 }
+
+/** The sites a route went through, in sequence (its site check-ins). */
+export function travelSites(points: ReadonlyArray<Pick<RoutePoint, 'kind' | 'siteName'>> | undefined): string[] {
+  return (points ?? []).filter((p) => p.kind === 'visit_in').map((p) => p.siteName ?? 'Unnamed site');
+}

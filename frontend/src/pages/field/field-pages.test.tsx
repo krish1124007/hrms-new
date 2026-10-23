@@ -4,11 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fieldApi, type FieldSettings, type Site, type Visit } from '@/lib/field.api';
+import { fieldApi, type FieldSettings, type FieldTask, type Site, type Visit, type VisitSchedule } from '@/lib/field.api';
 import { createAppQueryClient } from '@/lib/query-client';
 import { selfApi } from '@/lib/self.api';
+import { employeesApi } from '@/lib/systemcore.api';
 import { useAuthStore } from '@/stores/auth.store';
 import FieldSettingsPage from './FieldSettingsPage';
+import FieldTasksPage from './FieldTasksPage';
+import PlanningPage from './PlanningPage';
+import SiteDetailPage from './SiteDetailPage';
 import SitesPage from './SitesPage';
 import VisitDetailPage from './VisitDetailPage';
 
@@ -56,12 +60,23 @@ vi.mock('@/lib/field.api', async (importOriginal) => {
       updateSettings: vi.fn(),
       listSites: vi.fn(),
       sitesMap: vi.fn(),
+      getSite: vi.fn(),
       createSite: vi.fn(),
+      updateSite: vi.fn(),
       getVisit: vi.fn(),
+      listTasks: vi.fn(),
+      createTask: vi.fn(),
+      listSchedules: vi.fn(),
+      updateSchedule: vi.fn(),
+      deleteSchedule: vi.fn(),
     },
   };
 });
 vi.mock('@/lib/self.api', () => ({ selfApi: { profile: vi.fn() } }));
+vi.mock('@/lib/systemcore.api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/systemcore.api')>();
+  return { ...actual, employeesApi: { ...actual.employeesApi, list: vi.fn() } };
+});
 
 const api = vi.mocked(fieldApi);
 
@@ -81,12 +96,18 @@ const settings: FieldSettings = {
   checklists: [],
 };
 
+/** Signs in as the login `u-<employeeId>` whose employee record is `<employeeId>`. */
 function signIn(permissions: string[], employeeId: string): void {
   useAuthStore.getState().setSession({
     user: { _id: `u-${employeeId}`, email: 'me@example.com', role: { slug: 'x', name: 'X', permissions } },
   });
-  vi.mocked(selfApi.profile).mockResolvedValue({ success: true, data: { _id: employeeId } } as never);
+  vi.mocked(selfApi.profile).mockResolvedValue({
+    success: true,
+    data: { _id: employeeId, firstName: 'Meera', lastName: 'Shah' },
+  } as never);
 }
+
+const page = <T,>(data: T[]) => ({ success: true, data, pagination: { page: 1, limit: 20, total: data.length, pages: 1 } });
 
 function renderWithApp(ui: ReactNode, path = '/'): void {
   render(
@@ -100,6 +121,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   leaflet.click = undefined;
   api.getSettings.mockResolvedValue({ success: true, data: settings });
+  api.listSites.mockResolvedValue(page([]));
+  vi.mocked(employeesApi.list).mockResolvedValue(page([]) as never);
 });
 
 afterEach(() => {
@@ -146,7 +169,13 @@ describe('SitesPage — site form', () => {
     expect(within(dialog).getByLabelText('Latitude')).toHaveValue('19.076000');
     expect(within(dialog).getByLabelText('Longitude')).toHaveValue('72.877700');
 
+    // The server takes whole metres only.
     const radius = within(dialog).getByLabelText(/radius/i);
+    await user.clear(radius);
+    await user.type(radius, '150.5');
+    expect(within(dialog).getByText(/whole number of metres/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /add site/i })).toBeDisabled();
+
     await user.clear(radius);
     await user.type(radius, '150');
     await user.click(within(dialog).getByRole('button', { name: /add site/i }));
@@ -154,13 +183,179 @@ describe('SitesPage — site form', () => {
     await waitFor(() => expect(api.createSite).toHaveBeenCalledTimes(1));
     expect(api.createSite).toHaveBeenCalledWith(
       expect.objectContaining({
-        clientRef: expect.any(String),
         name: 'Acme Plant',
         type: 'Project site',
         location: { lat: 19.076, lng: 72.8777 },
         radiusM: 150,
       }),
     );
+    // Without a clientRef the server records the site as added on the website, not pinned from the app.
+    expect(api.createSite.mock.calls[0][0]).not.toHaveProperty('clientRef');
+  });
+
+  it('lets the person who pinned a site correct it, sending only what changed', async () => {
+    // A Field Manager: field.view and employees.view, no field.manage.
+    signIn(['field.view', 'employees.view'], 'e1');
+    const recent = new Date(Date.now() - 3600_000).toISOString();
+    const mine: Site = {
+      ...createdSite,
+      _id: 's1',
+      name: 'Acme Plant',
+      // Renamed by HR since: no longer one of the site types.
+      type: 'Client office (old)',
+      contactPhone: '9800000000',
+      assignedTo: [{ _id: 'e1', firstName: 'Meera', lastName: 'Shah' }],
+      createdBy: { _id: 'u-e1', firstName: 'Meera', lastName: 'Shah' },
+      createdVia: 'mobile_pin',
+      createdAt: recent,
+    };
+    const theirs: Site = { ...mine, _id: 's2', name: 'Depot 4', createdBy: { _id: 'u-e7', firstName: 'Asha', lastName: 'Rao' } };
+    api.listSites.mockResolvedValue(page([mine, theirs]));
+    api.updateSite.mockResolvedValue({ success: true, data: mine });
+    const user = userEvent.setup();
+    renderWithApp(<SitesPage />);
+
+    // `createdBy` is a user id: matched against the signed-in user, not their employee record.
+    await user.click(await screen.findByRole('button', { name: 'Actions for Acme Plant' }));
+    expect(screen.queryByRole('button', { name: 'Actions for Depot 4' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog', { name: /edit acme plant/i });
+    // Only a field manager reassigns: the assignees are shown, not offered.
+    expect(within(dialog).getByTestId('site-assignees')).toHaveTextContent('Meera Shah');
+    expect(within(dialog).queryByLabelText('Assigned to')).not.toBeInTheDocument();
+
+    const phone = within(dialog).getByLabelText(/contact phone/i);
+    await user.clear(phone);
+    await user.type(phone, '9811111111');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateSite).toHaveBeenCalledTimes(1));
+    // Not the untouched (since renamed) type, the pin, or the assignees.
+    expect(api.updateSite).toHaveBeenCalledWith('s1', { contactPhone: '9811111111' });
+  });
+});
+
+describe('SiteDetailPage — a site without a pin', () => {
+  const unpinned: Site = { ...createdSite, _id: 's9', name: 'Old Client', type: 'Client office', location: null };
+
+  it('says "No pin yet" instead of a map, and Edit is how the pin gets set', async () => {
+    signIn(['field.view', 'field.manage'], 'm1');
+    api.getSite.mockResolvedValue({ success: true, data: { ...unpinned, recentVisits: [] } });
+    api.updateSite.mockResolvedValue({ success: true, data: unpinned });
+    const user = userEvent.setup();
+    renderWithApp(
+      <Routes>
+        <Route path="/field/sites/:id" element={<SiteDetailPage />} />
+      </Routes>,
+      '/field/sites/s9',
+    );
+
+    expect(await screen.findByTestId('site-no-pin')).toHaveTextContent('No pin yet');
+    expect(screen.getAllByText('No pin yet').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole('link', { name: /google maps/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit old client/i });
+    expect(within(dialog).getByLabelText('Latitude')).toHaveValue('');
+    expect(within(dialog).getByLabelText('Longitude')).toHaveValue('');
+    expect(within(dialog).getByText(/has no pin yet/i)).toBeInTheDocument();
+
+    act(() => leaflet.click?.({ latlng: { lat: 18.52, lng: 73.8567 } }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateSite).toHaveBeenCalledTimes(1));
+    expect(api.updateSite).toHaveBeenCalledWith('s9', { location: { lat: 18.52, lng: 73.8567 } });
+  });
+});
+
+/* ── Tasks ── */
+
+describe('FieldTasksPage — a field.view holder', () => {
+  const task = (id: string, title: string, assignedTo: FieldTask['assignedTo'], createdBy: string): FieldTask => ({
+    _id: id,
+    title,
+    assignedTo,
+    priority: 'medium',
+    status: 'new',
+    completionPhotos: [],
+    createdBy,
+    createdAt: '2026-10-22T04:30:00.000Z',
+    updatedAt: '2026-10-22T04:30:00.000Z',
+  });
+
+  it("assigns tasks and manages their team's and their own, as the server allows", async () => {
+    signIn(['field.view'], 'e1');
+    api.listTasks.mockResolvedValue(
+      page([
+        // A direct report's task, given by HR: their manager manages it.
+        task('t1', 'Fix pump', { _id: 'e2', firstName: 'Asha', lastName: 'Rao' }, 'u-hr'),
+        // Given to me by HR: I accept and complete it, nothing more.
+        task('t2', 'Audit depot', { _id: 'e1', firstName: 'Meera', lastName: 'Shah' }, 'u-hr'),
+        // One I gave myself.
+        task('t3', 'Survey site', { _id: 'e1', firstName: 'Meera', lastName: 'Shah' }, 'u-e1'),
+      ]),
+    );
+    api.createTask.mockImplementation(async (input) => ({ success: true, data: task('t4', input.title, input.assignedTo, 'u-e1') }));
+    const user = userEvent.setup();
+    renderWithApp(<FieldTasksPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Actions for Fix pump' }));
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Cancel task' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: 'Actions for Audit depot' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Survey site' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /new task/i }));
+    const dialog = await screen.findByRole('dialog', { name: /new task/i });
+    await user.type(within(dialog).getByLabelText(/title/i), 'Check meter');
+    // Without the employee list, "Myself" is the one choice.
+    await waitFor(() => expect(within(dialog).getByLabelText(/assign to/i)).toHaveDisplayValue(/myself/i));
+    await user.click(within(dialog).getByRole('button', { name: /assign task/i }));
+
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+    expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Check meter', assignedTo: 'e1' }));
+  });
+});
+
+/* ── Recurring visits ── */
+
+describe('PlanningPage — recurring visits', () => {
+  const schedule: VisitSchedule = {
+    _id: 'sc1',
+    siteId: { _id: 's1', name: 'Acme Plant' },
+    employeeId: { _id: 'e2', firstName: 'Asha', lastName: 'Rao' },
+    // Removed from the visit purposes since.
+    purpose: 'Site check (old)',
+    rule: { freq: 'weekly', weekdays: [1], startDate: '2026-11-02' },
+  };
+
+  it('sends only the changed rule, and says what deleting does to planned visits', async () => {
+    signIn(['field.view'], 'e1');
+    api.listSchedules.mockResolvedValue(page([schedule]));
+    api.updateSchedule.mockResolvedValue({ success: true, data: schedule });
+    const user = userEvent.setup();
+    renderWithApp(<PlanningPage />, '/field/planning?tab=recurring');
+
+    await user.click(await screen.findByRole('button', { name: /actions for the recurring visit to acme plant/i }));
+    await user.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: /edit recurring visit/i });
+    expect(within(dialog).getByText(/visits from tomorrow on follow the new rule/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Thu' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateSchedule).toHaveBeenCalledTimes(1));
+    // Not the untouched purpose (it would be refused), the site or the employee.
+    expect(api.updateSchedule).toHaveBeenCalledWith('sc1', {
+      rule: { freq: 'weekly', weekdays: [1, 4], startDate: '2026-11-02' },
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /edit recurring visit/i })).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /actions for the recurring visit to acme plant/i }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    const confirm = await screen.findByRole('dialog', { name: /delete this recurring visit/i });
+    expect(confirm).toHaveTextContent(/planned visits from tomorrow on are removed/i);
   });
 });
 
@@ -260,6 +455,22 @@ describe('VisitDetailPage', () => {
     expect(within(flags).queryByText('No GPS')).toBeNull();
     expect(screen.getByText(/450 m from the pin/i)).toBeInTheDocument();
   });
+
+  it('shows a dash for a report filed without an outcome', async () => {
+    signIn(['field.view'], 'e9');
+    api.getVisit.mockResolvedValue({
+      success: true,
+      data: { ...visit, report: { ...(visit.report as NonNullable<Visit['report']>), outcome: null } },
+    });
+    renderWithApp(
+      <Routes>
+        <Route path="/field/visits/:id" element={<VisitDetailPage />} />
+      </Routes>,
+      '/field/visits/v1',
+    );
+    const label = await screen.findByText('Outcome');
+    expect(label.nextElementSibling).toHaveTextContent('—');
+  });
 });
 
 /* ── Settings ── */
@@ -302,5 +513,34 @@ describe('FieldSettingsPage — checklist builder', () => {
     expect(saved.checklists[0].items[3].options).toEqual(['Good', 'Fair', 'Poor']);
     expect(saved.checklists[0].items[0].required).toBe(true);
     expect(saved.checklists[0].items[1].options).toBeUndefined();
+  });
+});
+
+describe('FieldSettingsPage — vehicles', () => {
+  it('keeps one rate per kind of vehicle, at most three, as the server does', async () => {
+    signIn(['field.view', 'field.manage'], 'm1');
+    const user = userEvent.setup();
+    renderWithApp(<FieldSettingsPage />);
+
+    // Two-wheeler and car are set: a new vehicle takes the kind not used yet.
+    await user.click(await screen.findByRole('button', { name: /add vehicle/i }));
+    expect(screen.getByLabelText('Vehicle 3 kind')).toHaveValue('other');
+    expect(screen.getByLabelText('Vehicle 3 name')).toHaveValue('Other');
+    expect(screen.getByRole('button', { name: /add vehicle/i })).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('Vehicle 3 kind'), 'car');
+    expect(screen.getByText(/only one rate per kind of vehicle/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save settings/i })).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('Vehicle 3 kind'), 'other');
+    expect(screen.queryByText(/only one rate per kind of vehicle/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save settings/i })).toBeEnabled();
+  });
+
+  it('refuses a site type longer than the server takes', async () => {
+    signIn(['field.view', 'field.manage'], 'm1');
+    api.getSettings.mockResolvedValue({ success: true, data: { ...settings, siteTypes: ['Client office', 'x'.repeat(61)] } });
+    renderWithApp(<FieldSettingsPage />);
+    expect(await screen.findByText(/longer than 60 characters/i)).toBeInTheDocument();
   });
 });

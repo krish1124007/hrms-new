@@ -13,7 +13,7 @@ import { PhotoStrip, VisitFlagBadges, VisitStatusBadge } from '@/components/fiel
 import { PlanVisitDialog } from '@/components/field/PlanVisitDialog';
 import { SiteFormDialog } from '@/components/field/SiteFormDialog';
 import { SiteMiniMap } from '@/components/field/SiteMiniMap';
-import { useCanManageField, useDeleteSite, useMyEmployeeId, useSite } from '@/hooks/use-field';
+import { useCanManageField, useDeleteSite, useMyUserId, useSite } from '@/hooks/use-field';
 import { apiErrorMessage, apiErrorStatus } from '@/lib/api-error';
 import { personName, type VisitSummary } from '@/lib/field.api';
 import { canEditSite, formatMinutes, OUTCOME_LABEL } from '@/lib/field-visits';
@@ -41,7 +41,7 @@ export default function SiteDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const canManage = useCanManageField();
-  const myEmployeeId = useMyEmployeeId();
+  const myUserId = useMyUserId();
   const { data, isLoading, error } = useSite(id);
   const remove = useDeleteSite();
   const [editing, setEditing] = useState(false);
@@ -120,7 +120,7 @@ export default function SiteDetailPage(): ReactElement {
               <CalendarPlus className="size-4" />
               Plan a visit
             </Button>
-            {canEditSite(site, { canManage, myEmployeeId }) && (
+            {canEditSite(site, { canManage, myUserId }) && (
               <Button variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="size-4" />
                 Edit
@@ -144,9 +144,13 @@ export default function SiteDetailPage(): ReactElement {
           <CardContent>
             <dl className="grid grid-cols-2 gap-4">
               <Detail label="Pin">
-                <span className="font-mono text-xs">
-                  {site.location.lat.toFixed(5)}, {site.location.lng.toFixed(5)}
-                </span>
+                {site.location ? (
+                  <span className="font-mono text-xs">
+                    {site.location.lat.toFixed(5)}, {site.location.lng.toFixed(5)}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">No pin yet</span>
+                )}
               </Detail>
               <Detail label="Allowed radius">{site.radiusM} m</Detail>
               <Detail label="Contact">
@@ -198,15 +202,17 @@ export default function SiteDetailPage(): ReactElement {
         </Card>
         <div className="lg:col-span-3">
           <SiteMiniMap site={site} height={360} />
-          <a
-            href={`https://www.google.com/maps/search/?api=1&query=${site.location.lat},${site.location.lng}`}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-          >
-            <MapPin className="size-3" />
-            Open in Google Maps
-          </a>
+          {site.location && (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${site.location.lat},${site.location.lng}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            >
+              <MapPin className="size-3" />
+              Open in Google Maps
+            </a>
+          )}
         </div>
       </div>
 

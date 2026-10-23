@@ -2,9 +2,10 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { MapPin } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { ExpenseTravel } from '@/lib/expense-claims.api';
 import { visitLink } from '@/lib/field-links';
-import { VEHICLE_LABEL, formatKm, formatRupees, kmNeedsReason, travelAmount } from '@/lib/field-route';
+import { VEHICLE_LABEL, formatKm, formatRupees, kmNeedsReason, travelAmount, travelSites } from '@/lib/field-route';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -26,7 +27,7 @@ export function TravelBreakdown({ travel, className }: { travel: ExpenseTravel; 
   const diff = kmDifference(travel.computedKm, travel.claimedKm);
   const overTolerance = kmNeedsReason(travel.computedKm, travel.claimedKm);
   // The sites the measured day went through, in order.
-  const stops = travel.points.filter((p) => p.kind === 'visit_in').map((p) => p.siteName ?? 'Unnamed site');
+  const stops = travelSites(travel.points);
   return (
     <dl
       data-testid="travel-breakdown"
@@ -73,15 +74,39 @@ export function TravelBreakdown({ travel, className }: { travel: ExpenseTravel; 
   );
 }
 
-/** The field visit an expense is linked to (the server sends its id), as a link to the visit. */
-export function LinkedVisit({ visitId }: { visitId: string }): ReactElement {
+/**
+ * The field visit an expense is linked to. With field access it links to the
+ * visit; an approver without it (the visit page would refuse them) sees what
+ * the claim itself tells — the expense day and, for travel, the sites on the
+ * route. The server sends only the visit's id, so nothing more is known here.
+ */
+export function LinkedVisit({
+  visitId,
+  date,
+  sites = [],
+}: {
+  visitId: string;
+  /** The expense's day. */
+  date?: string;
+  /** Sites the claim names (a travel claim's route). */
+  sites?: string[];
+}): ReactElement {
+  const { hasAny } = usePermissions();
+  const canOpen = hasAny(['field.view', 'field.manage']);
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <MapPin className="size-4 text-muted-foreground" />
+    <div className="flex items-center gap-2 text-sm" data-testid="linked-visit">
+      <MapPin className="size-4 shrink-0 text-muted-foreground" />
       <span className="text-muted-foreground">Linked visit:</span>
-      <Link to={visitLink(visitId)} className="font-medium text-primary hover:underline">
-        View visit
-      </Link>
+      {canOpen ? (
+        <Link to={visitLink(visitId)} className="font-medium text-primary hover:underline">
+          View visit
+        </Link>
+      ) : (
+        <span>
+          Field visit{date ? ` · expense of ${formatDate(date)}` : ''}
+          {sites.length > 0 ? ` · ${sites.join(' → ')}` : ''}
+        </span>
+      )}
     </div>
   );
 }

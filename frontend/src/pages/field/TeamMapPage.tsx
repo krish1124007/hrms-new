@@ -24,9 +24,13 @@ const COUNT_LABEL: Array<{ status: TeamMemberStatus; label: string }> = [
 
 /** The team's status and last check-in/out point on a day — refreshed every minute for today. */
 export default function TeamMapPage(): ReactElement {
+  // `null` follows the clock: a map left open past midnight IST moves on to
+  // the new day (each minute's refresh re-renders the page) and keeps polling.
   const today = todayIST();
-  const [date, setDate] = useState(today);
+  const [picked, setPicked] = useState<string | null>(null);
+  const date = picked ?? today;
   const isToday = date === today;
+  const setDate = (key: string): void => setPicked(key >= today ? null : key);
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useTeamStatus(date, { poll: isToday });
   const rows = useMemo(() => data?.data ?? [], [data]);
 
