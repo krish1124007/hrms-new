@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { User, activateIfInvited } from '../models/user.model.js';
 import { Role } from '../models/role.model.js';
-import { ConflictError, NotFoundError } from '../lib/errors.js';
+import { AppError, ConflictError, NotFoundError } from '../lib/errors.js';
 import { containsInsensitive } from '../lib/regex.js';
 import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
@@ -26,7 +26,7 @@ export const updateUserSchema = z.object({
   firstName: z.string().min(1).optional(),
   lastName: z.string().min(1).optional(),
   avatar: z.string().url().optional(),
-  roleId: z.string().optional(),
+  roleId: z.string().regex(/^[0-9a-f]{24}$/i, 'roleId must be a role id').optional(),
   customPermissions: storedPermissionListSchema.optional(),
 });
 
@@ -131,12 +131,21 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
       target.customPermissions ?? [],
     );
   }
+  // `target.role` is populated (null if its role document is gone).
+  const currentRole = target.role as unknown as { _id?: unknown; slug?: string } | null;
+  let roleChange: { from: string | null; to: string } | null = null;
   if (body.roleId !== undefined) {
     const role = await Role.findById(body.roleId).exec();
     if (!role) throw new NotFoundError('Role not found');
-    // `target.role` is populated (null if its role document is gone).
-    const currentRoleId = (target.role as unknown as { _id?: unknown } | null)?._id;
-    if (String(role._id) !== String(currentRoleId)) assertCanAssignRole(req.user, role);
+    if (String(role._id) !== String(currentRole?._id)) {
+      // Nobody changes their own role — not even an admin, who could
+      // otherwise lock the company out by demoting the last admin account.
+      if (String(target._id) === String(req.user?._id)) {
+        throw new AppError('You cannot change your own role. Ask another administrator.', 403, 'SELF_ROLE_CHANGE');
+      }
+      assertCanAssignRole(req.user, role);
+      roleChange = { from: currentRole?.slug ?? null, to: role.slug };
+    }
   }
 
   const update: Record<string, unknown> = {};
@@ -153,7 +162,16 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
     .exec();
   if (!user) throw new NotFoundError('User not found');
 
-  void audit({ action: 'update', entity: 'User', entityId: String(user._id), after: update });
+  void audit({
+    action: 'update',
+    entity: 'User',
+    entityId: String(user._id),
+    ...(roleChange ? { before: { role: currentRole?._id ? String(currentRole._id) : null } } : {}),
+    after: update,
+    // Permissions are read from the database on every request, so the new
+    // role applies to the user's very next call — no new sign-in needed.
+    ...(roleChange ? { metadata: { event: 'role.change', fromRole: roleChange.from, toRole: roleChange.to } } : {}),
+  });
   res.json({ success: true, data: user });
 }
 

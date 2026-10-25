@@ -221,6 +221,16 @@ export interface EmergencyContact {
   phone?: string;
 }
 
+/** An employee's login as `GET /employees/:id` returns it. */
+export interface EmployeeLogin {
+  _id: string;
+  email: string;
+  status: 'active' | 'inactive' | 'invited' | string;
+  lastLogin?: string;
+  /** The login's role — name and description, never its permission list. Null if the role was deleted. */
+  role?: { _id: string; name: string; slug: string; description?: string } | null;
+}
+
 export interface Employee {
   _id: string;
   employeeId: string;
@@ -264,8 +274,10 @@ export interface Employee {
   isDeleted?: boolean;
   probationEndDate?: string;
   noticePeriod?: number;
-  // Populated by the API (`getEmployee` does `.populate('userId', 'email status lastLogin')`).
-  userId?: { _id: string; email: string; status: string; lastLogin?: string } | string | null;
+  // `GET /employees/:id` populates the login with its role (name only); lists send the bare id.
+  userId?: EmployeeLogin | string | null;
+  /** `GET /employees/:id` only: whether their login opens Field Visits (role or own permissions). */
+  fieldAccess?: boolean;
   createdAt: string;
   updatedAt: string;
 }

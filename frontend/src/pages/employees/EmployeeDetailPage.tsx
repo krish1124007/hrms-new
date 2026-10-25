@@ -43,6 +43,7 @@ import { DeleteEmployeeDialog } from '@/components/common/DeleteEmployeeDialog';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { formatDate } from '@/lib/format';
 import { EmployeeStatusDialog } from '@/components/employees/EmployeeStatusDialog';
+import { AppAccessCard } from '@/components/employees/AppAccessCard';
 import { businessDayKey, todayKey } from '@/lib/business-day';
 import { documentsApi } from '@/lib/documents.api';
 import { apiErrorMessage } from '@/lib/api-error';
@@ -206,6 +207,9 @@ export default function EmployeeDetailPage(): ReactElement {
           </div>
         </CardContent>
       </Card>
+
+      {/* Login, sign-in status and role (users.update edits; employees.update reads) */}
+      {!e.isDeleted && <AppAccessCard employee={e} />}
 
       {/* Tabs */}
       <Tabs defaultValue="personal" onValueChange={(v) => v === 'attendance' && navigate(`/attendance/employee/${e._id}`)}>

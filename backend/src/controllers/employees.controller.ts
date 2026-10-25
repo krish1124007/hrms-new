@@ -16,7 +16,8 @@ import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
 import { appBaseUrl } from '../lib/app-url.js';
-import { assertCanAssignRole } from '../lib/permission-grants.js';
+import { assertCanAssignRole, canAssignRole } from '../lib/permission-grants.js';
+import { fieldAccessFor } from '../lib/field-access.js';
 import { logger } from '../config/logger.js';
 import { leaveYear } from '../services/leave-attendance.service.js';
 import { allocateForEmployee, type AllocatableEmployee } from '../services/leave-year.service.js';
@@ -302,6 +303,17 @@ async function defaultEmployeeRole(): Promise<IRole | null> {
   return (await Role.findOne({ slug: 'employee' }).exec()) ?? Role.findOne({ slug: 'member' }).exec();
 }
 
+/**
+ * The role a new *field staff* login gets when none is chosen: the seeded
+ * `field_employee` role (own field visits), so ticking "Field staff" is enough
+ * to open Field Visits. Null when that role is missing or the caller could not
+ * hand it out themselves — the login then gets the plain default role.
+ */
+async function defaultFieldRole(caller: Request['user']): Promise<IRole | null> {
+  const role = await Role.findOne({ slug: 'field_employee' }).exec();
+  return role && canAssignRole(caller, role) ? role : null;
+}
+
 async function provisionLogin(
   caller: Request['user'],
   input: LoginInput,
@@ -407,14 +419,19 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
     throw new ConflictError('Employee with this email already exists');
   }
 
+  // An explicit roleId wins; otherwise field staff get the Field Employee role.
   const login = body.createUserAccount
-    ? await provisionLogin(req.user, {
-        email,
-        firstName: body.firstName,
-        lastName: body.lastName,
-        password: body.password,
-        roleId: body.roleId,
-      })
+    ? await provisionLogin(
+        req.user,
+        {
+          email,
+          firstName: body.firstName,
+          lastName: body.lastName,
+          password: body.password,
+          roleId: body.roleId,
+        },
+        !body.roleId && body.isFieldStaff ? await defaultFieldRole(req.user) : undefined,
+      )
     : undefined;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -440,10 +457,18 @@ export async function getEmployee(req: Request, res: Response): Promise<void> {
     .populate('designation', 'name level')
     .populate('shift', 'name color startTime endTime')
     .populate('reportingManager', 'firstName lastName employeeId profileImage')
-    .populate('userId', 'email status lastLogin')
+    // The login and its role (name only — never its permission list).
+    .populate({
+      path: 'userId',
+      select: 'email status lastLogin role',
+      populate: { path: 'role', select: 'name slug description' },
+    })
     .exec();
   if (!employee) throw new NotFoundError('Employee not found');
-  res.json({ success: true, data: employee });
+  // Whether their login opens Field Visits (role + custom permissions), so the
+  // profile can say why a field employee sees "No access".
+  const fieldAccess = (await fieldAccessFor([employee._id as Types.ObjectId])).get(String(employee._id)) === null;
+  res.json({ success: true, data: { ...employee.toJSON(), fieldAccess } });
 }
 
 // ============================================================================
@@ -1101,6 +1126,8 @@ export async function importEmployees(req: Request, res: Response): Promise<void
   // Resolved once. Without one (a workspace whose roles were never seeded)
   // employees are still imported, each row saying it got no login.
   const loginRole = await defaultEmployeeRole();
+  // Rows marked field staff get the Field Employee role, as on the form.
+  const fieldLoginRole = loginRole ? await defaultFieldRole(req.user) : null;
 
   for (const [index, data] of employees.entries()) {
     const row = index + 1;
@@ -1199,7 +1226,7 @@ export async function importEmployees(req: Request, res: Response): Promise<void
           await provisionLogin(
             req.user,
             { email, firstName: validData.firstName, lastName: validData.lastName, password: password as string | undefined },
-            loginRole,
+            validData.isFieldStaff && fieldLoginRole ? fieldLoginRole : loginRole,
           )
         : undefined;
       // eslint-disable-next-line no-await-in-loop

@@ -19,6 +19,23 @@ vi.mock('@/hooks/use-systemcore', () => ({
 vi.mock('@/hooks/use-payroll', () => ({ useSalaryStructures: () => ({ data: undefined }) }));
 vi.mock('@/hooks/use-permissions', () => ({ usePermissions: () => ({ has: () => false }) }));
 vi.mock('@/hooks/use-employee-picker', () => ({ useActiveEmployees: () => ({ data: [] }) }));
+const assignableRoles = vi.hoisted(() => ({
+  data: undefined as unknown,
+}));
+vi.mock('@/hooks/use-access', () => ({ useAssignableRoles: () => ({ data: assignableRoles.data }) }));
+
+const role = (slug: string, name: string, extra: Record<string, unknown> = {}) => ({
+  _id: `r-${slug}`,
+  name,
+  slug,
+  description: `${name} description`,
+  isSystem: true,
+  assignable: true,
+  fieldAccess: false,
+  fieldManage: false,
+  privileged: false,
+  ...extra,
+});
 
 const DRAFT_KEY = 'opencore.employee.draft';
 
@@ -43,6 +60,7 @@ describe('EmployeeFormPage draft', () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     localStorage.clear();
+    assignableRoles.data = undefined;
   });
 
   it('autosaves the form but never the password', async () => {
@@ -124,5 +142,70 @@ describe('EmployeeFormPage draft', () => {
     await waitFor(() => expect(createMutate).toHaveBeenCalled());
     expect(await screen.findByText('Employee list')).toBeInTheDocument();
     expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+  });
+});
+
+describe('EmployeeFormPage — the new login’s role', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    assignableRoles.data = [
+      role('admin', 'Admin', { assignable: false, privileged: true }),
+      role('employee', 'Employee'),
+      role('field_employee', 'Field Employee', { fieldAccess: true }),
+      role('manager', 'Manager'),
+    ];
+  });
+
+  async function toStep2(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.type(screen.getByLabelText('First name *'), 'Asha');
+    await user.type(screen.getByLabelText('Last name *'), 'Rao');
+    await user.type(screen.getByLabelText('Email *'), 'asha@example.com');
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.type(await screen.findByLabelText('Joining date *'), '2026-10-15');
+  }
+
+  it('defaults to Employee, suggests Field Employee for field staff, and sends the chosen role', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await toStep2(user);
+
+    const picker = screen.getByLabelText('App role');
+    expect(picker).toHaveDisplayValue('Employee');
+    // Roles the signed-in user cannot give are not offered.
+    expect(screen.queryByRole('option', { name: 'Admin' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText(/field staff/i));
+    expect(picker).toHaveDisplayValue('Field Employee');
+    expect(screen.getByText(/Field Visits: own visits/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.click(await screen.findByRole('button', { name: /create employee/i }));
+    await waitFor(() => expect(createMutate).toHaveBeenCalled());
+    expect(createMutate.mock.calls[0][0]).toMatchObject({ isFieldStaff: true, roleId: 'r-field_employee', createUserAccount: true });
+  });
+
+  it('keeps a role HR picked themselves, and warns when field staff would get no Field Visits access', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await toStep2(user);
+
+    await user.selectOptions(screen.getByLabelText('App role'), 'Manager');
+    await user.click(screen.getByLabelText(/field staff/i));
+    expect(screen.getByLabelText('App role')).toHaveDisplayValue('Manager');
+    expect(screen.getByText(/does not open Field Visits/i)).toBeInTheDocument();
+  });
+
+  it('without the role list, sends no role (the server gives field staff Field Employee itself)', async () => {
+    assignableRoles.data = undefined;
+    createMutate.mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    renderPage();
+    await toStep2(user);
+    expect(screen.queryByLabelText('App role')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.click(await screen.findByRole('button', { name: /create employee/i }));
+    await waitFor(() => expect(createMutate).toHaveBeenCalled());
+    expect(createMutate.mock.calls[0][0]).not.toHaveProperty('roleId');
   });
 });

@@ -25,7 +25,7 @@ function routeFiles(dir: string): string[] {
 const STRING_LITERAL = /'[^'\n]*'|"[^"\n]*"|`[^`$\n]*`/g;
 
 interface RouteScan {
-  /** Every string literal passed to any `requirePermission(...)` call under src/routes. */
+  /** Every string literal passed to any `requirePermission(...)` / `requireAnyPermission(...)` call under src/routes. */
   used: Set<string>;
   /** `file: requirePermission(...)` for each call whose arguments are not purely string literals. */
   nonLiteralCalls: string[];
@@ -36,7 +36,7 @@ function scanRoutes(): RouteScan {
   const nonLiteralCalls: string[] = [];
   for (const file of routeFiles(ROUTES_DIR)) {
     const source = fs.readFileSync(file, 'utf8');
-    for (const call of source.matchAll(/requirePermission\(([^)]*)\)/g)) {
+    for (const call of source.matchAll(/require(?:Any)?Permission\(([^)]*)\)/g)) {
       const args = call[1]!;
       for (const literal of args.match(STRING_LITERAL) ?? []) used.add(literal.slice(1, -1));
       // Whatever is left once the literals and separators are removed is a constant,

@@ -112,6 +112,11 @@ export function assertCanAssignRole(caller: Caller, role: { permissions: readonl
   assertCanGrant(caller, effectivePermissions(role.permissions));
 }
 
+/** {@link assertCanAssignRole} as a yes / no — for listing the roles a caller may hand out. */
+export function canAssignRole(caller: Caller, role: { permissions: readonly string[] }): boolean {
+  return effectivePermissions(role.permissions).every((permission) => hasPermission(caller, permission));
+}
+
 function assertHoldsAll(caller: Caller, held: readonly string[], message: string): void {
   const missing = held.filter((permission) => !hasPermission(caller, permission));
   if (missing.length > 0) throw new ForbiddenError(message, { missingPermissions: missing });

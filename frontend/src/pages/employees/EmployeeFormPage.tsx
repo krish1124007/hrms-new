@@ -20,6 +20,8 @@ import {
 } from '@/hooks/use-systemcore';
 import { useSalaryStructures } from '@/hooks/use-payroll';
 import { usePermissions } from '@/hooks/use-permissions';
+import { useAssignableRoles } from '@/hooks/use-access';
+import { DEFAULT_EMPLOYEE_SLUG, FIELD_EMPLOYEE_SLUG, roleFieldScope } from '@/lib/roles.api';
 import { useActiveEmployees } from '@/hooks/use-employee-picker';
 import { cn } from '@/lib/utils';
 import { toISTDateKey } from '@/lib/format';
@@ -213,6 +215,25 @@ export default function EmployeeFormPage(): ReactElement {
   const department = watch('department');
   const { data: desigData } = useDesignations({ department: department || undefined, limit: 100 });
 
+  // The new login's role (create only). Until HR picks one themselves it
+  // follows "Field staff": Field Employee when ticked, else Employee. Without
+  // the list (an older server, a read error) nothing is sent and the server
+  // applies the same default.
+  const { data: roleList } = useAssignableRoles(!isEdit);
+  const roleOptions = (roleList ?? []).filter((r) => r.assignable);
+  const [roleId, setRoleId] = useState('');
+  const [roleTouched, setRoleTouched] = useState(false);
+  const isFieldStaff = !!watch('isFieldStaff');
+  useEffect(() => {
+    if (isEdit || roleTouched || !roleList) return;
+    const usable = roleList.filter((r) => r.assignable);
+    const want =
+      (isFieldStaff ? usable.find((r) => r.slug === FIELD_EMPLOYEE_SLUG) : undefined) ??
+      usable.find((r) => r.slug === DEFAULT_EMPLOYEE_SLUG);
+    setRoleId(want?._id ?? '');
+  }, [isEdit, roleTouched, roleList, isFieldStaff]);
+  const chosenRole = roleOptions.find((r) => r._id === roleId);
+
   const create = useCreateEmployee();
   const update = useUpdateEmployee();
 
@@ -318,6 +339,7 @@ export default function EmployeeFormPage(): ReactElement {
       Object.entries(getValues()).map(([k, v]) => [k, typeof v === 'boolean' ? false : '']),
     );
     reset({ ...blank, ...FORM_DEFAULTS } as FormValues);
+    setRoleTouched(false);
     setDraftRestored(false);
     setStep(1);
   };
@@ -414,7 +436,7 @@ export default function EmployeeFormPage(): ReactElement {
     } else {
       const password = values.password?.trim() || undefined;
       create.mutate(
-        { ...payload, createUserAccount: true, password },
+        { ...payload, createUserAccount: true, password, ...(roleId ? { roleId } : {}) },
         {
           onSuccess: () => {
             submitted.current = true;
@@ -734,10 +756,50 @@ export default function EmployeeFormPage(): ReactElement {
                       <span className="mt-0.5 block text-xs text-muted-foreground">
                         Works away from the office. Attendance settings can require field staff to
                         file the day's expenses before checking out.
+                        {!isEdit && ' Ticking it gives their login the Field Employee role, so they can use Field Visits.'}
                       </span>
                     </span>
                   </label>
                 </div>
+                {!isEdit && roleOptions.length > 0 && (
+                  <div className="sm:col-span-2">
+                    <Label htmlFor="roleId">App role</Label>
+                    <Select
+                      id="roleId"
+                      value={roleId}
+                      onChange={(ev) => {
+                        setRoleId(ev.target.value);
+                        setRoleTouched(true);
+                      }}
+                    >
+                      {/* Only when the usual default is not one this user may give: the server picks. */}
+                      {!roleId && <option value="">Default role</option>}
+                      {roleOptions.map((r) => (
+                        <option key={r._id} value={r._id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </Select>
+                    {chosenRole && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {chosenRole.description}
+                        {roleFieldScope(chosenRole) ? ` · ${roleFieldScope(chosenRole)}` : ''}
+                      </p>
+                    )}
+                    {isFieldStaff && chosenRole && !chosenRole.fieldAccess && (
+                      <p className="mt-1 text-xs text-warning">
+                        This role does not open Field Visits — they would see “No access” there. Choose Field
+                        Employee (or Field Manager) for field staff.
+                      </p>
+                    )}
+                  </div>
+                )}
+                {isEdit && (
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    To change what this employee can do in the app (their role, e.g. Field Employee), use{' '}
+                    <span className="font-medium">App access</span> on their profile.
+                  </p>
+                )}
                 <div>
                   <Label htmlFor="shift">Shift</Label>
                   <Select id="shift" {...register('shift')}>
