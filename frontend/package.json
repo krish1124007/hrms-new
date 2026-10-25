@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b --noEmit && vite build && rm -f dist/assets/*.map",
+    "build": "tsc -b --noEmit && vite build && rm -f dist/assets/*.map && node scripts/check-dist.mjs",
     "preview": "vite preview",
     "type-check": "tsc -b --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",

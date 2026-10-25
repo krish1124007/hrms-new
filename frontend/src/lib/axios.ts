@@ -1,6 +1,6 @@
 import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1';
+import { API_BASE_URL } from '@/lib/api-base';
 
 const ACCESS_TOKEN_KEY = 'opencore.accessToken';
 const REFRESH_TOKEN_KEY = 'opencore.refreshToken';

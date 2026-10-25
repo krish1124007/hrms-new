@@ -1,0 +1,1 @@
+import{y as o,f as t,a8 as l}from"./index-D-lBZhQp.js";const s={profile:async()=>(await o.get("/employees/me")).data};function y(a={}){var r;const e=t({queryKey:["employees","me"],queryFn:()=>s.profile(),enabled:a.enabled??!0,staleTime:3e5,retry:!1,meta:{silent:!0}});return{...e,profile:(r=e.data)==null?void 0:r.data,noProfile:l(e.error)}}export{y as u};
