@@ -46,6 +46,15 @@ export declare function employeeIdParam(value: unknown): string;
  */
 export declare function teamStatus(req: Request, res: Response): Promise<void>;
 /**
+ * `GET /field/team/access` — which current employees in the caller's scope
+ * (everyone for `field.manage`, else themselves and their direct reports)
+ * cannot be given field work: `{ noAccess: { [employeeId]: 'no_login' |
+ * 'no_permission' } }`. Anyone not listed holds `field.view`. Pickers flag
+ * the listed people; planning a visit, a recurring visit or a task for them
+ * is refused with 400 `EMPLOYEE_NO_FIELD_ACCESS`.
+ */
+export declare function teamAccess(req: Request, res: Response): Promise<void>;
+/**
  * `GET /field/route/:employeeId?date=YYYY-MM-DD` (default today) — `{ date,
  * points: [{ lat, lng, at, kind, siteName? }], legs: [{ fromIndex, toIndex,
  * distanceM, estimated }], totalKm, estimated }`. 403 outside the caller's

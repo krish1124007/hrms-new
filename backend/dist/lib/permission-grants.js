@@ -88,6 +88,10 @@ function effectivePermissions(permissions) {
 export function assertCanAssignRole(caller, role) {
     assertCanGrant(caller, effectivePermissions(role.permissions));
 }
+/** {@link assertCanAssignRole} as a yes / no — for listing the roles a caller may hand out. */
+export function canAssignRole(caller, role) {
+    return effectivePermissions(role.permissions).every((permission) => hasPermission(caller, permission));
+}
 function assertHoldsAll(caller, held, message) {
     const missing = held.filter((permission) => !hasPermission(caller, permission));
     if (missing.length > 0)

@@ -40,4 +40,24 @@ export declare function assertFieldWrite(req: Request, owner: unknown): Promise<
 export declare function ownerForCreate(req: Request, bodyEmployeeId?: string): Promise<Types.ObjectId>;
 /** 400 unless `id` names an existing (not deleted) employee. */
 export declare function assertEmployeeExists(id: string): Promise<void>;
+/** 400 code when field work is planned or assigned for someone whose login lacks `field.view`. */
+export declare const EMPLOYEE_NO_FIELD_ACCESS = "EMPLOYEE_NO_FIELD_ACCESS";
+/** True when a stored permission list (role + custom) lets its holder into Field Visits. */
+export declare function grantsFieldView(permissions: readonly string[]): boolean;
+/** Why an employee cannot use Field Visits: no login at all, or a login without `field.view`. */
+export type NoFieldAccessReason = 'no_login' | 'no_permission';
+/**
+ * For each employee id: `null` when their login holds `field.view` (through
+ * its role or custom permissions — the same union `requirePermission`
+ * checks), else why not. An employee with no login, or whose login was
+ * deleted, has no access. Ids that name no employee are left out of the map.
+ */
+export declare function fieldAccessFor(employeeIds: ReadonlyArray<string | Types.ObjectId>): Promise<Map<string, NoFieldAccessReason | null>>;
+/**
+ * 400 `EMPLOYEE_NO_FIELD_ACCESS` unless `employeeId`'s login may use Field
+ * Visits: a visit, recurring visit or task for them could never be checked
+ * in or completed (they would see "No access"), so it is refused up front.
+ * Call it after the scope and existence checks.
+ */
+export declare function assertEmployeeHasFieldAccess(employeeId: string | Types.ObjectId): Promise<void>;
 //# sourceMappingURL=field-access.d.ts.map

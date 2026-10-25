@@ -6,7 +6,8 @@ import { audit } from '../services/audit.service.js';
 import { slugify } from '../lib/slugify.js';
 import { cached, invalidate } from '../lib/cache.js';
 import { PERMISSIONS_BY_MODULE } from '../config/permissions.js';
-import { assertCanGrant, assertCanManageRole, assertCanSetPermissions, permissionListSchema, storedPermissionListSchema, } from '../lib/permission-grants.js';
+import { assertCanGrant, assertCanManageRole, assertCanSetPermissions, canAssignRole, permissionListSchema, storedPermissionListSchema, } from '../lib/permission-grants.js';
+import { FIELD_MANAGE, grantsFieldView } from '../lib/field-access.js';
 export const createRoleSchema = z.object({
     name: z.string().min(2).max(64),
     description: z.string().optional(),
@@ -20,6 +21,38 @@ export const updateRoleSchema = z.object({
 export async function listRoles(_req, res) {
     const key = 'roles:list';
     const data = await cached(key, 300, () => Role.find().sort({ isSystem: -1, name: 1 }).lean().exec());
+    res.json({ success: true, data });
+}
+/** Permissions that make a role "admin-like": it can change who may do what, or the system itself. */
+const PRIVILEGED_PREFIXES = ['users.', 'roles.', 'settings.', 'backups.manage'];
+/** True for a role whose holders administer logins, roles or the system (or hold `*`). */
+export function isPrivilegedRole(permissions) {
+    return permissions.some((p) => p === '*' || PRIVILEGED_PREFIXES.some((prefix) => p.startsWith(prefix)));
+}
+/**
+ * `GET /roles/assignable` — every role, for a role picker (employee onboarding,
+ * the employee profile's App access card), without the permission lists:
+ * `{ _id, name, slug, description, isSystem, assignable, fieldAccess,
+ * fieldManage, privileged }`. `assignable` is false for a role carrying a
+ * permission the caller does not hold (assigning it would answer 403);
+ * `fieldAccess` says whether it opens Field Visits (`field.view`: own records,
+ * plus direct reports'), `fieldManage` whether it sees everybody's
+ * (`field.manage`); `privileged` marks admin-like roles (`*`, users.*,
+ * roles.*, settings.*, backups.manage).
+ */
+export async function listAssignableRoles(req, res) {
+    const roles = await Role.find().sort({ isSystem: -1, name: 1 }).lean().exec();
+    const data = roles.map((role) => ({
+        _id: String(role._id),
+        name: role.name,
+        slug: role.slug,
+        description: role.description ?? '',
+        isSystem: role.isSystem,
+        assignable: canAssignRole(req.user, role),
+        fieldAccess: grantsFieldView(role.permissions),
+        fieldManage: role.permissions.includes('*') || role.permissions.includes(FIELD_MANAGE),
+        privileged: isPrivilegedRole(role.permissions),
+    }));
     res.json({ success: true, data });
 }
 async function invalidateRolesCache() {

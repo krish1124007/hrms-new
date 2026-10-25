@@ -91,6 +91,8 @@ router.patch('/tasks/:id/accept', requirePermission('field.view'), asyncHandler(
 router.patch('/tasks/:id/complete', requirePermission('field.view'), validate(tasks.completeSchema), asyncHandler(tasks.completeTask));
 /* ── Team status and day routes ── */
 router.get('/team/status', requirePermission('field.view'), validate(team.dayQuerySchema, 'query'), asyncHandler(team.teamStatus));
+// Who in scope lacks Field Visits access (pickers flag them; planning for them is a 400).
+router.get('/team/access', requirePermission('field.view'), asyncHandler(team.teamAccess));
 router.get('/route/:employeeId', requirePermission('field.view'), validate(team.dayQuerySchema, 'query'), asyncHandler(team.employeeRoute));
 /* ── Travel allowance (self) ── */
 router.get('/travel/day', requirePermission('field.view'), validate(travel.travelDayQuerySchema, 'query'), asyncHandler(travel.travelDay));
