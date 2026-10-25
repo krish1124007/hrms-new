@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import { VisitSchedule, type IScheduleRule, type IVisitSchedule } from '../models/visit-schedule.model.js';
 import { ForbiddenError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
-import { assertEmployeeExists, listScopeFilter } from '../lib/field-access.js';
+import { assertEmployeeExists, assertEmployeeHasFieldAccess, listScopeFilter } from '../lib/field-access.js';
 import { fieldScope, noEmployeeProfile, scopeIncludes, type FieldScope } from '../lib/field-scope.js';
 import { startOfBusinessDay } from '../lib/business-day.js';
 import { objectIdString, pageParams } from '../lib/field-utils.js';
@@ -186,6 +186,7 @@ export async function createSchedule(req: Request, res: Response): Promise<void>
   if (!employeeId) throw noEmployeeProfile();
   assertMayPlanFor(scope, employeeId);
   await assertEmployeeExists(employeeId);
+  await assertEmployeeHasFieldAccess(employeeId);
   const site = await loadSite(body.siteId);
   if (!scope.manage) await assertSiteRead(req, site);
   const purpose = canonicalPurpose(body.purpose, await getFieldSettings());
@@ -214,6 +215,7 @@ export async function updateSchedule(req: Request, res: Response): Promise<void>
   if (body.employeeId && body.employeeId !== String(doc.employeeId)) {
     assertMayPlanFor(scope, body.employeeId);
     await assertEmployeeExists(body.employeeId);
+    await assertEmployeeHasFieldAccess(body.employeeId);
     doc.employeeId = new Types.ObjectId(body.employeeId);
   }
   if (body.siteId && body.siteId !== String(doc.siteId)) {

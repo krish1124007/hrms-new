@@ -261,12 +261,21 @@ export const swaggerPaths = {
         patch: {
             tags: ['Users'],
             summary: 'Update user',
+            description: 'roleId: 404 if no such role; 403 SELF_ROLE_CHANGE for your own role (anyone, admins included); 403 when the role carries a permission you do not hold (only a * holder can give the admin role). Permissions are read from the database on every request, so a new role applies to the user’s next request — no new sign-in.',
             parameters: [idParam()],
             requestBody: {
                 required: true,
                 content: {
                     'application/json': {
-                        schema: { type: 'object', properties: { name: { type: 'string' }, roleId: { type: 'string' } } },
+                        schema: {
+                            type: 'object',
+                            properties: {
+                                firstName: { type: 'string' },
+                                lastName: { type: 'string' },
+                                roleId: { type: 'string' },
+                                customPermissions: { type: 'array', items: { type: 'string' } },
+                            },
+                        },
                     },
                 },
             },
@@ -328,6 +337,14 @@ export const swaggerPaths = {
                 },
             },
             responses: { ...res201('Role created'), ...{ 400: errResponses[400], 401: errResponses[401], 403: errResponses[403] } },
+        },
+    },
+    '/roles/assignable': {
+        get: {
+            tags: ['Roles'],
+            summary: 'Roles for a role picker (roles.view, users.create, users.update or employees.create)',
+            description: 'Every role without its permission list: { _id, name, slug, description, isSystem, assignable (false when it carries a permission the caller lacks), fieldAccess (opens Field Visits), fieldManage (sees everybody’s field records), privileged (admin-like: *, users.*, roles.*, settings.*, backups.manage) }.',
+            responses: { ...resList('Roles', { type: 'object' }), ...{ 401: errResponses[401], 403: errResponses[403] } },
         },
     },
     '/roles/{id}': {
@@ -1234,7 +1251,7 @@ export const swaggerPaths = {
     '/field/visits': {
         get: { tags: ['Field Visits'], summary: 'List visits (self + direct reports; field.manage: all)', parameters: [...paginationParams, { name: 'employeeId', in: 'query', schema: { type: 'string' } }, { name: 'siteId', in: 'query', schema: { type: 'string' } }, { name: 'status', in: 'query', description: 'planned | in_progress | completed | cancelled | missed (comma-separated for several)', schema: { type: 'string' } }, { name: 'from', in: 'query', description: 'IST day YYYY-MM-DD (inclusive)', schema: { type: 'string' } }, { name: 'to', in: 'query', description: 'IST day YYYY-MM-DD (inclusive)', schema: { type: 'string' } }], responses: { ...resList('Visits', { type: 'object' }) } },
     },
-    '/field/visits/plan': { post: { tags: ['Field Visits'], summary: 'Plan a visit (self / direct reports; field.manage: anyone)', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'plannedDate', 'purpose'], properties: { siteId: { type: 'string' }, employeeId: { type: 'string' }, plannedDate: { type: 'string', format: 'date' }, purpose: { type: 'string' }, notes: { type: 'string' } } } } } }, responses: { ...res201('Visit planned') } } },
+    '/field/visits/plan': { post: { tags: ['Field Visits'], summary: 'Plan a visit (self / direct reports; field.manage: anyone)', description: '400 EMPLOYEE_NO_FIELD_ACCESS when the employee’s login lacks field.view (“Give <name> the Field Employee role first”) or they have no login.', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'plannedDate', 'purpose'], properties: { siteId: { type: 'string' }, employeeId: { type: 'string' }, plannedDate: { type: 'string', format: 'date' }, purpose: { type: 'string' }, notes: { type: 'string' } } } } } }, responses: { ...res201('Visit planned') } } },
     '/field/visits/check-in': { post: { tags: ['Field Visits'], summary: 'Check in (exactly one of visitId / siteId / newSite)', description: '400 SELFIE_REQUIRED, 400 INVALID_FILE_KEY (not your upload), 409 SELFIE_ALREADY_USED (a selfie proves one check-in), 409 VISIT_ALREADY_OPEN, 400 CAPTURED_AT_INVALID (older than offlineMaxAgeDays; a future capturedAt counts as the arrival time). Open visits of earlier days are auto-closed first. Captured offline (capturedAt > 2 min before arrival): an unknown purpose is kept, an unknown pinned site type becomes Other, a missing selfie is accepted (noSelfie), a planned visit cancelled meanwhile is started anyway, a deleted planned visit becomes an unplanned visit at its site, a deleted site still takes the visit. The first check-in of a day counts as attendance (setting) unless the attendance location/photo rule is not met.', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { clientRef: { type: 'string', format: 'uuid' }, capturedAt: { type: 'string', format: 'date-time' }, visitId: { type: 'string' }, siteId: { type: 'string' }, newSite: { type: 'object' }, purpose: { type: 'string' }, location: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' }, accuracy: { type: 'number' } } }, selfieKey: { type: 'string' }, notes: { type: 'string' } } } } } }, responses: { ...res201('Checked in'), ...res200('Replay — the stored visit') } } },
     '/field/visits/{id}': {
         get: { tags: ['Field Visits'], summary: 'Get visit', parameters: [idParam()], responses: { ...res200('Visit') } },
@@ -1247,7 +1264,7 @@ export const swaggerPaths = {
     // Recurring visits
     '/field/visit-schedules': {
         get: { tags: ['Field Visits'], summary: 'List recurring visits', parameters: [...paginationParams], responses: { ...resList('Schedules', { type: 'object' }) } },
-        post: { tags: ['Field Visits'], summary: 'Create a recurring visit (plans the next 7 days)', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'purpose', 'rule'], properties: { siteId: { type: 'string' }, employeeId: { type: 'string' }, purpose: { type: 'string' }, rule: { type: 'object', properties: { freq: { type: 'string', enum: ['weekly', 'monthly'] }, weekdays: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 7 } }, dayOfMonth: { type: 'integer', minimum: 1, maximum: 28 }, startDate: { type: 'string', format: 'date' }, endDate: { type: 'string', format: 'date' } } } } } } } }, responses: { ...res201('Created') } },
+        post: { tags: ['Field Visits'], summary: 'Create a recurring visit (plans the next 7 days)', description: '400 EMPLOYEE_NO_FIELD_ACCESS when the employee’s login lacks field.view (also when an edit moves it to such an employee).', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['siteId', 'purpose', 'rule'], properties: { siteId: { type: 'string' }, employeeId: { type: 'string' }, purpose: { type: 'string' }, rule: { type: 'object', properties: { freq: { type: 'string', enum: ['weekly', 'monthly'] }, weekdays: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 7 } }, dayOfMonth: { type: 'integer', minimum: 1, maximum: 28 }, startDate: { type: 'string', format: 'date' }, endDate: { type: 'string', format: 'date' } } } } } } } }, responses: { ...res201('Created') } },
     },
     '/field/visit-schedules/{id}': {
         get: { tags: ['Field Visits'], summary: 'Get a recurring visit', parameters: [idParam()], responses: { ...res200('Schedule') } },
@@ -1257,7 +1274,7 @@ export const swaggerPaths = {
     // Tasks
     '/field/tasks': {
         get: { tags: ['Field Visits'], summary: 'List field tasks', parameters: [...paginationParams], responses: { ...resList('Tasks', { type: 'object' }) } },
-        post: { tags: ['Field Visits'], summary: 'Create field task (to self / direct reports; field.manage: anyone)', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'assignedTo'], properties: { title: { type: 'string' }, description: { type: 'string' }, assignedTo: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, siteId: { type: 'string' } } } } } }, responses: { ...res201('Task created') } },
+        post: { tags: ['Field Visits'], summary: 'Create field task (to self / direct reports; field.manage: anyone)', description: '400 EMPLOYEE_NO_FIELD_ACCESS when the assignee’s login lacks field.view (also when an edit reassigns it to such an employee).', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['title', 'assignedTo'], properties: { title: { type: 'string' }, description: { type: 'string' }, assignedTo: { type: 'string' }, dueDate: { type: 'string', format: 'date' }, siteId: { type: 'string' } } } } } }, responses: { ...res201('Task created') } },
     },
     '/field/tasks/my': { get: { tags: ['Field Visits'], summary: 'My field tasks', responses: { ...res200('My tasks') } } },
     '/field/tasks/team': { get: { tags: ['Field Visits'], summary: 'Team field tasks', responses: { ...res200('Team tasks') } } },
@@ -1269,6 +1286,7 @@ export const swaggerPaths = {
     '/field/tasks/{id}/accept': { patch: { tags: ['Field Visits'], summary: 'Accept task', parameters: [idParam()], responses: { ...res200('Accepted') } } },
     '/field/tasks/{id}/complete': { patch: { tags: ['Field Visits'], summary: 'Complete task with proof photos (offline-safe)', parameters: [idParam()], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { clientRef: { type: 'string', format: 'uuid' }, capturedAt: { type: 'string', format: 'date-time' }, completionNotes: { type: 'string' }, photoKeys: { type: 'array', items: { type: 'string' } } } } } } }, responses: { ...res200('Completed') } } },
     // Team, routes, travel allowance, reports
+    '/field/team/access': { get: { tags: ['Field Visits'], summary: 'Current employees in scope who cannot be given field work: { noAccess: { [employeeId]: "no_login" | "no_permission" } } (their login lacks field.view)', responses: { ...res200('Who lacks Field Visits access') } } },
     '/field/team/status': { get: { tags: ['Field Visits'], summary: 'Team status on a day (self + direct reports; everybody for field.manage): at_site / between_sites / day_ended / not_started, last check-in/out point, visits, km', parameters: [{ name: 'date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'IST day, YYYY-MM-DD (default today)' }], responses: { ...res200('Rows') } } },
     '/field/route/{employeeId}': { get: { tags: ['Field Visits'], summary: 'A day route: check-in/out points in time order and the measured legs (Google road distance, straight line × 1.3 when unavailable = estimated)', parameters: [idParam('employeeId', 'Employee ID'), { name: 'date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'IST day, YYYY-MM-DD (default today)' }], responses: { ...res200('{ date, points, legs, totalKm, estimated }') } } },
     '/field/travel/day': { get: { tags: ['Field Visits'], summary: 'My km on a day and any travel claim made for it', parameters: [{ name: 'date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'IST day, YYYY-MM-DD (default today)' }], responses: { ...res200('{ date, totalKm, estimated, points, legs, hasCompletedVisit, claim }') } } },

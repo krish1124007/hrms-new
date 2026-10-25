@@ -69,6 +69,9 @@ vi.mock('@/lib/field.api', async (importOriginal) => {
       listSchedules: vi.fn(),
       updateSchedule: vi.fn(),
       deleteSchedule: vi.fn(),
+      listVisits: vi.fn(),
+      planVisit: vi.fn(),
+      teamAccess: vi.fn(),
     },
   };
 });
@@ -123,6 +126,7 @@ beforeEach(() => {
   api.getSettings.mockResolvedValue({ success: true, data: settings });
   api.listSites.mockResolvedValue(page([]));
   vi.mocked(employeesApi.list).mockResolvedValue(page([]) as never);
+  api.teamAccess.mockResolvedValue({ success: true, data: { noAccess: {} } });
 });
 
 afterEach(() => {
@@ -356,6 +360,35 @@ describe('PlanningPage — recurring visits', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
     const confirm = await screen.findByRole('dialog', { name: /delete this recurring visit/i });
     expect(confirm).toHaveTextContent(/planned visits from tomorrow on are removed/i);
+  });
+});
+
+describe('PlanningPage — who can be given field work', () => {
+  const person = (id: string, firstName: string, lastName: string) => ({
+    _id: id,
+    employeeId: `EMP-${id}`,
+    firstName,
+    lastName,
+    email: `${id}@example.com`,
+    status: 'active',
+  });
+
+  it('flags employees whose login has no Field Visits access and does not let them be picked', async () => {
+    signIn(['field.view', 'field.manage', 'employees.view'], 'm1');
+    vi.mocked(employeesApi.list).mockImplementation(async (params) =>
+      page((params as { status?: string }).status === 'active' ? [person('e2', 'Asha', 'Rao'), person('e3', 'Ravi', 'Kumar')] : []) as never,
+    );
+    api.teamAccess.mockResolvedValue({ success: true, data: { noAccess: { e3: 'no_permission' } } });
+    vi.mocked(fieldApi.listVisits).mockResolvedValue(page([]));
+    const user = userEvent.setup();
+    renderWithApp(<PlanningPage />, '/field/planning');
+
+    await user.click(await screen.findByRole('button', { name: /plan a visit/i }));
+    const dialog = await screen.findByRole('dialog', { name: /plan a visit/i });
+    const ravi = await within(dialog).findByRole('option', { name: /Ravi Kumar \(EMP-e3\) — no field access/ });
+    expect(ravi).toBeDisabled();
+    expect(within(dialog).getByRole('option', { name: 'Asha Rao (EMP-e2)' })).toBeEnabled();
+    expect(within(dialog).getByText(/need the Field Employee role first/i)).toBeInTheDocument();
   });
 });
 

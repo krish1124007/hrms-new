@@ -240,6 +240,8 @@ router.get(
   validate(team.dayQuerySchema, 'query'),
   asyncHandler(team.teamStatus),
 );
+// Who in scope lacks Field Visits access (pickers flag them; planning for them is a 400).
+router.get('/team/access', requirePermission('field.view'), asyncHandler(team.teamAccess));
 router.get(
   '/route/:employeeId',
   requirePermission('field.view'),

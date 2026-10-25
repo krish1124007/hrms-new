@@ -51,6 +51,10 @@ export declare function assertCanSetPermissions(caller: Caller, field: string, n
 export declare function assertCanAssignRole(caller: Caller, role: {
     permissions: readonly string[];
 }): void;
+/** {@link assertCanAssignRole} as a yes / no — for listing the roles a caller may hand out. */
+export declare function canAssignRole(caller: Caller, role: {
+    permissions: readonly string[];
+}): boolean;
 /**
  * 403 unless the caller holds every permission `target` holds (role +
  * custom). `target.role` must be populated. A `*` caller is unrestricted and a

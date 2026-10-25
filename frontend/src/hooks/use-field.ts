@@ -4,6 +4,7 @@ import {
   DEFAULT_FIELD_SETTINGS,
   fieldApi,
   type FieldSettings,
+  type NoFieldAccessReason,
   type FieldTaskInput,
   type FieldTaskUpdate,
   type PlanVisitInput,
@@ -39,6 +40,24 @@ export function useCanManageField(): boolean {
 export function useFieldReps(enabled = true) {
   return useActiveEmployees({ enabled });
 }
+
+/**
+ * Employees in the caller's scope who cannot be given field work — no login,
+ * or a login whose role lacks Field Visits — by employee id. Planning a visit,
+ * a recurring visit or a task for them is refused (400
+ * `EMPLOYEE_NO_FIELD_ACCESS`), so pickers flag them. Empty while loading or
+ * if the read fails: the server still refuses.
+ */
+export function useNoFieldAccess(enabled = true): Record<string, NoFieldAccessReason> {
+  const q = useQuery({
+    queryKey: ['field', 'team-access'],
+    queryFn: () => fieldApi.teamAccess(),
+    enabled,
+    staleTime: 60_000,
+  });
+  return q.data?.data.noAccess ?? NO_ONE;
+}
+const NO_ONE: Record<string, NoFieldAccessReason> = {};
 
 /** Whether the signed-in user may list employees for a picker (`employees.view`). */
 export function useCanPickEmployees(): boolean {

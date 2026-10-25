@@ -17,6 +17,7 @@ import { User } from '../models/user.model.js';
 import { Visit } from '../models/visit.model.js';
 import { AppError, NotFoundError, ValidationAppError } from '../lib/errors.js';
 import { FIELD_MANAGE, FIELD_VIEW, fieldScope, scopeIncludes, type FieldScope } from '../lib/field-scope.js';
+import { fieldAccessFor } from '../lib/field-access.js';
 import {
   dateKeySchema,
   dayKey,
@@ -159,6 +160,26 @@ export async function teamStatus(req: Request, res: Response): Promise<void> {
   );
   const rows = members.map((m) => statusRow(m, byEmployee.get(m._id), routes.get(dayKey(m._id, day.date))));
   res.json({ success: true, data: rows });
+}
+
+/**
+ * `GET /field/team/access` — which current employees in the caller's scope
+ * (everyone for `field.manage`, else themselves and their direct reports)
+ * cannot be given field work: `{ noAccess: { [employeeId]: 'no_login' |
+ * 'no_permission' } }`. Anyone not listed holds `field.view`. Pickers flag
+ * the listed people; planning a visit, a recurring visit or a task for them
+ * is refused with 400 `EMPLOYEE_NO_FIELD_ACCESS`.
+ */
+export async function teamAccess(req: Request, res: Response): Promise<void> {
+  const scope = await fieldScope(req);
+  const filter =
+    scope.employeeIds === 'all'
+      ? { status: { $in: WORKING } }
+      : { status: { $in: WORKING }, _id: { $in: scope.employeeIds } };
+  const employees = await Employee.find(filter).select('_id').lean().exec();
+  const access = await fieldAccessFor(employees.map((e) => e._id as Types.ObjectId));
+  const noAccess = Object.fromEntries([...access].filter(([, reason]) => reason !== null));
+  res.json({ success: true, data: { noAccess } });
 }
 
 /**
