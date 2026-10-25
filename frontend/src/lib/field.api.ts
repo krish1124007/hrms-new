@@ -376,9 +376,16 @@ export interface TaskCompletionInput {
 
 type Ok<T> = { success: boolean; data: T };
 
+/** Why someone cannot be given field work: no login, or a login without Field Visits access. */
+export type NoFieldAccessReason = 'no_login' | 'no_permission';
+
 export const fieldApi = {
   // settings
   getSettings: async (): Promise<Ok<FieldSettings>> => (await api.get('/field/settings')).data,
+
+  /** Current employees in scope who lack Field Visits access (everyone else has it). */
+  teamAccess: async (): Promise<Ok<{ noAccess: Record<string, NoFieldAccessReason> }>> =>
+    (await api.get('/field/team/access')).data,
   updateSettings: async (input: FieldSettings): Promise<Ok<FieldSettings>> =>
     (await api.put('/field/settings', input)).data,
 

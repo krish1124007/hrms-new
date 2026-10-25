@@ -8,7 +8,13 @@ import { AppError, ForbiddenError, NotFoundError, ValidationAppError } from '../
 import { audit } from '../services/audit.service.js';
 import { logger } from '../config/logger.js';
 import { currentEmployeeId } from '../lib/access.js';
-import { assertEmployeeExists, assertFieldRead, listScopeFilter, requireOwnEmployeeId } from '../lib/field-access.js';
+import {
+  assertEmployeeExists,
+  assertEmployeeHasFieldAccess,
+  assertFieldRead,
+  listScopeFilter,
+  requireOwnEmployeeId,
+} from '../lib/field-access.js';
 import { canManageField, fieldScope, noEmployeeProfile, scopeIncludes } from '../lib/field-scope.js';
 import { fieldFileRef } from '../lib/field-files.js';
 import { acceptCapturedAt, captureTimes } from '../lib/offline-capture.js';
@@ -362,6 +368,7 @@ export async function planVisit(req: Request, res: Response): Promise<void> {
     throw new ForbiddenError('You can plan visits only for yourself and your direct reports');
   }
   await assertEmployeeExists(employeeId);
+  await assertEmployeeHasFieldAccess(employeeId);
   const site = await loadSite(body.siteId);
   if (!scope.manage) await assertSiteRead(req, site);
   const label = labelFromYmd(body.plannedDate);

@@ -12,6 +12,7 @@ import { assertSiteRead, loadSite } from '../services/field-sites.service.js';
 import { logger } from '../config/logger.js';
 import { idOf } from '../lib/access.js';
 import {
+  assertEmployeeHasFieldAccess,
   assertFieldRead,
   assertFieldWrite,
   canManageField,
@@ -209,6 +210,7 @@ export async function createTask(req: Request, res: Response): Promise<void> {
   const userId = await assigneeUserId(body.assignedTo);
   const scope = await fieldScope(req);
   assertMayAssign(scope, body.assignedTo);
+  await assertEmployeeHasFieldAccess(body.assignedTo);
   if (body.siteId) await assertTaskSite(req, scope, body.siteId);
   const doc = await FieldTask.create({ ...body, ...(req.user?._id ? { createdBy: req.user._id } : {}) });
   void audit({ action: 'create', entity: 'FieldTask', entityId: String(doc._id) });
@@ -239,7 +241,10 @@ export async function updateTask(req: Request, res: Response): Promise<void> {
   }
 
   const reassigned = manager && body.assignedTo && body.assignedTo !== String(task.assignedTo);
-  if (reassigned) assertMayAssign(scope, body.assignedTo as string);
+  if (reassigned) {
+    assertMayAssign(scope, body.assignedTo as string);
+    await assertEmployeeHasFieldAccess(body.assignedTo as string);
+  }
   const newAssigneeUser = reassigned ? await assigneeUserId(body.assignedTo as string) : null;
 
   const doc = await FieldTask.findByIdAndUpdate(task._id, setAndUnset(set), { new: true }).exec();
