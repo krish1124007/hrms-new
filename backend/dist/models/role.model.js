@@ -89,11 +89,17 @@ const HR_EXECUTIVE_PERMISSIONS = [
     'field.manage',
 ];
 /**
- * Runs HR end to end. Deliberately has no users.* / roles.* / settings.manage /
- * backups.manage: managing logins, roles and system settings is admin-only.
+ * Runs HR end to end, including people's logins: sees them, blocks or allows
+ * sign-in, sets passwords and changes an employee's role (users.view /
+ * users.update). The user guards still apply — never the Admin role, never
+ * an admin's account, never their own role, never more access than they
+ * hold (lib/permission-grants). Deliberately no roles.* / settings.manage /
+ * backups.manage: editing roles themselves and system settings stays admin-only.
  */
 const HR_MANAGER_PERMISSIONS = [
     ...HR_EXECUTIVE_PERMISSIONS,
+    'users.view',
+    'users.update',
     'employees.delete',
     'payroll.process',
     'payroll.config',

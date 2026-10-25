@@ -104,8 +104,39 @@ describe('PATCH /users/:id { roleId }', () => {
     expect(toField.status).toBe(200);
   });
 
-  it('403 without users.update — the default HR Manager role cannot change roles', async () => {
+  it('HR Manager gives an employee a field role, but never Admin and never to an admin', async () => {
     const hr = await createUser({ roleSlug: 'hr_manager' });
+    const ravi = await plainEmployee();
+    const ok = await request(app)
+      .patch(`/api/v1/users/${ravi.userId}`)
+      .set(auth(hr.token))
+      .send({ roleId: await roleId('field_employee') });
+    expect(ok.status).toBe(200);
+    const stored = await User.findById(ravi.userId).populate('role').lean();
+    expect((stored?.role as unknown as { slug: string }).slug).toBe('field_employee');
+
+    const toAdmin = await request(app)
+      .patch(`/api/v1/users/${ravi.userId}`)
+      .set(auth(hr.token))
+      .send({ roleId: await roleId('admin') });
+    expect(toAdmin.status).toBe(403);
+
+    const admin = await createUser({ roleSlug: 'admin' });
+    const demote = await request(app)
+      .patch(`/api/v1/users/${admin.user._id}`)
+      .set(auth(hr.token))
+      .send({ roleId: await roleId('employee') });
+    expect(demote.status).toBe(403);
+
+    const own = await request(app)
+      .patch(`/api/v1/users/${hr.user._id}`)
+      .set(auth(hr.token))
+      .send({ roleId: await roleId('field_manager') });
+    expect(own.status).toBe(403);
+  });
+
+  it('403 without users.update — HR Executive cannot change roles', async () => {
+    const hr = await createUser({ roleSlug: 'hr_executive' });
     const ravi = await plainEmployee();
     const res = await request(app)
       .patch(`/api/v1/users/${ravi.userId}`)
