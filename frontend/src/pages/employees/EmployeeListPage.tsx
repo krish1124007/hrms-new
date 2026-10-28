@@ -15,6 +15,7 @@ import {
   Eye,
   Pencil,
   UserCog,
+  KeyRound,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatCard } from '@/components/ui/stat-card';
@@ -38,6 +39,7 @@ import { employeesApi, type Employee } from '@/lib/systemcore.api';
 import { todayKey } from '@/lib/business-day';
 import { formatDate } from '@/lib/format';
 import { EmployeeImportModal } from './EmployeeImportModal';
+import { CreateLoginsDialog } from '@/components/employees/CreateLoginsDialog';
 
 const STATUS_VARIANTS: Record<Employee['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
   active: 'success',
@@ -73,6 +75,8 @@ export default function EmployeeListPage(): ReactElement {
   const canDelete = has('employees.delete');
   const canCreate = has('employees.create');
   const canUpdate = has('employees.update');
+  const canManageLogins = has('users.update');
+  const [showCreateLogins, setShowCreateLogins] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Employee | null>(null);
 
   const params: Record<string, unknown> = { page, limit: 20 };
@@ -238,6 +242,11 @@ export default function EmployeeListPage(): ReactElement {
             <Button variant="outline" size="sm" onClick={() => void handleExport()} loading={exporting}>
               <Download className="size-4" /> Export
             </Button>
+            {canManageLogins && (
+              <Button variant="outline" size="sm" onClick={() => setShowCreateLogins(true)}>
+                <KeyRound className="size-4" /> Create logins
+              </Button>
+            )}
             {canCreate && (
               <Button size="sm" onClick={() => navigate('/employees/new')}>
                 <Plus className="size-4" /> Add Employee
@@ -361,6 +370,7 @@ export default function EmployeeListPage(): ReactElement {
 
       <EmployeeStatusDialog employee={statusFor} onClose={() => setStatusFor(null)} />
 
+      {canManageLogins && <CreateLoginsDialog open={showCreateLogins} onClose={() => setShowCreateLogins(false)} />}
       <EmployeeImportModal
         open={showImportModal}
         onClose={() => setShowImportModal(false)}

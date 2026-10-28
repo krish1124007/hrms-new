@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { rolesApi } from '@/lib/roles.api';
 import { usersApi } from '@/lib/users.api';
+import { employeesApi } from '@/lib/systemcore.api';
 
 /*
  * App access: which role a login has (and so what it may do), and whether it
@@ -52,5 +53,32 @@ export function useSetLoginStatus() {
           : `${vars.employeeName} can no longer sign in`,
       );
     },
+  });
+}
+
+/** Employed people without a login — the "Create logins" list. */
+export function useEmployeesWithoutLogin(enabled = true) {
+  return useQuery({
+    queryKey: ['employees', 'without-login'],
+    queryFn: async () => (await employeesApi.withoutLogin()).data,
+    enabled,
+  });
+}
+
+/** A login for one employee; the result carries the starting password to hand over. */
+export function useCreateLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (employeeId: string) => (await employeesApi.createLogin(employeeId)).data,
+    onSuccess: () => invalidateAccess(qc),
+  });
+}
+
+/** Logins for many employees at once; the result lists each starting password, and who was skipped. */
+export function useCreateLogins() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (employeeIds?: string[]) => (await employeesApi.createLogins(employeeIds)).data,
+    onSuccess: () => invalidateAccess(qc),
   });
 }

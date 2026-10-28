@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppQueryClient } from '@/lib/query-client';
 import { rolesApi, type AssignableRole } from '@/lib/roles.api';
 import { usersApi } from '@/lib/users.api';
-import type { Employee } from '@/lib/systemcore.api';
+import { employeesApi, type Employee } from '@/lib/systemcore.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { AppAccessCard } from './AppAccessCard';
 
@@ -15,6 +15,10 @@ vi.mock('@/lib/roles.api', async (importOriginal) => {
   return { ...actual, rolesApi: { ...actual.rolesApi, assignable: vi.fn() } };
 });
 vi.mock('@/lib/users.api', () => ({ usersApi: { setRole: vi.fn(), setStatus: vi.fn() } }));
+vi.mock('@/lib/systemcore.api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/systemcore.api')>();
+  return { ...actual, employeesApi: { ...actual.employeesApi, createLogin: vi.fn() } };
+});
 
 const role = (slug: string, name: string, extra: Partial<AssignableRole> = {}): AssignableRole => ({
   _id: `r-${slug}`,
@@ -163,6 +167,45 @@ describe('AppAccessCard', () => {
     renderCard(employee({ userId: null }));
     expect(screen.getByText(/has no login account/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /change role/i })).not.toBeInTheDocument();
+  });
+
+  it('creates a login for an employee without one and shows the starting password once', async () => {
+    signIn(['users.update']);
+    vi.mocked(employeesApi.createLogin).mockResolvedValue({
+      success: true,
+      data: {
+        employee: { _id: 'e1', employeeId: 'EMP-1', name: 'Ravi Kumar' },
+        email: 'ravi@example.com',
+        role: 'Field Employee',
+        password: 'Hk7mPq3xRt',
+      },
+    });
+    renderCard(employee({ userId: null }));
+    await userEvent.click(screen.getByRole('button', { name: /create login/i }));
+    const confirm = await screen.findByRole('dialog');
+    expect(within(confirm).getByText('ravi@example.com')).toBeInTheDocument();
+    await userEvent.click(within(confirm).getByRole('button', { name: /create login/i }));
+
+    expect(employeesApi.createLogin).toHaveBeenCalledWith('e1');
+    expect(await screen.findByText('Hk7mPq3xRt')).toBeInTheDocument();
+    expect(screen.getByText(/shown only now/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download list/i })).toBeInTheDocument();
+  });
+
+  it('offers no login for someone who has left, or to someone who does not manage logins', () => {
+    signIn(['*']);
+    const { unmount } = render(
+      <QueryClientProvider client={createAppQueryClient()}>
+        <AppAccessCard employee={employee({ userId: null, status: 'resigned' })} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole('button', { name: /create login/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/no longer employed/i)).toBeInTheDocument();
+    unmount();
+
+    signIn(['employees.update']);
+    renderCard(employee({ userId: null }));
+    expect(screen.queryByRole('button', { name: /create login/i })).not.toBeInTheDocument();
   });
 
   it('is not shown to someone who cannot edit employees or logins', () => {

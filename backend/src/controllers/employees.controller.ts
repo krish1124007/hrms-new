@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { Employee, type EmployeeStatus, type ExitStatus, type IEmployee } from '../models/employee.model.js';
@@ -16,7 +16,7 @@ import { sendMail } from '../services/email.service.js';
 import { audit } from '../services/audit.service.js';
 import { env } from '../config/env.js';
 import { appBaseUrl } from '../lib/app-url.js';
-import { assertCanAssignRole, canAssignRole } from '../lib/permission-grants.js';
+import { assertCanAssignRole, assertCanManageUser, canAssignRole } from '../lib/permission-grants.js';
 import { fieldAccessFor } from '../lib/field-access.js';
 import { logger } from '../config/logger.js';
 import { leaveYear } from '../services/leave-attendance.service.js';
@@ -440,6 +440,158 @@ export async function createEmployee(req: Request, res: Response): Promise<void>
 
   void audit({ action: 'create', entity: 'Employee', entityId: String(employee._id) });
   res.status(201).json({ success: true, data: employee });
+}
+
+// ---------- Logins for employees who have none ----------
+
+/** `POST /employees/logins`: the employees to give a login; none listed = every employed one without. */
+export const createLoginsSchema = z.object({
+  employeeIds: z
+    .array(z.string().regex(/^[0-9a-f]{24}$/i, 'employeeIds must be employee ids'))
+    .min(1)
+    .max(300)
+    .optional(),
+});
+
+/** Employees who can be given a login: still employed, and no login yet. */
+const WITHOUT_LOGIN = { status: { $in: ['active', 'onNotice'] }, userId: null };
+
+/** No 0/O, 1/l/I: the password is read off a screen or a printout and typed in by hand. */
+const PASSWORD_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz';
+const PASSWORD_DIGITS = '23456789';
+
+/**
+ * A random starting password HR hands to the employee: 10 characters, at
+ * least two of them digits, so it passes `validatePasswordStrength`.
+ */
+export function startingPassword(): string {
+  const pick = (from: string): string => from[randomInt(from.length)]!;
+  const chars = [pick(PASSWORD_DIGITS), pick(PASSWORD_DIGITS)];
+  const all = PASSWORD_LETTERS + PASSWORD_DIGITS;
+  while (chars.length < 10) chars.push(chars.length < 4 ? pick(PASSWORD_LETTERS) : pick(all));
+  // Shuffle so the digits are not always first.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j]!, chars[i]!];
+  }
+  return chars.join('');
+}
+
+/** A login just made for an employee. `password` is shown once and never stored in plain. */
+export interface CreatedLogin {
+  employee: { _id: string; employeeId: string; name: string };
+  email: string;
+  role: string;
+  /** Absent when an existing, unlinked login with this e-mail was linked instead — its password is unchanged. */
+  password?: string;
+}
+
+/**
+ * Give `employee` a login: active at once with a random starting password
+ * (no mail is sent — HR hands the password over), on the `employee` role, or
+ * Field Employee for field staff when the caller may give it. A login that
+ * already exists for this e-mail and belongs to no employee is linked instead,
+ * if the caller could manage it.
+ */
+async function giveLogin(caller: Request['user'], employee: IEmployee): Promise<CreatedLogin> {
+  const name = `${employee.firstName} ${employee.lastName}`.trim();
+  if (employee.userId) throw new ConflictError(`${name} already has a login`);
+  if (employee.status !== 'active' && employee.status !== 'onNotice') {
+    throw new AppError(`${name} is no longer employed (${employee.status}), so they cannot be given a login`, 409, 'NOT_EMPLOYED');
+  }
+  const email = (employee.email ?? '').trim().toLowerCase();
+  if (!email) throw new ValidationAppError(`${name} has no e-mail address to sign in with`);
+
+  const password = startingPassword();
+  const login = await provisionLogin(
+    caller,
+    { email, firstName: employee.firstName, lastName: employee.lastName, password },
+    employee.isFieldStaff ? await defaultFieldRole(caller) : undefined,
+  );
+  const user = await User.findById(login.userId).populate<{ role: IRole | null }>('role').exec();
+  if (!user) throw new NotFoundError('Login not found');
+  // Linking someone else's login must not hand a lesser HR user a more privileged account.
+  if (!login.createdUserId) assertCanManageUser(caller, user);
+
+  // Only if nobody linked a login in the meantime (a double click, two HR users).
+  const linked = await Employee.findOneAndUpdate(
+    { _id: employee._id, userId: null },
+    { $set: { userId: login.userId } },
+    { new: true },
+  ).exec();
+  if (!linked) {
+    await discardLogin(login);
+    throw new ConflictError(`${name} already has a login`);
+  }
+
+  void audit({
+    action: 'create',
+    entity: 'User',
+    entityId: String(login.userId),
+    metadata: {
+      event: login.createdUserId ? 'login.created-for-employee' : 'login.linked-to-employee',
+      employeeId: String(employee._id),
+    },
+  });
+  return {
+    employee: { _id: String(employee._id), employeeId: employee.employeeId, name },
+    email: user.email,
+    role: user.role?.name ?? '',
+    ...(login.createdUserId ? { password } : {}),
+  };
+}
+
+/** `GET /employees/without-login` — employed people who cannot sign in yet because they have no login. */
+export async function listEmployeesWithoutLogin(_req: Request, res: Response): Promise<void> {
+  const employees = await Employee.find(WITHOUT_LOGIN)
+    .select('employeeId firstName lastName email isFieldStaff department designation')
+    .populate('department', 'name')
+    .populate('designation', 'name')
+    .sort({ firstName: 1, lastName: 1 })
+    .lean()
+    .exec();
+  res.json({ success: true, data: employees });
+}
+
+/** `POST /employees/:id/login` — a login for one employee; the starting password is in the answer, once. */
+export async function createEmployeeLogin(req: Request, res: Response): Promise<void> {
+  const employee = await Employee.findById(String(req.params.id)).exec();
+  if (!employee) throw new NotFoundError('Employee not found');
+  const created = await giveLogin(req.user, employee);
+  res.status(201).json({ success: true, data: created });
+}
+
+/**
+ * `POST /employees/logins` — logins for the listed employees, or for every
+ * employed one without a login. One that cannot be given a login is skipped
+ * with the reason; the rest are still created.
+ */
+export async function createEmployeeLogins(req: Request, res: Response): Promise<void> {
+  const { employeeIds } = req.body as z.infer<typeof createLoginsSchema>;
+  const employees = await Employee.find(employeeIds ? { _id: { $in: employeeIds } } : WITHOUT_LOGIN)
+    .sort({ firstName: 1, lastName: 1 })
+    .exec();
+
+  const created: CreatedLogin[] = [];
+  const skipped: Array<{ employee: { _id: string; employeeId: string; name: string }; reason: string }> = [];
+  for (const employee of employees) {
+    try {
+      // One at a time: hashing is CPU-bound, so running them together would not be faster.
+      // eslint-disable-next-line no-await-in-loop
+      created.push(await giveLogin(req.user, employee));
+    } catch (err) {
+      if (!(err instanceof AppError)) throw err;
+      skipped.push({
+        employee: {
+          _id: String(employee._id),
+          employeeId: employee.employeeId,
+          name: `${employee.firstName} ${employee.lastName}`.trim(),
+        },
+        reason: err.message,
+      });
+    }
+  }
+  res.status(201).json({ success: true, data: { created, skipped } });
 }
 
 export async function getEmployee(req: Request, res: Response): Promise<void> {

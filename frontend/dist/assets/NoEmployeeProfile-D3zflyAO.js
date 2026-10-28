@@ -1,0 +1,1 @@
+import{j as e}from"./index-Dzg91KqS.js";import{E as t}from"./empty-state-CUXOBqE9.js";import{U as r}from"./user-x-CJhZm71r.js";function p({feature:o}){return e.jsx(t,{icon:r,title:"No employee profile",description:`Your login is not linked to an employee record, so there is no ${o} to show. Ask HR to link your account to an employee profile.`})}export{p as N};

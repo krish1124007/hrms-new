@@ -45,6 +45,15 @@ router.post(
   validate(ctrl.createEmployeeSchema),
   asyncHandler(ctrl.createEmployee),
 );
+// Logins for employees who have none: managing logins takes users.update.
+router.get('/without-login', requirePermission('users.update'), asyncHandler(ctrl.listEmployeesWithoutLogin));
+router.post(
+  '/logins',
+  requirePermission('users.update'),
+  validate(ctrl.createLoginsSchema),
+  asyncHandler(ctrl.createEmployeeLogins),
+);
+router.post('/:id/login', requirePermission('users.update'), asyncHandler(ctrl.createEmployeeLogin));
 router.get('/:id', requirePermission('employees.view'), asyncHandler(ctrl.getEmployee));
 router.patch(
   '/:id',

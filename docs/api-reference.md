@@ -339,6 +339,9 @@ All database queries are automatically filtered by `tenantId` via Mongoose middl
 | PATCH | `/api/v1/employees/:id` | Update employee |
 | DELETE | `/api/v1/employees/:id` | Soft-delete employee |
 | POST | `/api/v1/employees/import` | Bulk import from CSV |
+| GET | `/api/v1/employees/without-login` | Employed people with no login yet (`users.update`) |
+| POST | `/api/v1/employees/:id/login` | Give one employee a login; answers with its random starting password, once (`users.update`) |
+| POST | `/api/v1/employees/logins` | Logins for `employeeIds`, or every employed one without; answers `{ created, skipped }` (`users.update`) |
 | GET | `/api/v1/employees/:id/documents` | List employee documents |
 
 ### Attendance

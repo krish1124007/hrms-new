@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import { MapPinned, ShieldCheck, UserCheck, UserX } from 'lucide-react';
+import { KeyRound, MapPinned, ShieldCheck, UserCheck, UserX } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,11 +12,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { useAssignableRoles, useSetLoginRole, useSetLoginStatus } from '@/hooks/use-access';
+import { useAssignableRoles, useCreateLogin, useSetLoginRole, useSetLoginStatus } from '@/hooks/use-access';
 import { usePermissions } from '@/hooks/use-permissions';
 import { useAuthStore } from '@/stores/auth.store';
 import { FIELD_EMPLOYEE_SLUG, roleFieldScope, type AssignableRole } from '@/lib/roles.api';
-import type { Employee, EmployeeLogin } from '@/lib/systemcore.api';
+import type { CreateLoginsResult, Employee, EmployeeLogin } from '@/lib/systemcore.api';
+import { NewLoginsDialog } from './NewLoginsDialog';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -39,7 +40,8 @@ const STATUS_BADGE: Record<string, { label: string; variant: 'success' | 'second
  * "App access" on an employee's profile: their login e-mail, whether they can
  * sign in, and their role — what they may see and do, Field Visits included.
  *
- * Changing the role or the sign-in status needs `users.update` (the server
+ * Changing the role or the sign-in status — or creating a login for someone
+ * who has none — needs `users.update` (the server
  * also refuses your own role, and roles carrying permissions you do not
  * hold). Without it the card is read-only. Permissions are read on every
  * request, so a new role applies at once — an open app only needs a reload to
@@ -57,6 +59,9 @@ export function AppAccessCard({ employee }: { employee: Employee }): ReactElemen
   const setStatus = useSetLoginStatus();
   const [choosing, setChoosing] = useState(false);
   const [statusConfirm, setStatusConfirm] = useState(false);
+  const createLogin = useCreateLogin();
+  const [createConfirm, setCreateConfirm] = useState(false);
+  const [created, setCreated] = useState<CreateLoginsResult | null>(null);
 
   if (!has('users.update') && !has('employees.update')) return null;
 
@@ -64,6 +69,7 @@ export function AppAccessCard({ employee }: { employee: Employee }): ReactElemen
   const needsFieldRole = !!login && employee.isFieldStaff && employee.fieldAccess === false;
   const role = login?.role ?? null;
   const status = login ? (STATUS_BADGE[login.status] ?? { label: login.status, variant: 'secondary' as const }) : null;
+  const employed = employee.status === 'active' || employee.status === 'onNotice';
 
   return (
     <Card>
@@ -87,12 +93,22 @@ export function AppAccessCard({ employee }: { employee: Employee }): ReactElemen
             </Button>
           </div>
         )}
+        {canEdit && !login && employed && (
+          <Button size="sm" onClick={() => setCreateConfirm(true)}>
+            <KeyRound className="size-4" /> Create login
+          </Button>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         {!login ? (
           <p className="text-sm text-muted-foreground">
             {name} has no login account, so they cannot sign in to the app — and cannot use Field Visits or
-            self-service. A login is created when an employee is added with a login e-mail.
+            self-service.{' '}
+            {!employed
+              ? 'They are no longer employed, so no login can be created.'
+              : canEdit
+                ? `Create login gives them one with ${employee.email} and a starting password for you to hand over.`
+                : 'Ask someone who manages logins (an administrator or HR manager) to create one.'}
           </p>
         ) : (
           <>
@@ -172,6 +188,33 @@ export function AppAccessCard({ employee }: { employee: Employee }): ReactElemen
           </>
         )}
       </CardContent>
+
+      {!login && canEdit && (
+        <ConfirmDialog
+          open={createConfirm}
+          onClose={() => setCreateConfirm(false)}
+          loading={createLogin.isPending}
+          destructive={false}
+          title={`Create a login for ${name}?`}
+          description={
+            <>
+              They sign in to the web and mobile app with <strong>{employee.email}</strong> and a random starting
+              password, shown to you once to hand over. Their role is{' '}
+              {employee.isFieldStaff ? 'Field Employee' : 'Employee'}; you can change it afterwards. No e-mail is sent.
+            </>
+          }
+          confirmLabel="Create login"
+          onConfirm={() =>
+            createLogin.mutate(employee._id, {
+              onSuccess: (data) => {
+                setCreateConfirm(false);
+                setCreated({ created: [data], skipped: [] });
+              },
+            })
+          }
+        />
+      )}
+      <NewLoginsDialog result={created} onClose={() => setCreated(null)} />
 
       {login && canEdit && (
         <>

@@ -231,6 +231,32 @@ export interface EmployeeLogin {
   role?: { _id: string; name: string; slug: string; description?: string } | null;
 }
 
+/** A login just made for an employee (`POST /employees/:id/login`, `POST /employees/logins`). */
+export interface CreatedLogin {
+  employee: { _id: string; employeeId: string; name: string };
+  email: string;
+  role: string;
+  /** The starting password — returned once, never again. Absent when an existing login was linked. */
+  password?: string;
+}
+
+export interface CreateLoginsResult {
+  created: CreatedLogin[];
+  skipped: Array<{ employee: { _id: string; employeeId: string; name: string }; reason: string }>;
+}
+
+/** An employed person with no login yet (`GET /employees/without-login`). */
+export interface EmployeeWithoutLogin {
+  _id: string;
+  employeeId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  isFieldStaff?: boolean;
+  department?: { _id: string; name: string } | null;
+  designation?: { _id: string; name: string } | null;
+}
+
 export interface Employee {
   _id: string;
   employeeId: string;
@@ -381,6 +407,15 @@ export const employeesApi = {
    */
   updateStatus: async (id: string, body: EmployeeStatusInput): Promise<ItemResponse<Employee>> =>
     (await api.patch(`/employees/${id}/status`, body)).data,
+  /** Employed people who have no login, so cannot sign in yet. */
+  withoutLogin: async (): Promise<{ success: boolean; data: EmployeeWithoutLogin[] }> =>
+    (await api.get('/employees/without-login')).data,
+  /** A login for one employee, active at once; the answer carries its starting password. */
+  createLogin: async (id: string): Promise<{ success: boolean; data: CreatedLogin }> =>
+    (await api.post(`/employees/${id}/login`)).data,
+  /** Logins for the listed employees (or every employed one without a login). */
+  createLogins: async (employeeIds?: string[]): Promise<{ success: boolean; data: CreateLoginsResult }> =>
+    (await api.post('/employees/logins', employeeIds ? { employeeIds } : {})).data,
   /** Bring back a soft-deleted employee (and reactivate their login). */
   restore: async (id: string): Promise<ItemResponse<Employee>> =>
     (await api.post(`/employees/${id}/restore`)).data,
