@@ -182,7 +182,10 @@ export declare function importUploadErrors(err: unknown, _req: Request, _res: Re
  * name, Contact phone, Assigned employee IDs (employee codes, comma
  * separated). A row whose name matches one existing site (any case) updates
  * it; otherwise a site is created. Bad rows are skipped and reported by their
- * spreadsheet row number → `{ created, updated, errors: [{ row, message }] }`.
+ * spreadsheet row number. An employee ID that names nobody, or someone who
+ * cannot use Field Visits, is left out and noted, but the site still imports
+ * (an update that leaves out every ID keeps the site's current assignees)
+ * → `{ created, updated, errors: [{ row, message }], warnings: [{ row, message }] }`.
  */
 export declare function importSites(req: Request, res: Response): Promise<void>;
 //# sourceMappingURL=field-sites.controller.d.ts.map

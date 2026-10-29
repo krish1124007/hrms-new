@@ -19,6 +19,7 @@ import { AppError, ForbiddenError, ValidationAppError } from '../lib/errors.js';
 import { audit } from '../services/audit.service.js';
 import { idOf } from '../lib/access.js';
 import { canManageField, fieldScope, scopeFilter } from '../lib/field-scope.js';
+import { fieldAccessFor } from '../lib/field-access.js';
 import { fieldFileRef } from '../lib/field-files.js';
 import { escapeRegex, objectIdString, pageParams } from '../lib/field-utils.js';
 import { getFieldSettings } from '../services/field-settings.service.js';
@@ -302,13 +303,57 @@ const COLUMNS = {
     assignedto: 'assigned',
 };
 const cell = (v) => (v === null || v === undefined ? '' : String(v).trim());
+/** The codes in an "Assigned employee IDs" cell (comma, semicolon or space separated). */
+const splitCodes = (s) => (s ?? '').split(/[,;\s]+/).filter(Boolean);
+/** `EMP-046`, `emp_46`, `EMP000046` → `EMP#46`: the letters, then the number without separators or leading zeros. */
+const looseCode = (code) => {
+    const m = /^([A-Z]*)[._/-]*0*(\d+)$/.exec(code.toUpperCase());
+    return m ? `${m[1]}#${m[2]}` : null;
+};
+/**
+ * Employee code (or `_id`) → the employee it names. An exact code in any case
+ * wins; otherwise one that differs only in separators or zero-padding
+ * (`Emp-46` for `EMP000046`). A code that fits two employees is never guessed.
+ */
+function employeeCodeResolver(employees) {
+    const exact = new Map();
+    const loose = new Map();
+    const add = (map, key, e) => map.set(key, [...(map.get(key) ?? []), e]);
+    for (const e of employees) {
+        add(exact, String(e._id).toUpperCase(), e);
+        const code = e.employeeId?.trim();
+        if (!code)
+            continue;
+        add(exact, code.toUpperCase(), e);
+        const key = looseCode(code);
+        if (key)
+            add(loose, key, e);
+    }
+    return (code) => {
+        const key = looseCode(code);
+        for (const hits of [exact.get(code.toUpperCase()), key ? loose.get(key) : undefined]) {
+            if (hits?.length === 1)
+                return { employee: hits[0] };
+            if (hits && hits.length > 1)
+                return { problem: 'matches more than one employee — use the exact code' };
+        }
+        return { problem: 'no employee has this ID' };
+    };
+}
+const NO_FIELD_ACCESS_NOTE = {
+    no_login: 'no login account, so they cannot use Field Visits',
+    no_permission: 'no Field Visits access — give them the Field Employee role',
+};
 /**
  * POST /field/sites/import (multipart `file`: .xlsx/.xls/.csv) — columns Name,
  * Type, Address, City, State, Pincode, Latitude, Longitude, Radius, Contact
  * name, Contact phone, Assigned employee IDs (employee codes, comma
  * separated). A row whose name matches one existing site (any case) updates
  * it; otherwise a site is created. Bad rows are skipped and reported by their
- * spreadsheet row number → `{ created, updated, errors: [{ row, message }] }`.
+ * spreadsheet row number. An employee ID that names nobody, or someone who
+ * cannot use Field Visits, is left out and noted, but the site still imports
+ * (an update that leaves out every ID keeps the site's current assignees)
+ * → `{ created, updated, errors: [{ row, message }], warnings: [{ row, message }] }`.
  */
 export async function importSites(req, res) {
     if (!req.file)
@@ -340,32 +385,23 @@ export async function importSites(req, res) {
         return { rowNumber: firstRow + 1 + i, row };
     });
     const settings = await getFieldSettings();
-    const codes = new Set();
-    for (const { row } of rows)
-        for (const code of (row.assigned ?? '').split(/[,;\s]+/).filter(Boolean))
-            codes.add(code);
-    const codeList = [...codes];
-    const employees = codeList.length
-        ? await Employee.find({
-            $or: [
-                { employeeId: { $in: codeList } },
-                { _id: { $in: codeList.filter((c) => /^[a-f\d]{24}$/i.test(c)) } },
-            ],
-        })
-            .select('_id employeeId')
-            .lean()
-            .exec()
+    // Codes are matched in memory (any case, loose padding), so every current
+    // employee's code is read once — only when some row names one.
+    const anyCodes = rows.some(({ row }) => splitCodes(row.assigned).length > 0);
+    const employees = anyCodes
+        ? await Employee.find({}).select('_id employeeId firstName lastName').lean().exec()
         : [];
-    const byCode = new Map();
-    for (const e of employees) {
-        if (e.employeeId)
-            byCode.set(e.employeeId.toLowerCase(), e._id);
-        byCode.set(String(e._id).toLowerCase(), e._id);
-    }
+    const resolve = employeeCodeResolver(employees);
+    const named = rows.flatMap(({ row }) => splitCodes(row.assigned).flatMap((code) => {
+        const hit = resolve(code);
+        return 'employee' in hit ? [hit.employee._id] : [];
+    }));
+    const access = await fieldAccessFor(named);
     const createdBy = req.user?._id ? new Types.ObjectId(String(req.user._id)) : undefined;
     let created = 0;
     let updated = 0;
     const errors = [];
+    const warnings = [];
     for (const { rowNumber, row } of rows) {
         if (Object.values(row).every((v) => v === ''))
             continue;
@@ -405,13 +441,26 @@ export async function importSites(req, res) {
             fail(`Radius must be a whole number of metres from ${MIN_SITE_RADIUS_M} to ${MAX_SITE_RADIUS_M}`);
             continue;
         }
-        const wantedCodes = (row.assigned ?? '').split(/[,;\s]+/).filter(Boolean);
-        const unknown = wantedCodes.filter((c) => !byCode.has(c.toLowerCase()));
-        if (unknown.length > 0) {
-            fail(`Unknown employee ID(s): ${unknown.join(', ')}`);
-            continue;
+        // Each code: assigned, or left out with why. A bad code never costs the site.
+        const assigned = new Map();
+        const leftOut = new Map();
+        for (const code of splitCodes(row.assigned)) {
+            const hit = resolve(code);
+            if ('problem' in hit) {
+                leftOut.set(code.toUpperCase(), `${code} — ${hit.problem}`);
+                continue;
+            }
+            const { _id, firstName, lastName } = hit.employee;
+            const noAccess = access.get(String(_id));
+            if (noAccess) {
+                const name = `${firstName ?? ''} ${lastName ?? ''}`.trim();
+                leftOut.set(String(_id), `${code}${name ? ` (${name})` : ''} — ${NO_FIELD_ACCESS_NOTE[noAccess]}`);
+            }
+            else {
+                assigned.set(String(_id), _id);
+            }
         }
-        const assignedTo = [...new Map(wantedCodes.map((c) => [String(byCode.get(c.toLowerCase())), byCode.get(c.toLowerCase())])).values()];
+        const assignedTo = [...assigned.values()];
         const fields = {
             name: row.name.slice(0, 200),
             type,
@@ -426,7 +475,8 @@ export async function importSites(req, res) {
             fields.contactName = row.contactName.slice(0, 200);
         if (row.contactPhone)
             fields.contactPhone = row.contactPhone.slice(0, 30);
-        if (wantedCodes.length > 0)
+        // The column replaces the assignees — unless every ID in it was left out.
+        if (assignedTo.length > 0)
             fields.assignedTo = assignedTo;
         // eslint-disable-next-line no-await-in-loop
         const matches = await FieldSite.find({ name: { $regex: `^${escapeRegex(row.name)}$`, $options: 'i' } })
@@ -464,9 +514,14 @@ export async function importSites(req, res) {
         }
         catch (err) {
             fail(err.message);
+            continue;
+        }
+        if (leftOut.size > 0) {
+            const kept = matches.length === 1 && assignedTo.length === 0 ? ". The site's current assignees were kept" : '';
+            warnings.push({ row: rowNumber, message: `Not assigned: ${[...leftOut.values()].join('; ')}${kept}` });
         }
     }
-    void audit({ action: 'create', entity: 'FieldSite', metadata: { import: true, created, updated, errors: errors.length } });
-    res.json({ success: true, data: { created, updated, errors } });
+    void audit({ action: 'create', entity: 'FieldSite', metadata: { import: true, created, updated, errors: errors.length, warnings: warnings.length } });
+    res.json({ success: true, data: { created, updated, errors, warnings } });
 }
 //# sourceMappingURL=field-sites.controller.js.map
