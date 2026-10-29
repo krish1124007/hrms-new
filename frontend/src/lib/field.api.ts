@@ -169,7 +169,10 @@ export const SITE_MAP_LIMIT = 500;
 export interface SiteImportResult {
   created: number;
   updated: number;
+  /** Rows that were skipped, and why. */
   errors: Array<{ row: number; message: string }>;
+  /** Rows that imported, but left out some employee IDs (unknown, or no Field Visits access). */
+  warnings: Array<{ row: number; message: string }>;
 }
 
 /** The columns `POST /field/sites/import` reads, as laid out in the template. */

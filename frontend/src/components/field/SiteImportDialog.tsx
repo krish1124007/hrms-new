@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactElement } from 'react';
-import { CheckCircle2, Download, FileSpreadsheet, Upload } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Upload } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -22,7 +22,7 @@ function downloadTemplate(): void {
     200,
     'Anita Rao',
     '9800000000',
-    'EMP-001, EMP-002',
+    'EMP000001, EMP000002',
   ];
   const ws = XLSX.utils.aoa_to_sheet([[...SITE_IMPORT_COLUMNS], example]);
   const wb = XLSX.utils.book_new();
@@ -30,10 +30,45 @@ function downloadTemplate(): void {
   XLSX.writeFile(wb, 'site_import_template.xlsx');
 }
 
+/** One table of per-row messages from the import (nothing when empty). */
+function RowNotes({
+  title,
+  heading,
+  rows,
+}: {
+  title: string;
+  heading: string;
+  rows: SiteImportResult['errors'];
+}): ReactElement | null {
+  if (rows.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium">{title}</p>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            <th className="w-16 py-1 font-medium">Row</th>
+            <th className="py-1 font-medium">{heading}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((e) => (
+            <tr key={`${e.row}-${e.message}`} className="border-t border-border">
+              <td className="py-1 align-top font-mono">{e.row}</td>
+              <td className="py-1">{e.message}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /**
  * Bulk-add sites from an Excel sheet (`POST /field/sites/import`). The server
  * creates new sites, updates ones it already knows, and lists the rows it
- * could not use with the reason.
+ * could not use with the reason, plus the imported rows that left out some
+ * employee IDs.
  */
 export function SiteImportDialog({ open, onClose }: { open: boolean; onClose: () => void }): ReactElement {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -81,7 +116,10 @@ export function SiteImportDialog({ open, onClose }: { open: boolean; onClose: ()
           </p>
           <p className="text-xs text-muted-foreground">
             Name, Type, Latitude and Longitude are required. Radius is in metres (the default radius when empty).
-            Assigned employee IDs are employee codes separated by commas. A row matching an existing site updates it.
+            Assigned employee IDs are employee codes as shown on the Employees page (like EMP000046), separated by
+            commas; case, dashes and leading zeros don&apos;t matter (Emp-46 works). An ID that matches no one, or
+            someone without Field Visits access, is left out and noted — the site still imports. A row matching an
+            existing site updates it.
           </p>
           <Button type="button" variant="outline" size="sm" onClick={downloadTemplate}>
             <Download className="size-4" />
@@ -111,30 +149,18 @@ export function SiteImportDialog({ open, onClose }: { open: boolean; onClose: ()
         </div>
 
         {result && (
-          <div className="space-y-2 rounded-md border border-border p-3 text-sm" role="status">
+          <div className="space-y-3 rounded-md border border-border p-3 text-sm" role="status">
             <p className="flex items-center gap-1.5 font-medium">
-              <CheckCircle2 className="size-4 text-success" />
+              {result.created + result.updated > 0 ? (
+                <CheckCircle2 className="size-4 text-success" />
+              ) : (
+                <AlertTriangle className="size-4 text-warning" />
+              )}
               {result.created} created, {result.updated} updated
               {result.errors.length > 0 ? `, ${result.errors.length} skipped` : ''}
             </p>
-            {result.errors.length > 0 && (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-muted-foreground">
-                    <th className="w-16 py-1 font-medium">Row</th>
-                    <th className="py-1 font-medium">Problem</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.errors.map((e) => (
-                    <tr key={`${e.row}-${e.message}`} className="border-t border-border">
-                      <td className="py-1 font-mono">{e.row}</td>
-                      <td className="py-1">{e.message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <RowNotes title="Skipped rows" heading="Problem" rows={result.errors} />
+            <RowNotes title="Imported, with notes" heading="Note" rows={result.warnings ?? []} />
           </div>
         )}
       </DialogBody>

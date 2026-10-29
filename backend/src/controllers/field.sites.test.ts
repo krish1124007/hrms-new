@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { createUser, createEmployeeFor } from '../test/factories.js';
 import { User, type IUser } from '../models/user.model.js';
-import type { IEmployee } from '../models/employee.model.js';
+import { Employee, type IEmployee } from '../models/employee.model.js';
 import { FieldSite } from '../models/field-site.model.js';
 import { Visit } from '../models/visit.model.js';
 import { env } from '../config/env.js';
@@ -456,7 +456,8 @@ describe('POST /field/sites/import', () => {
     const pune = await FieldSite.findOne({ name: 'Pune Plant' }).lean();
     expect(pune).toMatchObject({ type: 'Project site', radiusM: 200 });
 
-    // Re-importing a name updates that site; unknown codes and types are row errors.
+    // Re-importing a name updates that site; an unknown type is a row error,
+    // an unknown employee code only a note (the site still imports).
     const again = await upload(
       head,
       workbook([
@@ -468,15 +469,90 @@ describe('POST /field/sites/import', () => {
         ['Pune Plant', '', '', 'Pimpri', '', '', 18.53, 73.86, '', '', '', ''],
       ]),
     );
-    expect(again.body.data).toMatchObject({ created: 0, updated: 2 });
-    expect(again.body.data.errors.map((e: { row: number }) => e.row)).toEqual([3, 4]);
+    expect(again.body.data).toMatchObject({ created: 1, updated: 2 });
+    expect(again.body.data.errors.map((e: { row: number }) => e.row)).toEqual([4]);
+    expect(again.body.data.warnings).toEqual([{ row: 3, message: expect.stringMatching(/EMP999999/) }]);
+    expect((await FieldSite.findOne({ name: 'Ghost' }).lean())?.assignedTo).toEqual([]);
     expect((await FieldSite.findById(andheri?._id).lean())?.radiusM).toBe(250);
     expect(await FieldSite.findById(pune?._id).lean()).toMatchObject({
       type: 'Project site',
       radiusM: 200,
       address: { city: 'Pimpri' },
     });
-    expect(await FieldSite.countDocuments()).toBe(2);
+    expect(await FieldSite.countDocuments()).toBe(3);
+  });
+
+  const assigneesOf = async (name: string) =>
+    ((await FieldSite.findOne({ name }).lean())?.assignedTo ?? []).map(String);
+
+  it('matches employee codes ignoring case, surrounding spaces, separators and zero-padding', async () => {
+    const asha = await actor('field_employee', { employeeId: 'EMP000046' });
+    const res = await upload(
+      head,
+      workbook([
+        HEADER,
+        ['Site A', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', 'Emp-46'],
+        ['Site B', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', ' emp000046 '],
+        ['Site C', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', `EMP_046 , ${rep.employee.employeeId.toLowerCase()}`],
+      ]),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ created: 3, updated: 0, errors: [], warnings: [] });
+    expect(await assigneesOf('Site A')).toEqual([String(asha.employee._id)]);
+    expect(await assigneesOf('Site B')).toEqual([String(asha.employee._id)]);
+    expect(await assigneesOf('Site C')).toEqual([String(asha.employee._id), String(rep.employee._id)]);
+  });
+
+  it('never guesses between two employees: an exact code wins, a loose one that fits both is left out', async () => {
+    const short = await actor('field_employee', { employeeId: 'EMP46' });
+    await actor('field_employee', { employeeId: 'EMP000046' });
+    const res = await upload(
+      head,
+      workbook([
+        HEADER,
+        ['Site A', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', 'emp46'],
+        ['Site B', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', 'EMP-046'],
+      ]),
+    );
+    expect(res.body.data).toMatchObject({ created: 2, updated: 0, errors: [] });
+    expect(await assigneesOf('Site A')).toEqual([String(short.employee._id)]);
+    expect(await assigneesOf('Site B')).toEqual([]);
+    expect(res.body.data.warnings).toEqual([{ row: 3, message: expect.stringMatching(/EMP-046.*more than one employee/) }]);
+  });
+
+  it('a row naming unknown or non-field employees still imports, assigned to the ones who can do field work', async () => {
+    await actor('employee', { employeeId: 'EMP000050' }); // a login without Field Visits access
+    await Employee.create({ firstName: 'Ravi', lastName: 'Kumar', email: 'ravi@test.local', joiningDate: new Date('2024-01-15'), employeeId: 'EMP000051' });
+    const res = await upload(
+      head,
+      workbook([
+        HEADER,
+        ['Site A', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', `${rep.employee.employeeId}, EMP-999, EMP000050; EMP000051`],
+        // Still skipped: no name, no latitude.
+        ['', 'Branch', '', '', '', '', 19.1, 72.8, '', '', '', rep.employee.employeeId],
+        ['Site C', 'Branch', '', '', '', '', '', 72.8, '', '', '', rep.employee.employeeId],
+      ]),
+    );
+    expect(res.body.data).toMatchObject({ created: 1, updated: 0 });
+    expect(res.body.data.errors).toEqual([
+      { row: 3, message: expect.stringMatching(/Name/) },
+      { row: 4, message: expect.stringMatching(/Latitude/) },
+    ]);
+    expect(res.body.data.warnings).toEqual([{ row: 2, message: expect.any(String) }]);
+    const note = res.body.data.warnings[0].message as string;
+    expect(note).toMatch(/EMP-999 — no employee has this ID/);
+    expect(note).toMatch(/EMP000050 \(Test [^)]*\) — .*Field Employee role/);
+    expect(note).toMatch(/EMP000051 \(Ravi Kumar\) — no login/);
+    expect(note).not.toMatch(new RegExp(rep.employee.employeeId));
+    expect(await assigneesOf('Site A')).toEqual([String(rep.employee._id)]);
+  });
+
+  it("on an update, a row whose IDs are all left out keeps the site's current assignees", async () => {
+    await siteFor([rep.employee], { name: 'Stored site' });
+    const res = await upload(head, workbook([HEADER, ['Stored site', '', '', '', '', '', 19.1, 72.8, '', '', '', 'EMP-999']]));
+    expect(res.body.data).toMatchObject({ created: 0, updated: 1, errors: [] });
+    expect(res.body.data.warnings).toEqual([{ row: 2, message: expect.stringMatching(/current assignees were kept/) }]);
+    expect(await assigneesOf('Stored site')).toEqual([String(rep.employee._id)]);
   });
 
   it('is for field managers only, and needs a spreadsheet', async () => {
