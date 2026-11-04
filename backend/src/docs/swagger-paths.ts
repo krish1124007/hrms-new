@@ -734,6 +734,7 @@ export const swaggerPaths: Record<string, unknown> = {
         { name: 'endDate', in: 'query', schema: { type: 'string', format: 'date' } },
         { name: 'status', in: 'query', schema: { type: 'string', enum: ['present', 'absent', 'half-day', 'on-leave', 'holiday'] } },
         { name: 'hideLeave', in: 'query', description: 'true leaves out on_leave rows (ignored when status is set)', schema: { type: 'string', enum: ['true', 'false'] } },
+        { name: 'hideAbsent', in: 'query', description: 'true leaves out absent rows (ignored when status is set)', schema: { type: 'string', enum: ['true', 'false'] } },
       ],
       responses: { ...resList('Attendance records', ref('AttendanceRecord')), ...{ 401: errResponses[401], 403: errResponses[403] } },
     },

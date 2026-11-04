@@ -684,8 +684,13 @@ export const listRecordsSchema = z.object({
     .optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
-  // The records page leaves leave days out; other callers still get them.
+  // The records page leaves leave and absent days out; other callers still
+  // get them, and an explicit `status` always wins.
   hideLeave: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  hideAbsent: z
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
@@ -826,8 +831,9 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
   // Whose rows: HR (`attendance.manage`) anybody's; a manager their direct
   // reports' and their own — `?employeeId=` outside that matches nothing.
   const filter: Record<string, unknown> = await scopeFilterFor(req, 'attendance', q.employeeId);
+  const hidden = [...(q.hideLeave ? ['on_leave'] : []), ...(q.hideAbsent ? ['absent'] : [])];
   if (q.status) filter.status = q.status;
-  else if (q.hideLeave) filter.status = { $ne: 'on_leave' };
+  else if (hidden.length > 0) filter.status = { $nin: hidden };
   const dateFilter = dateRangeFilter(q);
   if (dateFilter) filter.date = dateFilter;
 

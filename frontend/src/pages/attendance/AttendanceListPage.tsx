@@ -5,7 +5,6 @@ import {
   Users,
   CheckCircle2,
   Clock,
-  CircleSlash,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -224,8 +223,10 @@ export default function AttendanceListPage(): ReactElement {
     status: status || undefined,
     from: from || undefined,
     to: to || undefined,
-    // Leave days are not attendance — HR reviews those under Leaves.
+    // Leave and absent days are left out of the list (unpaid leave is stamped
+    // `absent` too). Picking Absent under Status still lists them.
     hideLeave: true,
+    hideAbsent: true,
   });
 
   // ── Time correction — admin can set clock-in and/or clock-out ──
@@ -277,12 +278,11 @@ export default function AttendanceListPage(): ReactElement {
   // whole filter set's count.
   const rows = data?.data ?? [];
   const counts = useMemo(() => {
-    const c = { present: 0, late: 0, halfDay: 0, absent: 0 };
+    const c = { present: 0, late: 0, halfDay: 0 };
     for (const r of rows) {
       if (r.status === 'present') c.present += 1;
       else if (r.status === 'late') c.late += 1;
       else if (r.status === 'half_day') c.halfDay += 1;
-      else if (r.status === 'absent') c.absent += 1;
     }
     return c;
   }, [rows]);
@@ -414,11 +414,10 @@ export default function AttendanceListPage(): ReactElement {
       />
 
       {/* Stats — counts on the visible page */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         <StatCard label="On this page" value={rows.length} icon={Users} />
         <StatCard label="Present" value={counts.present} icon={CheckCircle2} />
         <StatCard label="Late" value={counts.late} icon={Clock} />
-        <StatCard label="Absent" value={counts.absent} icon={CircleSlash} />
       </div>
 
       {/* Filters */}

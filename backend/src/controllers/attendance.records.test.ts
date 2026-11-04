@@ -20,8 +20,9 @@ import { FieldSite } from '../models/field-site.model.js';
 
 /** The UTC-midnight day label `Attendance.date` uses for an IST calendar day. */
 const label = (iso: string): Date => new Date(`${iso}T00:00:00.000Z`);
-/** An instant given as IST wall-clock time on an IST calendar day. */
-const ist = (iso: string, hhmm: string): Date => new Date(`${iso}T${hhmm}:00.000+05:30`);
+/** An instant given as IST wall-clock time (`HH:mm` or `HH:mm:ss`) on an IST calendar day. */
+const ist = (iso: string, hhmm: string): Date =>
+  new Date(`${iso}T${hhmm.length === 5 ? `${hhmm}:00` : hhmm}.000+05:30`);
 
 const HQ = { lat: 23.0921, lng: 72.5293 };
 const FAR_SITE = { lat: 22.72, lng: 71.63 }; // ~100 km from HQ
@@ -78,17 +79,28 @@ const rowOf = (rows: Awaited<ReturnType<typeof records>>, id: unknown) =>
   rows.find((r) => r._id === String(id))!;
 
 describe('GET /attendance/records', () => {
-  it('hideLeave=true leaves out leave days; without it they are listed', async () => {
+  it('hideLeave / hideAbsent leave out those days; without them, or with an explicit status, they are listed', async () => {
     const emp = await employee();
     await Attendance.create({ employeeId: emp._id, date: label('2026-10-13'), status: 'on_leave', source: 'leave' });
+    // Unpaid leave is stamped `absent`.
+    await Attendance.create({
+      employeeId: emp._id,
+      date: label('2026-10-14'),
+      status: 'absent',
+      source: 'leave',
+      isPaidLeave: false,
+    });
     const worked = await dayAt(emp, '10:05', HQ);
 
-    const hidden = await records('?hideLeave=true');
+    const hidden = await records('?hideLeave=true&hideAbsent=true');
     expect(hidden.map((r) => r.status)).toEqual(['present']);
     expect(hidden[0]!._id).toBe(String(worked._id));
 
-    const all = await records();
-    expect(all.map((r) => r.status).sort()).toEqual(['on_leave', 'present']);
+    expect((await records('?hideLeave=true')).map((r) => r.status).sort()).toEqual(['absent', 'present']);
+    expect((await records()).map((r) => r.status).sort()).toEqual(['absent', 'on_leave', 'present']);
+    expect((await records('?hideLeave=true&hideAbsent=true&status=absent')).map((r) => r.status)).toEqual([
+      'absent',
+    ]);
   });
 
   it('earlyBy counts minutes before shift start + grace; 0 when late', async () => {
@@ -99,12 +111,16 @@ describe('GET /attendance/records', () => {
       graceMinutes: 15,
     });
     const early = await employee({ shift: shift._id });
+    const earlyWithSeconds = await employee({ shift: shift._id });
     const late = await employee({ shift: shift._id });
     const earlyRow = await dayAt(early, '10:10', HQ);
+    // Shown as 10:10 → 5 min before 10:15, not 4 min 54 s rounded down to 4.
+    const secondsRow = await dayAt(earlyWithSeconds, '10:10:06', HQ);
     const lateRow = await dayAt(late, '10:20', HQ, 5);
 
     const rows = await records();
     expect(rowOf(rows, earlyRow._id).earlyBy).toBe(5);
+    expect(rowOf(rows, secondsRow._id).earlyBy).toBe(5);
     expect(rowOf(rows, lateRow._id).lateBy).toBe(5);
     expect(rowOf(rows, lateRow._id).earlyBy).toBe(0);
   });
