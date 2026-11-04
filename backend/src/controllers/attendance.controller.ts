@@ -6,6 +6,7 @@ import { Attendance, type IAttendance, type ICheckinRecord } from '../models/att
 import { QRCode } from '../models/qr-code.model.js';
 import { GeofenceZone } from '../models/geofence-zone.model.js';
 import { AttendanceSite } from '../models/attendance-site.model.js';
+import { FieldSite } from '../models/field-site.model.js';
 import { AllowedIP } from '../models/allowed-ip.model.js';
 import { Employee } from '../models/employee.model.js';
 import { Shift, type IShift } from '../models/shift.model.js';
@@ -20,6 +21,7 @@ import {
   applyShiftRules,
   attendanceDayFor,
   computeHours,
+  earlyByMinutes,
   isRowInProgress,
   resolveShift,
   type WorkedHoursSource,
@@ -445,6 +447,22 @@ type LiveRow = WorkedHoursSource & { employeeId?: unknown };
 const ownerKey = (employeeId: unknown): string =>
   String((employeeId as { _id?: unknown } | null)?._id ?? employeeId);
 
+/** The governing shift (`resolveShift`) of each employee, in two queries. */
+async function shiftsOf(owners: Set<string>): Promise<Map<string, IShift | null>> {
+  const shifts = new Map<string, IShift | null>();
+  if (owners.size === 0) return shifts;
+  const [docs, defaultShift] = await Promise.all([
+    Employee.find({ _id: { $in: [...owners] } })
+      .setOptions({ withDeleted: true })
+      .select('_id shift')
+      .populate('shift')
+      .exec(),
+    Shift.findOne({ isDefault: true }).exec(),
+  ]);
+  for (const d of docs) shifts.set(String(d._id), await resolveShift(d, { defaultShift }));
+  return shifts;
+}
+
 /**
  * `withLiveHours` for a list of rows (any mix of employees). Only an open row
  * from an earlier day needs its owner's shift; those owners' shifts are loaded
@@ -457,18 +475,7 @@ async function withLiveHoursAll<T extends LiveRow>(rows: T[], now: Date = new Da
       .filter((r) => r.checkIn?.time && !r.checkOut?.time && r.date && startOfDay(new Date(r.date)).getTime() < today)
       .map((r) => ownerKey(r.employeeId)),
   );
-  const shifts = new Map<string, IShift | null>();
-  if (owners.size > 0) {
-    const [docs, defaultShift] = await Promise.all([
-      Employee.find({ _id: { $in: [...owners] } })
-        .setOptions({ withDeleted: true })
-        .select('_id shift')
-        .populate('shift')
-        .exec(),
-      Shift.findOne({ isDefault: true }).exec(),
-    ]);
-    for (const d of docs) shifts.set(String(d._id), await resolveShift(d, { defaultShift }));
-  }
+  const shifts = await shiftsOf(owners);
   return rows.map((r) => withLiveHours(r, shifts.get(ownerKey(r.employeeId)) ?? null, now));
 }
 
@@ -677,6 +684,11 @@ export const listRecordsSchema = z.object({
     .optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
+  // The records page leaves leave days out; other callers still get them.
+  hideLeave: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
   // `YYYY-MM` shorthand for from/to spanning one calendar month. Clients were
   // already sending this; it used to be dropped silently, which made
   // month-scoped screens count every record ever recorded.
@@ -754,25 +766,59 @@ async function loadKnownAreas(): Promise<NamedArea[]> {
 }
 
 /**
- * Nearest configured area to a point: its name, the distance in metres, and
- * whether the point is inside the area's radius. Null when there are no
- * coordinates or no areas configured — the UI then falls back to lat/lng.
+ * The field sites assigned to each of `owners`, by employee id. A field
+ * employee punches in at their own site, so "SG Business Hub · 101 km away"
+ * says nothing useful — the site they were sent to does.
  */
-function describeArea(
-  loc: { lat?: number; lng?: number } | undefined,
-  areas: NamedArea[],
-): { name: string; distance: number; inside: boolean } | null {
-  if (typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number' || areas.length === 0) {
-    return null;
+async function loadAssignedSites(owners: string[]): Promise<Map<string, NamedArea[]>> {
+  const byOwner = new Map<string, NamedArea[]>();
+  if (owners.length === 0) return byOwner;
+  const sites = await FieldSite.find({ assignedTo: { $in: owners }, 'location.coordinates.1': { $exists: true } })
+    .select('name location radiusM assignedTo')
+    .lean()
+    .exec();
+  for (const s of sites) {
+    const [lng, lat] = s.location!.coordinates;
+    const area: NamedArea = { name: s.name, lat, lng, radius: s.radiusM };
+    for (const who of s.assignedTo) {
+      const key = String(who);
+      byOwner.set(key, [...(byOwner.get(key) ?? []), area]);
+    }
   }
-  let best: { name: string; distance: number; inside: boolean } | null = null;
+  return byOwner;
+}
+
+type AreaVerdict = { name: string; distance: number; inside: boolean };
+
+/** Nearest of `areas` to a point, or null when there are none. */
+function nearestArea(loc: { lat: number; lng: number }, areas: NamedArea[]): AreaVerdict | null {
+  let best: AreaVerdict | null = null;
   for (const a of areas) {
-    const distance = Math.round(haversineMeters({ lat: loc.lat, lng: loc.lng }, a));
+    const distance = Math.round(haversineMeters(loc, a));
     if (!best || distance < best.distance) {
       best = { name: a.name, distance, inside: distance <= a.radius };
     }
   }
   return best;
+}
+
+/**
+ * Where a punch happened: its name, the distance in metres, and whether it
+ * is inside the area's radius. Inside an office area (site / geofence) that
+ * area wins; otherwise the nearest of the employee's own assigned sites,
+ * when they have any; otherwise the nearest office area. Null when there are
+ * no coordinates or nothing to compare with — the UI then shows lat/lng only.
+ */
+function describeArea(
+  loc: { lat?: number; lng?: number } | undefined,
+  areas: NamedArea[],
+  ownSites: NamedArea[] = [],
+): AreaVerdict | null {
+  if (typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number') return null;
+  const point = { lat: loc.lat, lng: loc.lng };
+  const office = nearestArea(point, areas);
+  if (office?.inside) return office;
+  return nearestArea(point, ownSites) ?? office;
 }
 
 export async function listRecords(req: Request, res: Response): Promise<void> {
@@ -781,6 +827,7 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
   // reports' and their own — `?employeeId=` outside that matches nothing.
   const filter: Record<string, unknown> = await scopeFilterFor(req, 'attendance', q.employeeId);
   if (q.status) filter.status = q.status;
+  else if (q.hideLeave) filter.status = { $ne: 'on_leave' };
   const dateFilter = dateRangeFilter(q);
   if (dateFilter) filter.date = dateFilter;
 
@@ -822,11 +869,22 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
   });
   // Same live-hours treatment as /my — without it the admin records and
   // timesheet pages report 0.00h for everyone still checked in.
-  const areas = await loadKnownAreas();
-  const live = await withLiveHoursAll(result.data as LiveRow[]);
+  const rows = result.data as (LiveRow & { lateBy?: number })[];
+  const owners = [...new Set(rows.map((r) => ownerKey(r.employeeId)))];
+  // `earlyBy` needs the shift of everyone who checked in without being late.
+  const onTime = new Set(rows.filter((r) => r.checkIn?.time && !r.lateBy).map((r) => ownerKey(r.employeeId)));
+  const [areas, ownSites, shifts, cfg, live] = await Promise.all([
+    loadKnownAreas(),
+    loadAssignedSites(owners),
+    shiftsOf(onTime),
+    onTime.size > 0 ? AttendanceConfig.findOne({}).exec() : null,
+    withLiveHoursAll(rows),
+  ]);
   const data = live.map((r) => {
     const row = r as WorkedHoursSource & {
       toObject?: () => unknown;
+      employeeId?: unknown;
+      lateBy?: number;
       checkIn?: { location?: { lat?: number; lng?: number } } | null;
       checkOut?: { location?: { lat?: number; lng?: number } } | null;
     };
@@ -835,10 +893,13 @@ export async function listRecords(req: Request, res: Response): Promise<void> {
       typeof row.toObject === 'function'
         ? (row.toObject() as Record<string, unknown>)
         : ({ ...row } as Record<string, unknown>);
+    const owner = ownerKey(row.employeeId);
+    const mine = ownSites.get(owner);
     return {
       ...plain,
-      checkInArea: describeArea(row.checkIn?.location, areas),
-      checkOutArea: describeArea(row.checkOut?.location, areas),
+      earlyBy: row.lateBy ? 0 : earlyByMinutes(row, shifts.get(owner) ?? null, cfg),
+      checkInArea: describeArea(row.checkIn?.location, areas, mine),
+      checkOutArea: describeArea(row.checkOut?.location, areas, mine),
     };
   });
   res.json({ success: true, data, pagination: result.pagination });

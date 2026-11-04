@@ -48,7 +48,11 @@ export interface BreakRecord {
   type: BreakType;
 }
 
-/** Nearest configured site / geofence to a punch, resolved by the server. */
+/**
+ * Where a punch happened, resolved by the server: the office area it fell
+ * inside, else the nearest of the employee's own field sites, else the
+ * nearest configured site / geofence.
+ */
 export interface AttendanceArea {
   name: string;
   /** Metres from the area's centre. */
@@ -92,6 +96,8 @@ export interface Attendance {
   overtimeHours: number;
   status: AttendanceStatus;
   lateBy: number;
+  /** Records feed only: minutes an on-time check-in came before shift start + grace. */
+  earlyBy?: number;
   earlyLeaveBy: number;
   isRegularized: boolean;
   regularization?: AttendanceRegularization;

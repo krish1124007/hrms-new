@@ -192,6 +192,27 @@ export async function resolveShift(
 /** Whole minutes in `ms`, never negative. */
 const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MINUTE_MS));
 
+/** Minutes after shift start before a check-in counts as late. */
+const graceMinutesFor = (shift: ShiftRulesSource | null, cfg: IAttendanceConfig | null): number =>
+  shift?.graceMinutes ?? cfg?.settings.lateMarkAfterMinutes ?? 15;
+
+/**
+ * Minutes a check-in came before the late mark (shift start + grace) — the
+ * mirror of `lateBy`, so a records list can show "−5 min" beside "+5 min".
+ * Derived, never stored. 0 without a check-in or a shift, or when late.
+ */
+export function earlyByMinutes(
+  att: Pick<WorkedHoursSource, 'date' | 'checkIn'>,
+  shift: ShiftRulesSource | null,
+  cfg: IAttendanceConfig | null,
+): number {
+  const inAt = att.checkIn?.time ? new Date(att.checkIn.time) : null;
+  if (!inAt) return 0;
+  const window = shiftWindow(startOfBusinessDay(att.date ? new Date(att.date) : inAt), shift);
+  if (!window) return 0;
+  return wholeMinutes(window.start.getTime() + graceMinutesFor(shift, cfg) * MINUTE_MS - inAt.getTime());
+}
+
 /** A row an approved leave stamped (see `services/leave-attendance.service.ts`). */
 const hasLeaveStamp = (att: IAttendance): boolean => att.leaveRequestId != null || att.isPaidLeave != null;
 
@@ -225,7 +246,7 @@ export function applyShiftRules(
   // Normalising also reads a label stored at IST midnight as the day it names.
   const day = startOfBusinessDay(att.date ? new Date(att.date) : inAt);
   const window = shiftWindow(day, shift);
-  const graceMin = shift?.graceMinutes ?? cfg?.settings.lateMarkAfterMinutes ?? 15;
+  const graceMin = graceMinutesFor(shift, cfg);
 
   att.lateBy = window ? wholeMinutes(inAt.getTime() - window.start.getTime() - graceMin * MINUTE_MS) : 0;
   att.earlyLeaveBy = window && outAt ? wholeMinutes(window.end.getTime() - outAt.getTime()) : 0;

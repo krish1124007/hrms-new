@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Clock,
   CircleSlash,
-  CalendarOff,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -65,9 +64,9 @@ function mapsHref(loc?: LocationPoint): string | null {
 }
 
 /**
- * "Head Office · 40 m" — the nearest configured site or geofence to a punch,
- * resolved server-side from the sites/geofences already set up. Raw
- * coordinates alone don't tell an admin where somebody actually was.
+ * "Head Office · 40 m" — the office area a punch fell inside, else the
+ * employee's own field site, else the nearest office area (resolved
+ * server-side). Raw coordinates alone don't tell an admin where somebody was.
  */
 function AreaLine({ area }: { area?: AttendanceArea | null }): ReactElement | null {
   if (!area) return null;
@@ -80,6 +79,21 @@ function AreaLine({ area }: { area?: AttendanceArea | null }): ReactElement | nu
       </span>
       <span className="text-muted-foreground">{area.inside ? `· within ${near}` : `· ${near} away`}</span>
     </div>
+  );
+}
+
+/**
+ * "+5 min" late or "−5 min" early, both measured from the late mark (shift
+ * start + grace) — one scale for the whole column.
+ */
+function ArrivalCell({ r }: { r: Attendance }): ReactElement | string {
+  if (r.lateBy > 0) return <span className="text-amber-600">+{r.lateBy} min</span>;
+  if (!r.checkIn?.time) return '—';
+  if (!r.earlyBy) return <span className="text-muted-foreground">On time</span>;
+  return (
+    <span className="text-success" title={`${r.earlyBy} min before the late mark (shift start + grace)`}>
+      −{r.earlyBy} min
+    </span>
   );
 }
 
@@ -138,6 +152,7 @@ function exportCSV(rows: Attendance[]): void {
     'Hours',
     'Status',
     'Late (min)',
+    'Early (min)',
   ];
   const lines = rows.map((r) => {
     const emp = typeof r.employeeId === 'object' ? r.employeeId : null;
@@ -156,6 +171,7 @@ function exportCSV(rows: Attendance[]): void {
       r.totalWorkingHours,
       r.status,
       r.lateBy,
+      r.earlyBy ?? 0,
     ]
       .map((v) => `"${String(v).replace(/"/g, '""')}"`)
       .join(',');
@@ -208,6 +224,8 @@ export default function AttendanceListPage(): ReactElement {
     status: status || undefined,
     from: from || undefined,
     to: to || undefined,
+    // Leave days are not attendance — HR reviews those under Leaves.
+    hideLeave: true,
   });
 
   // ── Time correction — admin can set clock-in and/or clock-out ──
@@ -259,13 +277,12 @@ export default function AttendanceListPage(): ReactElement {
   // whole filter set's count.
   const rows = data?.data ?? [];
   const counts = useMemo(() => {
-    const c = { present: 0, late: 0, halfDay: 0, absent: 0, onLeave: 0 };
+    const c = { present: 0, late: 0, halfDay: 0, absent: 0 };
     for (const r of rows) {
       if (r.status === 'present') c.present += 1;
       else if (r.status === 'late') c.late += 1;
       else if (r.status === 'half_day') c.halfDay += 1;
       else if (r.status === 'absent') c.absent += 1;
-      else if (r.status === 'on_leave') c.onLeave += 1;
     }
     return c;
   }, [rows]);
@@ -358,8 +375,8 @@ export default function AttendanceListPage(): ReactElement {
     },
     {
       key: 'lateBy',
-      header: 'Late',
-      cell: (r) => (r.lateBy > 0 ? `+${r.lateBy} min` : '—'),
+      header: 'Late / early',
+      cell: (r) => <ArrivalCell r={r} />,
     },
     {
       key: 'fix',
@@ -397,12 +414,11 @@ export default function AttendanceListPage(): ReactElement {
       />
 
       {/* Stats — counts on the visible page */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="On this page" value={rows.length} icon={Users} />
         <StatCard label="Present" value={counts.present} icon={CheckCircle2} />
         <StatCard label="Late" value={counts.late} icon={Clock} />
         <StatCard label="Absent" value={counts.absent} icon={CircleSlash} />
-        <StatCard label="On leave" value={counts.onLeave} icon={CalendarOff} />
       </div>
 
       {/* Filters */}
@@ -499,7 +515,6 @@ export default function AttendanceListPage(): ReactElement {
               <option value="late">Late</option>
               <option value="half_day">Half Day</option>
               <option value="absent">Absent</option>
-              <option value="on_leave">On Leave</option>
               <option value="holiday">Holiday</option>
               <option value="weekend">Weekend</option>
             </Select>
