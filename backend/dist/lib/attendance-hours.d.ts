@@ -88,7 +88,9 @@ export declare function resolveShift(employee: {
 /**
  * Minutes a check-in came before the late mark (shift start + grace) — the
  * mirror of `lateBy`, so a records list can show "−5 min" beside "+5 min".
- * Derived, never stored. 0 without a check-in or a shift, or when late.
+ * Counted from the clock minute the punch shows (10:10:06 → 10:10, 5 min
+ * before 10:15), not to the second. Derived, never stored. 0 without a
+ * check-in or a shift, or when late.
  */
 export declare function earlyByMinutes(att: Pick<WorkedHoursSource, 'date' | 'checkIn'>, shift: ShiftRulesSource | null, cfg: IAttendanceConfig | null): number;
 /**

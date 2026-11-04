@@ -306,11 +306,13 @@ export declare const listRecordsSchema: z.ZodObject<{
     from: z.ZodOptional<z.ZodDate>;
     to: z.ZodOptional<z.ZodDate>;
     hideLeave: z.ZodEffects<z.ZodOptional<z.ZodEnum<["true", "false"]>>, boolean, "true" | "false" | undefined>;
+    hideAbsent: z.ZodEffects<z.ZodOptional<z.ZodEnum<["true", "false"]>>, boolean, "true" | "false" | undefined>;
     month: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     page: number;
     limit: number;
     hideLeave: boolean;
+    hideAbsent: boolean;
     status?: "present" | "absent" | "holiday" | "half_day" | "late" | "on_leave" | "weekend" | undefined;
     search?: string | undefined;
     departmentId?: string | undefined;
@@ -326,6 +328,7 @@ export declare const listRecordsSchema: z.ZodObject<{
     departmentId?: unknown;
     employeeId?: unknown;
     hideLeave?: "true" | "false" | undefined;
+    hideAbsent?: "true" | "false" | undefined;
     month?: string | undefined;
     from?: Date | undefined;
     to?: Date | undefined;

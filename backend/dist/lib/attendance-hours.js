@@ -156,7 +156,9 @@ const graceMinutesFor = (shift, cfg) => shift?.graceMinutes ?? cfg?.settings.lat
 /**
  * Minutes a check-in came before the late mark (shift start + grace) — the
  * mirror of `lateBy`, so a records list can show "−5 min" beside "+5 min".
- * Derived, never stored. 0 without a check-in or a shift, or when late.
+ * Counted from the clock minute the punch shows (10:10:06 → 10:10, 5 min
+ * before 10:15), not to the second. Derived, never stored. 0 without a
+ * check-in or a shift, or when late.
  */
 export function earlyByMinutes(att, shift, cfg) {
     const inAt = att.checkIn?.time ? new Date(att.checkIn.time) : null;
@@ -165,7 +167,8 @@ export function earlyByMinutes(att, shift, cfg) {
     const window = shiftWindow(startOfBusinessDay(att.date ? new Date(att.date) : inAt), shift);
     if (!window)
         return 0;
-    return wholeMinutes(window.start.getTime() + graceMinutesFor(shift, cfg) * MINUTE_MS - inAt.getTime());
+    const shownMinute = Math.floor(inAt.getTime() / MINUTE_MS) * MINUTE_MS;
+    return wholeMinutes(window.start.getTime() + graceMinutesFor(shift, cfg) * MINUTE_MS - shownMinute);
 }
 /** A row an approved leave stamped (see `services/leave-attendance.service.ts`). */
 const hasLeaveStamp = (att) => att.leaveRequestId != null || att.isPaidLeave != null;
