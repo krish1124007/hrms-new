@@ -86,6 +86,12 @@ export declare function resolveShift(employee: {
     defaultShift?: IShift | null;
 }): Promise<IShift | null>;
 /**
+ * Minutes a check-in came before the late mark (shift start + grace) — the
+ * mirror of `lateBy`, so a records list can show "−5 min" beside "+5 min".
+ * Derived, never stored. 0 without a check-in or a shift, or when late.
+ */
+export declare function earlyByMinutes(att: Pick<WorkedHoursSource, 'date' | 'checkIn'>, shift: ShiftRulesSource | null, cfg: IAttendanceConfig | null): number;
+/**
  * Judge a day from scratch — the same verdict for check-in, check-out, HR
  * corrections and day-close, however often it is re-run. Reads the punches,
  * `date` and (for the hours rules) `totalWorkingHours`, which the caller sets
